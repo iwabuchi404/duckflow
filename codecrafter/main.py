@@ -1,5 +1,5 @@
 """
-CodeCrafter メインエントリーポイント
+Duckflow メインエントリーポイント
 ステップ1: 最小限実装版
 """
 import sys
@@ -15,7 +15,7 @@ from .ui.rich_ui import rich_ui
 
 
 class CodeCrafterAgent:
-    """CodeCrafter エージェント - ステップ1実装"""
+    """Duckflow エージェント - ステップ1実装"""
     
     def __init__(self):
         """初期化"""
@@ -31,7 +31,7 @@ class CodeCrafterAgent:
         try:
             # ヘッダー表示
             rich_ui.print_header(
-                "CodeCrafter v0.1.0",
+                "Duckflow v0.1.0",
                 "AI-powered coding agent for local development environments (Step 1)"
             )
             
@@ -49,7 +49,7 @@ class CodeCrafterAgent:
                 import traceback
                 rich_ui.print_error(traceback.format_exc())
         finally:
-            rich_ui.print_message("CodeCrafterを終了します。", "info")
+            rich_ui.print_message("Duckflowを終了します。", "info")
     
     def _main_loop(self) -> None:
         """メインループ"""
@@ -59,7 +59,7 @@ class CodeCrafterAgent:
         while self.running:
             try:
                 # ユーザー入力
-                user_input = rich_ui.get_user_input("CodeCrafter").strip()
+                user_input = rich_ui.get_user_input("Duckflow").strip()
                 
                 if not user_input:
                     continue
@@ -143,6 +143,17 @@ class CodeCrafterAgent:
             self._show_history(count)
             return
         
+        # テスト実行コマンド
+        elif cmd == 'test' or cmd == 'tests':
+            verbose = '--verbose' in parts or '-v' in parts
+            test_path = None
+            for part in parts[1:]:
+                if not part.startswith('-'):
+                    test_path = part
+                    break
+            self._run_tests(test_path, verbose)
+            return
+        
         else:
             # 不明なコマンドはAIとの対話として処理
             self._handle_ai_conversation(command)
@@ -158,6 +169,7 @@ class CodeCrafterAgent:
   status           - エージェントの状態を表示
   config           - 設定情報を表示
   history [count]  - 対話履歴を表示 (デフォルト: 10件)
+  test, tests      - テストを実行 (オプション: -v, --verbose, [path])
 
 [yellow]ファイル操作:[/]
   ls, list [path]  - ファイル一覧を表示 (デフォルト: 現在のディレクトリ)
@@ -311,6 +323,62 @@ class CodeCrafterAgent:
         except FileOperationError as e:
             rich_ui.print_error(str(e))
     
+    def _run_tests(self, test_path: Optional[str] = None, verbose: bool = False) -> None:
+        """テストを実行"""
+        try:
+            rich_ui.print_message("テストを実行中...", "info")
+            
+            result = file_tools.run_tests(test_path, verbose)
+            
+            # テスト結果の表示
+            if result["success"]:
+                rich_ui.print_success(
+                    f"テストが完了しました: {result['passed']}/{result['total_tests']} 成功 "
+                    f"({result['duration']:.2f}秒)"
+                )
+            else:
+                rich_ui.print_error(
+                    f"テストに失敗しました: {result['passed']}/{result['total_tests']} 成功 "
+                    f"({result['failed']} 失敗, {result['errors']} エラー, {result['duration']:.2f}秒)"
+                )
+            
+            # 詳細情報の表示
+            if result["total_tests"] > 0:
+                summary = f"""
+[bold]テスト結果サマリー:[/]
+  実行数: {result['total_tests']}
+  成功: [green]{result['passed']}[/]
+  失敗: [red]{result['failed']}[/]
+  エラー: [red]{result['errors']}[/]
+  スキップ: [yellow]{result['skipped']}[/]
+  実行時間: {result['duration']:.2f}秒
+                """
+                
+                rich_ui.print_panel(summary.strip(), "Test Results", 
+                                  "success" if result["success"] else "error")
+            
+            # 失敗したテストの詳細表示
+            if result["failed_tests"]:
+                rich_ui.print_message("\n失敗したテストの詳細:", "warning")
+                for failed_test in result["failed_tests"]:
+                    rich_ui.print_message(f"\n❌ {failed_test['name']}", "error")
+                    if failed_test['error']:
+                        # エラーメッセージの整形
+                        error_lines = failed_test['error'].split('\n')
+                        for line in error_lines[:10]:  # 最初の10行のみ表示
+                            if line.strip():
+                                rich_ui.print_message(f"   {line}", "muted")
+                        if len(error_lines) > 10:
+                            rich_ui.print_message("   ... (truncated)", "muted")
+            
+            # 標準エラー出力がある場合は表示
+            if result.get("stderr") and result["stderr"].strip():
+                rich_ui.print_message("\nエラー出力:", "warning")
+                rich_ui.print_message(result["stderr"], "muted")
+            
+        except FileOperationError as e:
+            rich_ui.print_error(f"テスト実行エラー: {e}")
+    
     def _show_history(self, count: int) -> None:
         """対話履歴を表示"""
         messages = self.state.get_recent_messages(count)
@@ -381,7 +449,7 @@ class CodeCrafterAgent:
     
     def _create_system_prompt(self) -> str:
         """システムプロンプトを作成"""
-        return """あなたはCodeCrafterのファイル編集アシスタントです。
+        return """あなたはDuckflowのファイル編集アシスタントです。
 
 役割:
 - ユーザーの指示に従ってファイルの作成・編集を支援する
@@ -403,7 +471,6 @@ FILE_OPERATION:CREATE:filename.py
 ```python
 # ここにファイル内容
 ```
-
 FILE_OPERATION:EDIT:filename.py
 ```python
 # ここに編集後のファイル内容
