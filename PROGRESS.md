@@ -1,9 +1,9 @@
 # Duckflow 開発進捗記録
 
-**更新日**: 2025-08-07 (v2)
-**バージョン**: v0.1.0 (ステップ1)
+**更新日**: 2025-08-07 (v4)
+**バージョン**: v0.2.1-alpha (ステップ2b)
 **プロジェクト名**: Duckflow (旧: CodeCrafter)
-**ステータス**: ステップ1完了 (100%) + 名前統一完了
+**ステータス**: ステップ2b実装完了 - RAG搭載プロジェクト理解能力獲得
 
 ## プロジェクト概要
 Duckflowは開発者のローカル環境で動作する対話型AIコーディングエージェント。ステップ1（最小限実装）が完了し、ステップ2への移行準備段階。
@@ -160,9 +160,125 @@ duckflow/
 - ✅ **完全なドキュメント整備**
 - ✅ **プロジェクト名統一（Duckflow）**
 
-### 次のマイルストーン
-**ステップ2**: MVP実装（LangGraph + Textual + RAG機能）
+#### 次のマイルストーン
+**ステップ2b**: プロジェクト理解能力の獲得（RAG機能）
+**ステップ2c**: 自律的なタスク実行能力（複数ツール連携）
+
+## 🚀 ステップ2a: LangGraph基盤実装完了 (2025-08-07)
+
+### ✅ 完了項目
+1. **LangGraph依存関係追加** ✅
+   - pyproject.tomlとrequirements.txtにlanggraph>=0.0.30を追加
+
+2. **AgentState強化** ✅
+   - ToolExecutionクラス追加（ツール実行履歴管理）
+   - GraphStateクラス追加（LangGraphの状態管理）
+   - エラーハンドリング・リトライ機能追加
+   - コンテキスト要約機能（get_context_summary）
+
+3. **LangGraphオーケストレーション作成** ✅
+   - GraphOrchestratorクラス実装
+   - 4つのノード（思考、ツール実行、人間承認、結果確認）
+   - 条件付きエッジとフロー制御
+   - ファイル操作指示の自動解析・実行
+
+4. **メインアプリケーションV2作成** ✅
+   - DuckflowAgentV2クラス実装
+   - LangGraphベースの対話処理
+   - グラフ実行状態の可視化
+   - セッションサマリー機能
+
+### 🔧 技術的改善点
+- **ステートフル処理**: LangGraphによる複雑な制御フロー対応
+- **自動リトライ**: エラー時の自動再試行機能
+- **実行パス追跡**: グラフノードの実行履歴可視化
+- **パフォーマンス監視**: ツール実行時間の計測・記録
+
+### 📊 現在の状況
+- **メイン実装**: `codecrafter/main.py` (ステップ1) + `codecrafter/main_v2.py` (ステップ2a)
+- **新規ファイル**: `codecrafter/orchestration/graph_orchestrator.py`
+- **拡張ファイル**: `codecrafter/state/agent_state.py` (LangGraph対応)
+- **テスト状況**: 既存テスト一部失敗（AgentState構造変更による）
+
+### 🔄 移行状況
+- **段階的移行**: ステップ1とステップ2aの両方が利用可能
+- **後方互換性**: 既存のコマンドライン操作は維持
+- **新機能**: `graph`コマンドでLangGraph状態確認
+
+### 次のステップ
+- **ステップ2c**: 複数ツール連携・自律実行（シェルコマンド実行、複雑なタスクフロー）
+- **テスト修正**: AgentState変更に伴うテストケース更新
+- **ステップ3準備**: Textual UI、LSP統合の準備
+
+## 🔍 ステップ2b: プロジェクト理解能力獲得完了 (2025-08-07)
+
+### ✅ 完了項目
+1. **RAG依存関係追加** ✅
+   - ChromaDB>=0.4.0, FAISS>=1.7.4, sentence-transformers>=2.2.0を追加
+
+2. **コードインデックス化システム** ✅
+   - `codecrafter/rag/code_indexer.py`: CodeIndexerクラス実装
+   - 20種類以上のプログラミング言語対応（Python, JS, TS, Java, C++等）
+   - ChromaDBベクトルストアによる永続化
+   - プロジェクトスキャン、チャンク分割、ベクトル埋め込み
+
+3. **コード検索ツール** ✅
+   - `codecrafter/tools/rag_tools.py`: RAGToolsクラス実装
+   - `search_code()`: 意味的コード検索機能
+   - `index_project()`: プロジェクトインデックス化
+   - `get_index_status()`: インデックス状態確認
+
+4. **プロンプトコンパイラ** ✅
+   - `codecrafter/prompts/prompt_compiler.py`: PromptCompilerクラス実装
+   - 3つのプロンプトテンプレート（基本、RAG強化、エラー対応）
+   - AgentStateとRAG検索結果の動的統合
+   - コンテキスト最適化されたシステムプロンプト生成
+
+5. **LangGraphオーケストレーション統合** ✅
+   - GraphOrchestratorに「コンテキスト収集」ノード追加
+   - RAG検索結果に基づく条件分岐フロー
+   - 自動的な関連コード発見・活用機能
+
+6. **メインアプリケーション拡張** ✅
+   - `main_v2.py`に3つの新コマンド追加:
+     - `index [--force]`: プロジェクトインデックス化
+     - `search <query> [--type=lang] [--max=N]`: コード検索
+     - `index-status`: インデックス状態表示
+
+### 🧠 技術的改善点
+- **プロジェクト理解**: 20+言語のコードを意味的に理解・検索
+- **コンテキスト活用**: ユーザー質問に関連するコードを自動発見
+- **動的プロンプト**: 状況に応じて最適化されたプロンプト生成
+- **永続化**: ChromaDBによる高速なベクトル検索
+- **スケーラビリティ**: 大規模プロジェクト対応のチャンク分割
+
+### 📊 現在の状況
+- **新規ディレクトリ**: `codecrafter/rag/`, `codecrafter/prompts/`
+- **拡張ファイル**: `main_v2.py`, `graph_orchestrator.py`
+- **対応言語**: Python, JS, TS, Java, C++, Go, Rust等 20+言語
+- **検索能力**: 意味的類似性に基づく関連コード発見
+
+### 🔄 アーキテクチャ進化
+```
+思考 → コンテキスト収集(RAG) → ツール実行 → 結果確認
+  ↑         ↓                      ↓
+  └── 人間承認 ←────────────────────┘
+```
+
+### 🎯 実用例
+```bash
+# プロジェクトをインデックス化
+index
+
+# データベース関連のコードを検索
+search "database connection" --type=python
+
+# APIエンドポイント定義を検索
+search "REST API endpoint" --max=10
+```
 
 ---
-*Duckflow v0.1.0 - AI-powered coding agent for local development environments*  
-*ステップ1完了: 2025年8月7日*
+*Duckflow v0.2.1-alpha - RAG-powered project-aware coding agent*  
+*ステップ1完了: 2025年8月7日*  
+*ステップ2a完了: 2025年8月7日*  
+*ステップ2b完了: 2025年8月7日*
