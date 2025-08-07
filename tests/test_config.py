@@ -126,11 +126,11 @@ class TestConfigManager:
         """環境変数による設定上書きのテスト"""
         config_file = self.create_test_config_file()
         
-        with patch.dict(os.environ, {'CODECRAFTER_DEBUG': 'true'}):
+        with patch.dict(os.environ, {'DUCKFLOW_DEBUG': 'true'}):
             with patch.object(self.config_manager, '_get_config_paths', return_value=[config_file]):
                 assert self.config_manager.is_debug_mode() is True
         
-        with patch.dict(os.environ, {'CODECRAFTER_DEBUG': 'false'}):
+        with patch.dict(os.environ, {'DUCKFLOW_DEBUG': 'false'}):
             with patch.object(self.config_manager, '_get_config_paths', return_value=[config_file]):
                 assert self.config_manager.is_debug_mode() is False
     

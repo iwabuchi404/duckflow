@@ -1,4 +1,4 @@
-# CodeCrafter設定ファイル
+# Duckflow設定ファイル
 # バージョン: 1.0
 
 # LLMプロバイダー設定
@@ -45,7 +45,7 @@ ui:
   
   # Textual設定 (ステップ2で使用)
   textual:
-    title: "CodeCrafter"
+    title: "Duckflow"
     dark_mode: true
 
 # ツール設定
@@ -92,7 +92,7 @@ security:
 # ログ設定
 logging:
   level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-  file: "logs/codecrafter.log"
+  file: "logs/duckflow.log"
   max_size_mb: 50
   backup_count: 5
   

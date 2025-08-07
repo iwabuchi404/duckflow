@@ -1,9 +1,9 @@
-# CodeCrafter
+# Duckflow
 
 **バージョン**: v0.1.0 (ステップ1)  
-**ステータス**: ステップ1（最小限実装）完了 ~95%
+**ステータス**: ステップ1（最小限実装）完了 100%
 
-CodeCrafterは、開発者のローカル環境で動作する対話型AIコーディングエージェントです。AIとの対話を通じて、ファイルの作成・編集を支援します。
+Duckflowは、開発者のローカル環境で動作する対話型AIコーディングエージェントです。AIとの対話を通じて、ファイルの作成・編集を支援します。
 
 ## 🎯 プロジェクトの目的
 
@@ -81,7 +81,7 @@ python main.py
 
 **基本操作:**
 - `help`, `h` - ヘルプを表示
-- `quit`, `exit`, `q` - CodeCrafterを終了
+- `quit`, `exit`, `q` - Duckflowを終了
 - `status` - エージェントの状態を表示
 - `config` - 設定情報を表示
 - `history [count]` - 対話履歴を表示 (デフォルト: 10件)
@@ -101,19 +101,19 @@ python main.py
 
 ```bash
 # ファイル一覧を確認
-CodeCrafter> ls
+Duckflow> ls
 
 # ファイルを読み込み
-CodeCrafter> read example.py
+Duckflow> read example.py
 
 # AIにファイル作成を依頼
-CodeCrafter> example.pyファイルを作成して、Hello Worldを出力する関数を書いて
+Duckflow> example.pyファイルを作成して、Hello Worldを出力する関数を書いて
 
 # テストを実行
-CodeCrafter> test -v
+Duckflow> test -v
 
 # 対話履歴を確認
-CodeCrafter> history 5
+Duckflow> history 5
 ```
 
 ## 🧪 テスト
@@ -187,7 +187,7 @@ duckflow/
 
 ## 🚧 開発ロードマップ
 
-### ✅ ステップ1: 最小限実装 (~95% 完了)
+### ✅ ステップ1: 最小限実装 (100% 完了)
 - AIとの対話で単一ファイル編集
 - 基本的なファイル操作
 - セキュリティ承認機能
@@ -276,7 +276,7 @@ uv add --dev pytest
 
 ```bash
 # 環境変数でデバッグモードを有効化
-export CODECRAFTER_DEBUG=true
+export DUCKFLOW_DEBUG=true
 uv run python main.py
 ```
 
@@ -297,3 +297,24 @@ uv run pytest tests/ -v
 uv run black codecrafter/
 uv run ruff check codecrafter/
 ```
+
+### 貢献ガイドライン
+
+1. すべての新機能にはテストを含めてください
+2. 既存のテストが通ることを確認してください
+3. `black`でコードをフォーマットしてください
+4. `ruff`でlintエラーがないことを確認してください
+
+## 📝 ライセンス
+
+[ライセンス情報を記載]
+
+## 📞 サポート
+
+- **Issues**: [GitHub Issues](repository-url/issues)
+- **Discussions**: [GitHub Discussions](repository-url/discussions)
+- **Documentation**: [プロジェクトドキュメント](CLAUDE.md)
+
+---
+
+**Duckflow** - AI-powered coding agent for local development environments

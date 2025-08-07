@@ -4,12 +4,12 @@
 """
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from codecrafter.main import CodeCrafterAgent
+from codecrafter.main import DuckflowAgent
 from codecrafter.state.agent_state import AgentState
 
 
-class TestCodeCrafterAgentIntegration:
-    """CodeCrafterAgentの統合テスト"""
+class TestDuckflowAgentIntegration:
+    """DuckflowAgentの統合テスト"""
     
     def setup_method(self):
         """各テストメソッド実行前の初期化"""
@@ -24,7 +24,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         
         assert agent.config == self.mock_config
         assert isinstance(agent.state, AgentState)
@@ -38,7 +38,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         
         # quit コマンドのテスト
         agent._process_command("quit")
@@ -61,7 +61,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         agent._process_command("help")
         
         # ヘルプパネルが表示される
@@ -76,7 +76,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         agent._process_command("status")
         
         # ステータスパネルが表示される
@@ -93,7 +93,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.is_debug_mode.return_value = False
         mock_file_tools.read_file.return_value = "テストファイルの内容"
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         agent._process_command("read test.txt")
         
         mock_file_tools.read_file.assert_called_once_with("test.txt")
@@ -112,7 +112,7 @@ class TestCodeCrafterAgentIntegration:
             {"name": "dir1", "type": "directory"}
         ]
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         agent._process_command("ls")
         
         mock_file_tools.list_files.assert_called_once_with(".")
@@ -128,7 +128,7 @@ class TestCodeCrafterAgentIntegration:
         mock_llm_manager.chat.return_value = "AIからの応答です"
         mock_llm_manager.get_provider_name.return_value = "test_provider"
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         agent._process_command("Hello, AI!")
         
         # LLMが呼び出される
@@ -150,7 +150,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.is_debug_mode.return_value = False
         mock_file_tools.write_file.return_value = {"size": 100, "backup_created": False}
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         
         # ファイル作成指示を含むAI応答をシミュレート
         ai_response = """
@@ -174,7 +174,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         
         # 各ファイル拡張子の言語推測テスト
         test_cases = [
@@ -197,7 +197,7 @@ class TestCodeCrafterAgentIntegration:
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
         
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         
         # テスト用の対話履歴を追加
         for i in range(5):
@@ -243,7 +243,7 @@ class TestEndToEndWorkflow:
         mock_file_tools.write_file.return_value = {"size": 100, "backup_created": False}
         
         # エージェントの作成と実行
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         
         # ユーザー入力をシミュレート
         user_input = "Create a Python script that prints Hello, CodeCrafter!"

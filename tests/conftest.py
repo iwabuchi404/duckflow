@@ -102,7 +102,7 @@ def setup_test_environment():
     """テスト環境の自動セットアップ"""
     # テスト時に環境変数をクリア
     test_env_vars = [
-        'CODECRAFTER_DEBUG',
+        'DUCKFLOW_DEBUG',
         'OPENAI_API_KEY',
         'ANTHROPIC_API_KEY',
     ]

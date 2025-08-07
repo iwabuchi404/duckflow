@@ -14,7 +14,7 @@ from .tools.file_tools import file_tools, FileOperationError
 from .ui.rich_ui import rich_ui
 
 
-class CodeCrafterAgent:
+class DuckflowAgent:
     """Duckflow エージェント - ステップ1実装"""
     
     def __init__(self):
@@ -561,7 +561,7 @@ FILE_OPERATION:EDIT:filename.py
 def main() -> None:
     """メイン関数"""
     try:
-        agent = CodeCrafterAgent()
+        agent = DuckflowAgent()
         agent.start()
     except Exception as e:
         print(f"起動時にエラーが発生しました: {e}")

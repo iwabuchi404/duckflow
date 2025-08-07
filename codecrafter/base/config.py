@@ -206,16 +206,16 @@ class ConfigManager:
     def _apply_env_overrides(self, config_data: Dict[str, Any]) -> None:
         """環境変数による設定の上書き"""
         # デバッグモードの上書き
-        if os.getenv('CODECRAFTER_DEBUG'):
+        if os.getenv('DUCKFLOW_DEBUG'):
             if 'development' not in config_data:
                 config_data['development'] = {}
-            config_data['development']['debug'] = os.getenv('CODECRAFTER_DEBUG', 'false').lower() == 'true'
+            config_data['development']['debug'] = os.getenv('DUCKFLOW_DEBUG', 'false').lower() == 'true'
         
         # LLMプロバイダーの上書き
-        if os.getenv('CODECRAFTER_LLM_PROVIDER'):
+        if os.getenv('DUCKFLOW_LLM_PROVIDER'):
             if 'llm' not in config_data:
                 config_data['llm'] = {}
-            config_data['llm']['provider'] = os.getenv('CODECRAFTER_LLM_PROVIDER')
+            config_data['llm']['provider'] = os.getenv('DUCKFLOW_LLM_PROVIDER')
     
     def get_api_key(self, provider: str) -> Optional[str]:
         """プロバイダーのAPIキーを取得"""
