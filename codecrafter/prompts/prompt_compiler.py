@@ -1,0 +1,428 @@
+"""
+プロンプトコンパイラ - 動的プロンプト生成システム
+AgentState と RAG検索結果を組み合わせてコンテキスト最適化されたプロンプトを生成
+"""
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+
+from ..state.agent_state import AgentState
+from ..base.config import config_manager
+
+
+class PromptTemplate:
+    """プロンプトテンプレートを管理するクラス"""
+    
+    def __init__(self, name: str, template: str, variables: List[str]):
+        """プロンプトテンプレートを初期化
+        
+        Args:
+            name: テンプレート名
+            template: テンプレート文字列
+            variables: 必要な変数一覧
+        """
+        self.name = name
+        self.template = template
+        self.variables = variables
+    
+    def render(self, **kwargs) -> str:
+        """テンプレートを描画
+        
+        Args:
+            **kwargs: テンプレート変数
+            
+        Returns:
+            描画されたプロンプト
+        """
+        try:
+            return self.template.format(**kwargs)
+        except KeyError as e:
+            missing_var = str(e).strip("'")
+            raise ValueError(f"テンプレート '{self.name}' に必要な変数 '{missing_var}' が不足しています")
+
+
+class PromptCompiler:
+    """プロンプトコンパイラ - 状況に応じた最適なプロンプトを動的生成"""
+    
+    def __init__(self):
+        """プロンプトコンパイラを初期化"""
+        self.config = config_manager.load_config()
+        self.templates = self._load_templates()
+    
+    def _load_templates(self) -> Dict[str, PromptTemplate]:
+        """プロンプトテンプレートを読み込み
+        
+        Returns:
+            テンプレート辞書
+        """
+        templates = {}
+        
+        # システムプロンプト（基本）
+        templates["system_base"] = PromptTemplate(
+            name="system_base",
+            template="""あなたはDuckflow v0.2.1-alphaの高度なAIコーディングエージェントです。
+
+**🚀 あなたの能力:**
+- ファイルの作成・編集・分析を高精度で実行
+- プロジェクト全体の構造と文脈を理解
+- 複数のプログラミング言語に対応（Python, JS, TS, Java, C++, Go, Rust等）
+- LangGraphによる複雑なタスクフローの実行
+- 実用的で保守性の高いコードを生成
+
+**📊 現在の状況:**
+- 作業ディレクトリ: {workspace_path}
+- 現在のファイル: {current_file}
+- 進行中タスク: {current_task}
+- セッション時間: {session_duration}分
+
+**🛠️ 利用可能な高度機能:**
+- **RAGシステム**: プロジェクトコードの意味的検索（要インデックス化）
+- **ファイル操作**: 読み書き、ディレクトリ作成、情報取得
+- **テスト実行**: pytestによる自動テスト実行・結果解析
+- **エラー対応**: 自動リトライとエラー修正提案
+
+**🎯 作業方針:**
+1. **理解**: ユーザー要求を正確に把握
+2. **分析**: 必要に応じてプロジェクト内の関連コードを調査
+3. **実装**: 既存コードスタイルと一貫性を保った実装
+4. **検証**: 可能な場合はテストで動作確認
+
+**📝 ファイル操作指示フォーマット:**
+```
+FILE_OPERATION:CREATE:path/to/file.ext
+```language
+# 完全なファイル内容
+```
+
+FILE_OPERATION:EDIT:path/to/file.ext
+```language
+# 編集後の完全なファイル内容
+```
+
+**💡 プロジェクト理解を深めるには:**
+- 'index' コマンドでプロジェクトをインデックス化
+- 'search "キーワード"' で関連コードを検索
+- 'index-status' でRAG状態を確認
+
+効率的で高品質な開発支援を提供します。何をお手伝いしましょうか？""",
+            variables=["workspace_path", "current_file", "current_task", "session_duration"]
+        )
+        
+        # RAG強化システムプロンプト
+        templates["system_rag_enhanced"] = PromptTemplate(
+            name="system_rag_enhanced", 
+            template="""🧠 あなたはDuckflow v0.2.1-alphaの**プロジェクト理解型**AIコーディングエージェントです。
+
+**🔍 プロジェクト分析結果:**
+- 作業ディレクトリ: {workspace_path}
+- 現在のファイル: {current_file}
+- 進行中タスク: {current_task}
+- RAGインデックス: {index_status}
+
+**📈 プロジェクト統計:**
+- 総ファイル数: {total_files}
+- 主要言語: {primary_languages}
+- 最新アクティビティ: {recent_activity}
+
+**🎯 関連コード文脈（RAG検索結果）:**
+{code_context}
+
+**📋 最近の作業履歴:**
+{recent_work}
+
+**🚀 高度な作業能力:**
+- **コード理解**: プロジェクト全体の構造とパターンを把握
+- **文脈保持**: 既存のコーディング規約・スタイルを自動継承
+- **依存関係分析**: モジュール間の関係を理解した実装提案
+- **ベストプラクティス**: 言語・フレームワークの推奨パターンを適用
+
+**📝 実装戦略:**
+1. **関連コード調査**: 既存の類似実装を参考に
+2. **パターン継承**: プロジェクトの既存パターンを踏襲
+3. **構造最適化**: 適切なファイル配置と命名規約
+4. **品質保証**: 可読性・保守性・テスト可能性を重視
+
+**💻 ファイル操作指示:**
+```
+FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
+```language
+// プロジェクトスタイルに合わせた高品質なコード
+```
+
+FILE_OPERATION:EDIT:既存ファイル.ext  
+```language
+// 既存コードとの一貫性を保った更新
+```
+
+**✨ 特徴:**
+- 既存のアーキテクチャパターンを理解・活用
+- プロジェクト固有の命名規約・構造を自動適用
+- 関連ファイル・機能との整合性を確保
+- エラーハンドリングやロギングの統一
+
+プロジェクト全体を理解した上で、最適なソリューションを提供します！""",
+            variables=[
+                "workspace_path", "current_file", "current_task", "index_status",
+                "total_files", "primary_languages", "recent_activity",
+                "code_context", "recent_work"
+            ]
+        )
+        
+        # エラー対応プロンプト
+        templates["system_error_recovery"] = PromptTemplate(
+            name="system_error_recovery",
+            template="""あなたはDuckflowのAIコーディングエージェントです。エラー対応モードで動作しています。
+
+**現在の状況:**
+- 前回のアクションでエラーが発生しました
+- エラー内容: {error_message}
+- 失敗したツール: {failed_tool}
+- リトライ回数: {retry_count}/{max_retries}
+
+**最近の実行履歴:**
+{execution_history}
+
+**あなたの対応:**
+1. エラーの原因を分析する
+2. 代替的なアプローチを提案する
+3. 必要に応じて設定や前提条件を確認する
+4. より安全で確実な方法でタスクを継続する
+
+エラーから学習し、より良いソリューションを提供してください。""",
+            variables=[
+                "error_message", "failed_tool", "retry_count", "max_retries",
+                "execution_history"
+            ]
+        )
+        
+        return templates
+    
+    def compile_system_prompt(
+        self, 
+        state: AgentState,
+        rag_results: Optional[List[Dict[str, Any]]] = None,
+        template_name: Optional[str] = None
+    ) -> str:
+        """システムプロンプトをコンパイル
+        
+        Args:
+            state: エージェント状態
+            rag_results: RAG検索結果（任意）
+            template_name: 使用するテンプレート名（任意）
+            
+        Returns:
+            コンパイルされたシステムプロンプト
+        """
+        # テンプレート選択ロジック
+        if template_name:
+            selected_template = template_name
+        elif state.last_error and state.retry_count > 0:
+            selected_template = "system_error_recovery"
+        elif rag_results and len(rag_results) > 0:
+            selected_template = "system_rag_enhanced"
+        else:
+            selected_template = "system_base"
+        
+        if selected_template not in self.templates:
+            selected_template = "system_base"  # フォールバック
+        
+        template = self.templates[selected_template]
+        
+        # 変数を準備
+        variables = self._prepare_template_variables(state, rag_results)
+        
+        # 未定義の変数にデフォルト値を設定
+        for var in template.variables:
+            if var not in variables:
+                variables[var] = self._get_default_value(var)
+        
+        # プロンプトを描画
+        return template.render(**variables)
+    
+    def _prepare_template_variables(
+        self, 
+        state: AgentState, 
+        rag_results: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, str]:
+        """テンプレート変数を準備
+        
+        Args:
+            state: エージェント状態
+            rag_results: RAG検索結果
+            
+        Returns:
+            テンプレート変数辞書
+        """
+        variables = {}
+        
+        # 基本情報
+        variables["workspace_path"] = state.workspace.path if state.workspace else "未設定"
+        variables["current_file"] = state.workspace.current_file if state.workspace and state.workspace.current_file else "なし"
+        variables["current_task"] = state.current_task or "なし"
+        
+        # セッション情報
+        session_duration = (datetime.now() - state.created_at).total_seconds() / 60
+        variables["session_duration"] = f"{session_duration:.1f}"
+        
+        # RAG情報
+        if rag_results:
+            variables["code_context"] = self._format_rag_context(rag_results)
+            variables["index_status"] = "利用可能"
+            
+            # ファイル統計
+            unique_files = set(result.get("file_path", "") for result in rag_results)
+            variables["total_files"] = str(len(unique_files))
+            
+            # 言語統計
+            languages = {}
+            for result in rag_results:
+                lang = result.get("language", "unknown")
+                languages[lang] = languages.get(lang, 0) + 1
+            
+            sorted_langs = sorted(languages.items(), key=lambda x: x[1], reverse=True)
+            variables["primary_languages"] = ", ".join([f"{lang} ({count})" for lang, count in sorted_langs[:3]])
+        else:
+            variables["code_context"] = "関連するコードコンテキストは見つかりませんでした"
+            variables["index_status"] = "未インデックス"
+            variables["total_files"] = "0"
+            variables["primary_languages"] = "不明"
+        
+        # 最近の作業
+        variables["recent_work"] = self._format_recent_work(state)
+        variables["recent_activity"] = self._format_recent_activity(state)
+        
+        # エラー対応
+        variables["error_message"] = state.last_error or "なし"
+        variables["failed_tool"] = self._get_last_failed_tool(state)
+        variables["retry_count"] = str(state.retry_count)
+        variables["max_retries"] = str(state.max_retries)
+        variables["execution_history"] = self._format_execution_history(state)
+        
+        return variables
+    
+    def _format_rag_context(self, rag_results: List[Dict[str, Any]]) -> str:
+        """RAG検索結果をフォーマット
+        
+        Args:
+            rag_results: RAG検索結果
+            
+        Returns:
+            フォーマットされたコンテキスト
+        """
+        if not rag_results:
+            return "関連コードなし"
+        
+        context_parts = []
+        for i, result in enumerate(rag_results[:3], 1):  # 最初の3件のみ
+            file_path = result.get("file_path", "unknown")
+            language = result.get("language", "unknown")
+            content = result.get("content", "")
+            
+            # コンテンツを適切な長さに切り詰め
+            preview = content[:300]
+            if len(content) > 300:
+                preview += "..."
+            
+            context_parts.append(f"[{i}] {file_path} ({language}):\n{preview}")
+        
+        return "\n\n".join(context_parts)
+    
+    def _format_recent_work(self, state: AgentState) -> str:
+        """最近の作業をフォーマット
+        
+        Args:
+            state: エージェント状態
+            
+        Returns:
+            フォーマットされた最近の作業
+        """
+        if not state.tool_executions:
+            return "最近の作業なし"
+        
+        recent_tools = state.tool_executions[-3:]  # 最新3件
+        work_parts = []
+        
+        for tool_exec in recent_tools:
+            status = "成功" if not tool_exec.error else f"エラー: {tool_exec.error}"
+            work_parts.append(f"- {tool_exec.tool_name}: {status}")
+        
+        return "\n".join(work_parts)
+    
+    def _format_recent_activity(self, state: AgentState) -> str:
+        """最近のアクティビティをフォーマット
+        
+        Args:
+            state: エージェント状態
+            
+        Returns:
+            フォーマットされたアクティビティ
+        """
+        if state.workspace and state.workspace.last_modified:
+            return state.workspace.last_modified.strftime("%Y-%m-%d %H:%M:%S")
+        return "活動なし"
+    
+    def _get_last_failed_tool(self, state: AgentState) -> str:
+        """最後に失敗したツールを取得
+        
+        Args:
+            state: エージェント状態
+            
+        Returns:
+            失敗したツール名
+        """
+        for tool_exec in reversed(state.tool_executions):
+            if tool_exec.error:
+                return tool_exec.tool_name
+        return "なし"
+    
+    def _format_execution_history(self, state: AgentState) -> str:
+        """実行履歴をフォーマット
+        
+        Args:
+            state: エージェント状態
+            
+        Returns:
+            フォーマットされた実行履歴
+        """
+        if not state.tool_executions:
+            return "実行履歴なし"
+        
+        history_parts = []
+        for tool_exec in state.tool_executions[-5:]:  # 最新5件
+            timestamp = tool_exec.timestamp.strftime("%H:%M:%S")
+            status = "✅" if not tool_exec.error else "❌"
+            history_parts.append(f"{timestamp} {status} {tool_exec.tool_name}")
+        
+        return "\n".join(history_parts)
+    
+    def _get_default_value(self, variable_name: str) -> str:
+        """変数のデフォルト値を取得
+        
+        Args:
+            variable_name: 変数名
+            
+        Returns:
+            デフォルト値
+        """
+        defaults = {
+            "workspace_path": "未設定",
+            "current_file": "なし", 
+            "current_task": "なし",
+            "session_duration": "0.0",
+            "index_status": "未初期化",
+            "total_files": "0",
+            "primary_languages": "不明",
+            "recent_activity": "不明",
+            "code_context": "なし",
+            "recent_work": "なし",
+            "error_message": "なし",
+            "failed_tool": "なし",
+            "retry_count": "0",
+            "max_retries": "3",
+            "execution_history": "なし"
+        }
+        
+        return defaults.get(variable_name, "不明")
+
+
+# グローバルインスタンス
+prompt_compiler = PromptCompiler()
