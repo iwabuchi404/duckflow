@@ -1,0 +1,35 @@
+# Core dependencies for CodeCrafter
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-openai>=0.0.8
+langchain-anthropic>=0.1.0
+langchain-google-genai>=0.0.11
+langchain-groq>=0.1.0
+
+# UI and display
+rich>=13.7.0
+textual>=0.48.2
+
+# Data validation and configuration
+pydantic>=2.5.0
+pyyaml>=6.0.1
+python-dotenv>=1.0.0
+
+# File system and path handling
+pathlib
+typing-extensions>=4.8.0
+
+# Development dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.12.0
+ruff>=0.1.8
+mypy>=1.7.0
+
+# Optional: Enhanced LSP support (for Step 3)
+# python-lsp-server>=1.9.0
+# tree-sitter>=0.20.0
+
+# Optional: Vector database for RAG (for Step 2)
+# chromadb>=0.4.0
+# faiss-cpu>=1.7.4

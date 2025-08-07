@@ -1,0 +1,108 @@
+# CodeCrafter設定ファイル
+# バージョン: 1.0
+
+# LLMプロバイダー設定
+llm:
+  # メインプロバイダー (openai, anthropic, google, groq, openrouter)
+  provider: "groq"
+  
+  # プロバイダー別設定
+  openai:
+    model: "gpt-4-turbo-preview"
+    temperature: 0.1
+    max_tokens: 4096
+  
+  anthropic:
+    model: "claude-3-5-sonnet-20241022"
+    temperature: 0.1
+    max_tokens: 4096
+  
+  google:
+    model: "gemini-pro"
+    temperature: 0.1
+    max_tokens: 4096
+  
+  groq:
+    model: "llama-3.1-8b-instant"
+    temperature: 0.1
+    max_tokens: 8192
+  
+  openrouter:
+    model: "anthropic/claude-3-sonnet"
+    temperature: 0.1
+    max_tokens: 4096
+
+# UI設定
+ui:
+  # UIタイプ (rich, textual)
+  type: "rich"
+  
+  # Rich設定
+  rich:
+    theme: "monokai"
+    highlight: true
+    show_locals: true
+  
+  # Textual設定 (ステップ2で使用)
+  textual:
+    title: "CodeCrafter"
+    dark_mode: true
+
+# ツール設定
+tools:
+  # ファイル操作
+  file_operations:
+    max_file_size_mb: 10
+    allowed_extensions: [".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", ".yaml", ".yml", ".md", ".txt"]
+    backup_enabled: true
+  
+  # シェル実行 (ホワイトリスト)
+  shell:
+    allowed_commands:
+      - "ls"
+      - "dir"
+      - "cat"
+      - "grep"
+      - "find"
+      - "python"
+      - "pip"
+      - "uv"
+      - "pytest"
+      - "black"
+      - "ruff"
+      - "mypy"
+    timeout_seconds: 30
+
+# セキュリティ設定
+security:
+  # 人間による承認が必要な操作
+  require_approval:
+    file_write: true
+    file_delete: true
+    shell_execution: true
+    directory_creation: true
+  
+  # 禁止パターン
+  forbidden_patterns:
+    - "rm -rf"
+    - "sudo"
+    - "chmod 777"
+    - "passwd"
+
+# ログ設定
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/codecrafter.log"
+  max_size_mb: 50
+  backup_count: 5
+  
+  # 対話ログ
+  conversation:
+    enabled: true
+    file: "logs/conversation.json"
+
+# 開発設定
+development:
+  debug: false
+  reload_on_change: false
+  profiling: false
