@@ -55,7 +55,7 @@ class GraphState(BaseModel):
     next_nodes: List[str] = Field(default_factory=list, description="次に実行予定のノード一覧")
     execution_path: List[str] = Field(default_factory=list, description="実行済みノードのパス")
     loop_count: int = Field(default=0, description="ループ実行回数")
-    max_loops: int = Field(default=10, description="最大ループ回数")
+    max_loops: int = Field(default=5, description="最大ループ回数")
 
 
 class AgentState(BaseModel):
@@ -94,6 +94,11 @@ class AgentState(BaseModel):
     last_error: Optional[str] = Field(default=None, description="最後に発生したエラー")
     retry_count: int = Field(default=0, description="リトライ回数")
     max_retries: int = Field(default=3, description="最大リトライ回数")
+    
+    # 記憶管理関連 (ステップ2c)
+    history_summary: Optional[str] = Field(default=None, description="対話履歴の要約")
+    summary_created_at: Optional[datetime] = Field(default=None, description="要約作成時刻")
+    original_conversation_length: int = Field(default=0, description="要約前の元の対話数")
     
     def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """対話履歴にメッセージを追加"""
@@ -217,3 +222,71 @@ class AgentState(BaseModel):
             "error_count": self.error_count,
             "last_error": self.last_error
         }
+    
+    def needs_memory_management(self) -> bool:
+        """記憶管理が必要かどうかを判定 (ステップ2c)"""
+        from ..memory.conversation_memory import conversation_memory
+        return conversation_memory.should_summarize(self.conversation_history)
+    
+    def create_memory_summary(self) -> bool:
+        """記憶要約を作成し、対話履歴を整理 (ステップ2c)"""
+        try:
+            from ..memory.conversation_memory import conversation_memory
+            
+            # 要約作成
+            self.original_conversation_length = len(self.conversation_history)
+            summary = conversation_memory.create_conversation_summary(
+                self.conversation_history, 
+                self.history_summary
+            )
+            
+            # 履歴をトリム
+            updated_summary, trimmed_messages = conversation_memory.trim_conversation_history(
+                self.conversation_history, 
+                summary
+            )
+            
+            # 状態を更新
+            self.history_summary = updated_summary
+            self.conversation_history = trimmed_messages
+            self.summary_created_at = datetime.now()
+            
+            return True
+            
+        except Exception as e:
+            print(f"記憶要約作成エラー: {e}")
+            return False
+    
+    def get_memory_context(self) -> Optional[str]:
+        """記憶コンテキストを取得 (プロンプト生成用)"""
+        if self.history_summary:
+            context_parts = [f"**過去の対話要約:**\n{self.history_summary}"]
+            
+            if self.summary_created_at:
+                context_parts.append(f"\n**要約作成時刻:** {self.summary_created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            if self.original_conversation_length > 0:
+                context_parts.append(f"**元の対話数:** {self.original_conversation_length}ターン")
+            
+            return "\n".join(context_parts)
+        
+        return None
+    
+    def get_memory_status(self) -> Dict[str, Any]:
+        """記憶管理の状態情報を取得"""
+        from ..memory.conversation_memory import conversation_memory
+        
+        base_status = conversation_memory.get_memory_status(
+            self.conversation_history,
+            self.history_summary
+        )
+        
+        # エージェント固有の情報を追加
+        base_status.update({
+            "has_summary": self.history_summary is not None,
+            "summary_created_at": self.summary_created_at,
+            "original_length": self.original_conversation_length,
+            "current_length": len(self.conversation_history)
+        })
+        
+        return base_status

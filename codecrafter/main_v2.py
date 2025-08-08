@@ -2,6 +2,7 @@
 Duckflow ステップ2a実装版
 LangGraphベースのオーケストレーション対応
 """
+import os
 import sys
 import uuid
 from datetime import datetime
@@ -23,9 +24,9 @@ class DuckflowAgentV2:
         """初期化"""
         self.config = config_manager.load_config()
         
-        # ワークスペース情報の初期化
+        # ワークスペース情報の初期化（現在の絶対パスを使用）
         workspace = WorkspaceInfo(
-            path=".",
+            path=os.path.abspath("."),
             files=[],
             last_modified=datetime.now()
         )
@@ -51,7 +52,7 @@ class DuckflowAgentV2:
             if self.state.debug_mode:
                 rich_ui.print_warning("デバッグモードで実行中")
             
-            rich_ui.print_message("🔬 ステップ2a: LangGraphベースの新しいオーケストレーション", "info")
+            rich_ui.print_message("[STEP2] LangGraphベースの新しいオーケストレーション", "info")
             
             # メインループ
             self._main_loop()
@@ -188,6 +189,29 @@ class DuckflowAgentV2:
             self._show_index_status()
             return
         
+        # 作業ディレクトリ変更
+        elif cmd == 'cd':
+            if len(parts) < 2:
+                rich_ui.print_message(f"現在のディレクトリ: {os.getcwd()}", "info")
+                return
+            new_path = parts[1]
+            self._change_directory(new_path)
+            return
+        
+        # 現在のディレクトリ表示
+        elif cmd == 'pwd':
+            rich_ui.print_message(f"現在のディレクトリ: {os.getcwd()}", "info")
+            return
+        
+        # 記憶管理コマンド (ステップ2c)
+        elif cmd == 'memory':
+            self._show_memory_status()
+            return
+            
+        elif cmd == 'summarize':
+            self._create_memory_summary()
+            return
+        
         else:
             # 不明なコマンドはLangGraphオーケストレーションで処理
             self._handle_orchestrated_conversation(command)
@@ -214,7 +238,13 @@ class DuckflowAgentV2:
   ls, list [path]  - ファイル一覧を表示 (デフォルト: 現在のディレクトリ)
   read <file>      - ファイルを読み取り表示
   info <file>      - ファイル情報を表示
+  cd <path>        - 作業ディレクトリを変更
+  pwd              - 現在のディレクトリを表示
   test, tests      - テストを実行 (オプション: -v, --verbose, [path])
+
+[yellow]記憶管理 (ステップ2c):[/]
+  memory           - 記憶状態を表示（対話履歴、要約状況）
+  summarize        - 手動で対話履歴の要約を作成
 
 [yellow]AI対話 (LangGraph):[/]
   上記以外の入力  - LangGraphオーケストレーションでAI対話を実行
@@ -462,7 +492,12 @@ class DuckflowAgentV2:
     def _handle_orchestrated_conversation(self, user_message: str) -> None:
         """LangGraphオーケストレーションでAI対話を処理"""
         try:
-            rich_ui.print_message(f"🎯 LangGraphで処理中...", "info")
+            rich_ui.print_message("[ORCHESTRATION] LangGraphで処理中...", "info")
+            
+            # グラフ状態をリセット（新しい対話のため）
+            self.state.graph_state.loop_count = 0
+            self.state.retry_count = 0
+            self.state.last_error = None
             
             # オーケストレーションを実行
             self.orchestrator.run_conversation(user_message)
@@ -470,9 +505,19 @@ class DuckflowAgentV2:
             # 状態を同期
             self.state = self.orchestrator.state
             
+            rich_ui.print_message("[ORCHESTRATION] 処理完了", "success")
+            
         except Exception as e:
-            self.state.record_error(f"オーケストレーションエラー: {e}")
-            rich_ui.print_error(f"処理中にエラーが発生しました: {e}")
+            error_msg = str(e)
+            self.state.record_error(f"オーケストレーションエラー: {error_msg}")
+            
+            # 再帰制限エラーの場合は分かりやすいメッセージを表示
+            if "recursion_limit" in error_msg.lower() or "recursion limit" in error_msg.lower():
+                rich_ui.print_error("[ERROR] 処理が複雑になりすぎました。より簡単な質問に分けてお試しください。")
+                rich_ui.print_message("ヒント: 'status' コマンドで現在の状態を確認できます", "info")
+            else:
+                rich_ui.print_error(f"[ERROR] 処理中にエラーが発生しました: {error_msg}")
+            
             if self.state.debug_mode:
                 import traceback
                 rich_ui.print_error(traceback.format_exc())
@@ -582,6 +627,117 @@ class DuckflowAgentV2:
         
         except Exception as e:
             rich_ui.print_error(f"インデックス状態取得エラー: {e}")
+            if self.state.debug_mode:
+                import traceback
+                rich_ui.print_error(traceback.format_exc())
+    
+    def _change_directory(self, new_path: str) -> None:
+        """作業ディレクトリを変更"""
+        try:
+            # パスの正規化
+            if new_path == "~":
+                new_path = os.path.expanduser("~")
+            elif new_path == "-":
+                # 前のディレクトリに戻る機能（簡単な実装）
+                if hasattr(self, '_previous_dir'):
+                    new_path = self._previous_dir
+                else:
+                    rich_ui.print_warning("前のディレクトリが記録されていません")
+                    return
+            
+            # 現在のディレクトリを記録
+            self._previous_dir = os.getcwd()
+            
+            # 相対パスを絶対パスに変換
+            new_path = os.path.abspath(os.path.expanduser(new_path))
+            
+            # ディレクトリの存在確認
+            if not os.path.exists(new_path):
+                rich_ui.print_error(f"ディレクトリが存在しません: {new_path}")
+                return
+            
+            if not os.path.isdir(new_path):
+                rich_ui.print_error(f"パスがディレクトリではありません: {new_path}")
+                return
+            
+            # ディレクトリ変更実行
+            os.chdir(new_path)
+            rich_ui.print_success(f"作業ディレクトリを変更しました: {os.getcwd()}")
+            
+            # ワークスペース情報を更新
+            if self.state.workspace:
+                self.state.workspace.path = os.getcwd()
+                self.state.workspace.last_modified = datetime.now()
+            
+        except PermissionError:
+            rich_ui.print_error(f"ディレクトリへのアクセス権限がありません: {new_path}")
+        except Exception as e:
+            rich_ui.print_error(f"ディレクトリ変更に失敗しました: {e}")
+    
+    def _show_memory_status(self) -> None:
+        """記憶管理の状態を表示"""
+        try:
+            memory_status = self.state.get_memory_status()
+            
+            rich_ui.print_panel(
+                f"""**記憶管理状態 (ステップ2c)**
+
+**対話統計:**
+- 総メッセージ数: {memory_status.get('total_messages', 0)}
+- 要約が必要: {'はい' if memory_status.get('needs_summary', False) else 'いいえ'}
+
+**短期記憶 (最近の対話):**
+- 現在の履歴長: {len(self.state.conversation_history)}メッセージ
+
+**中期記憶 (要約):**
+- 要約: {'あり' if self.state.history_summary else 'なし'}
+- 要約作成日時: {self.state.summary_created_at.strftime('%Y-%m-%d %H:%M:%S') if self.state.summary_created_at else 'なし'}
+- 元の対話数: {self.state.original_conversation_length}
+
+**設定:**
+- 要約トリガー: {memory_status.get('trigger_threshold', 'N/A')} トークン
+- 保持ターン数: {memory_status.get('keep_recent_turns', 'N/A')}""",
+                "記憶管理状態",
+                "cyan"
+            )
+            
+            if self.state.history_summary:
+                rich_ui.print_panel(
+                    self.state.history_summary[:500] + ("..." if len(self.state.history_summary) > 500 else ""),
+                    "現在の要約 (抜粋)",
+                    "blue"
+                )
+                
+        except Exception as e:
+            rich_ui.print_error(f"記憶状態取得エラー: {e}")
+            if self.state.debug_mode:
+                import traceback
+                rich_ui.print_error(traceback.format_exc())
+    
+    def _create_memory_summary(self) -> None:
+        """手動で記憶要約を作成"""
+        try:
+            if len(self.state.conversation_history) < 4:
+                rich_ui.print_warning("要約するには対話が不十分です（最低4メッセージ必要）")
+                return
+            
+            rich_ui.print_message("対話履歴の要約を作成中...", "info")
+            
+            if self.state.create_memory_summary():
+                rich_ui.print_success("要約を作成し、対話履歴を整理しました")
+                
+                # 要約結果を表示
+                if self.state.history_summary:
+                    rich_ui.print_panel(
+                        self.state.history_summary[:300] + ("..." if len(self.state.history_summary) > 300 else ""),
+                        "作成された要約 (抜粋)",
+                        "green"
+                    )
+            else:
+                rich_ui.print_error("要約の作成に失敗しました")
+                
+        except Exception as e:
+            rich_ui.print_error(f"記憶要約作成エラー: {e}")
             if self.state.debug_mode:
                 import traceback
                 rich_ui.print_error(traceback.format_exc())

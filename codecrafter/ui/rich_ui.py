@@ -58,15 +58,15 @@ class RichUI:
     
     def print_success(self, message: str) -> None:
         """成功メッセージを表示"""
-        self.console.print(f"[{self.colors['success']}]✓ {escape(message)}[/]")
+        self.console.print(f"[{self.colors['success']}][OK] {escape(message)}[/]")
     
     def print_warning(self, message: str) -> None:
         """警告メッセージを表示"""
-        self.console.print(f"[{self.colors['warning']}]⚠ {escape(message)}[/]")
+        self.console.print(f"[{self.colors['warning']}][WARN] {escape(message)}[/]")
     
     def print_error(self, message: str) -> None:
         """エラーメッセージを表示"""
-        self.console.print(f"[{self.colors['error']}]✗ {escape(message)}[/]")
+        self.console.print(f"[{self.colors['error']}][ERROR] {escape(message)}[/]")
     
     def print_code(self, code: str, language: str = "python") -> None:
         """コードを構文ハイライト付きで表示"""

@@ -32,6 +32,27 @@ llm:
     temperature: 0.1
     max_tokens: 4096
 
+# 要約用高速LLM設定 (ステップ2c)
+summary_llm:
+  # 要約専用プロバイダー (通常は高速・安価なモデルを使用)
+  provider: "groq"
+  
+  # プロバイダー別設定
+  openai:
+    model: "gpt-4o-mini"  # 高速・安価
+    temperature: 0.0
+    max_tokens: 1000
+  
+  anthropic:
+    model: "claude-3-haiku-20240307"  # 高速・安価
+    temperature: 0.0
+    max_tokens: 1000
+  
+  groq:
+    model: "llama-3.1-8b-instant"  # 高速
+    temperature: 0.0
+    max_tokens: 1000
+
 # UI設定
 ui:
   # UIタイプ (rich, textual)
@@ -62,15 +83,23 @@ tools:
       - "ls"
       - "dir"
       - "cat"
+      - "type"
       - "grep"
       - "find"
+      - "where"
+      - "cd"
+      - "pwd"
+      - "echo"
       - "python"
       - "pip"
-      - "uv"
+      - "uv" 
       - "pytest"
       - "black"
       - "ruff"
       - "mypy"
+      - "git"
+      - "node"
+      - "npm"
     timeout_seconds: 30
 
 # セキュリティ設定
@@ -100,6 +129,33 @@ logging:
   conversation:
     enabled: true
     file: "logs/conversation.json"
+
+# 記憶管理設定 (ステップ2c)
+memory:
+  # 短期記憶設定
+  short_term:
+    # 最大保持メッセージ数
+    max_messages: 50
+    # 自動クリーンアップ間隔(秒)
+    cleanup_interval: 300
+  
+  # 中期記憶設定 (エピソード記憶)
+  medium_term:
+    # 要約トリガーのトークン数閾値
+    summary_trigger_tokens: 4000
+    # 要約の目標トークン数
+    summary_target_tokens: 500
+    # 要約後に保持する最新ターン数
+    keep_recent_turns: 3
+    # 要約の有効期限(時間)
+    summary_expiry_hours: 24
+  
+  # 長期記憶設定 (将来拡張用)
+  long_term:
+    # 永続化ストレージ
+    enabled: false
+    # セッション間での記憶継続
+    cross_session: false
 
 # 開発設定
 development:

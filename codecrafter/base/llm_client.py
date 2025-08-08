@@ -211,10 +211,12 @@ class LLMManager:
     def __init__(self):
         self.config = config_manager.load_config()
         self.current_client: Optional[BaseLLMClient] = None
+        self.summary_client: Optional[BaseLLMClient] = None  # 要約用クライアント
         self._initialize_client()
     
     def _initialize_client(self) -> None:
         """クライアントを初期化"""
+        # メインクライアント初期化
         provider = self.config.llm.provider.lower()
         llm_config = config_manager.get_llm_config()
         
@@ -233,9 +235,37 @@ class LLMManager:
             print(f"警告: LLMクライアントの初期化に失敗しました: {e}")
             print("モッククライアントを使用します。")
             self.current_client = MockClient(llm_config)
+        
+        # 要約用クライアント初期化 (ステップ2c)
+        try:
+            summary_provider = self.config.summary_llm.provider.lower()
+            summary_config = getattr(self.config.summary_llm, summary_provider, {})
+            if isinstance(summary_config, dict):
+                if summary_provider == 'openai':
+                    self.summary_client = OpenAIClient(summary_config)
+                elif summary_provider == 'anthropic':
+                    self.summary_client = AnthropicClient(summary_config)
+                elif summary_provider == 'groq':
+                    self.summary_client = GroqClient(summary_config)
+                else:
+                    self.summary_client = self.current_client  # フォールバック
+            else:
+                self.summary_client = self.current_client  # フォールバック
+        except Exception:
+            # 要約用クライアントの初期化に失敗した場合はメインクライアントを使用
+            self.summary_client = self.current_client
     
-    def chat(self, message: str, system_prompt: Optional[str] = None) -> str:
-        """シンプルなチャット"""
+    def chat(self, message: str, system_prompt: Optional[str] = None, client_type: str = "main") -> str:
+        """シンプルなチャット
+        
+        Args:
+            message: ユーザーメッセージ
+            system_prompt: システムプロンプト
+            client_type: クライアントタイプ ("main" または "summary")
+        
+        Returns:
+            LLMの応答
+        """
         messages = []
         
         if system_prompt:
@@ -249,7 +279,9 @@ class LLMManager:
             'content': message
         })
         
-        return self.current_client.chat(messages)
+        # クライアントタイプに応じて適切なクライアントを選択
+        client = self.summary_client if client_type == "summary" else self.current_client
+        return client.chat(messages)
     
     def chat_with_history(self, messages: List[Dict[str, str]]) -> str:
         """履歴付きチャット"""

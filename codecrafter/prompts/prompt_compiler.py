@@ -59,7 +59,10 @@ class PromptCompiler:
         # システムプロンプト（基本）
         templates["system_base"] = PromptTemplate(
             name="system_base",
-            template="""あなたはDuckflow v0.2.1-alphaの高度なAIコーディングエージェントです。
+            template="""あなたはDuckflow v0.2.1-alphaの高度なAIコーディングエージェントです。自律的に動いてユーザーの要求に答えてください。
+
+**🚨 記憶に関する重要な指示:**
+このプロンプトの下部に「最近の対話履歴」セクションがあります。ユーザーが過去の対話について質問した場合は、必ずその履歴を参照して回答してください。「記憶がない」「覚えていない」などと言わず、提供された履歴情報を使用してください。
 
 **🚀 あなたの能力:**
 - ファイルの作成・編集・分析を高精度で実行
@@ -67,7 +70,10 @@ class PromptCompiler:
 - 複数のプログラミング言語に対応（Python, JS, TS, Java, C++, Go, Rust等）
 - LangGraphによる複雑なタスクフローの実行
 - 実用的で保守性の高いコードを生成
-
+🚫🚫🚫 絶対厳守のルール 🚫🚫🚫
+推測の禁止: ファイルの内容や存在について、100%の確信がない限り、決して推測で語ってはいけません。
+事実確認の義務: 何かについて語る前には、必ずlist_filesやread_fileツールを使って、その存在と内容をまず確認してください。
+存在しない場合の応答: 確認した結果、ファイルが存在しなかった場合は、「ファイル xxxx.py は存在しませんでした。作成しますか？」のように、正直に報告し、次の行動をユーザーに尋ねてください。
 **📊 現在の状況:**
 - 作業ディレクトリ: {workspace_path}
 - 現在のファイル: {current_file}
@@ -103,14 +109,28 @@ FILE_OPERATION:EDIT:path/to/file.ext
 - 'search "キーワード"' で関連コードを検索
 - 'index-status' でRAG状態を確認
 
+**💬 最近の対話履歴（重要！必ず参照すること）:**
+{recent_conversation}
+
+**🧠 記憶状況:**
+{memory_context}
+
+**📋 重要な指示:**
+- 上記の「最近の対話履歴」を必ず参照して、ユーザーの質問に答えてください
+- ユーザーが「前に何を聞いた？」などの質問をした場合、上記の履歴から直前のメッセージを確認してください
+- 履歴が存在する場合は「記憶コンテキストがない」と言わず、履歴の内容を参照して回答してください
+
 効率的で高品質な開発支援を提供します。何をお手伝いしましょうか？""",
-            variables=["workspace_path", "current_file", "current_task", "session_duration"]
+            variables=["workspace_path", "current_file", "current_task", "session_duration", "recent_conversation", "memory_context"]
         )
         
         # RAG強化システムプロンプト
         templates["system_rag_enhanced"] = PromptTemplate(
             name="system_rag_enhanced", 
             template="""🧠 あなたはDuckflow v0.2.1-alphaの**プロジェクト理解型**AIコーディングエージェントです。
+
+**🚨 記憶に関する重要な指示:**
+このプロンプトに「最近の対話履歴」が含まれています。ユーザーが過去の対話について質問した場合は、必ずその履歴を参照して回答してください。
 
 **🔍 プロジェクト分析結果:**
 - 作業ディレクトリ: {workspace_path}
@@ -122,6 +142,12 @@ FILE_OPERATION:EDIT:path/to/file.ext
 - 総ファイル数: {total_files}
 - 主要言語: {primary_languages}
 - 最新アクティビティ: {recent_activity}
+
+**🧠 記憶・対話コンテキスト（ステップ2c）:**
+{memory_context}
+
+**💬 最近の対話履歴（必ず確認！）:**
+{recent_conversation}
 
 **🎯 関連コード文脈（RAG検索結果）:**
 {code_context}
@@ -163,7 +189,7 @@ FILE_OPERATION:EDIT:既存ファイル.ext
             variables=[
                 "workspace_path", "current_file", "current_task", "index_status",
                 "total_files", "primary_languages", "recent_activity",
-                "code_context", "recent_work"
+                "code_context", "recent_work", "memory_context", "recent_conversation"
             ]
         )
         
@@ -200,7 +226,8 @@ FILE_OPERATION:EDIT:既存ファイル.ext
         self, 
         state: AgentState,
         rag_results: Optional[List[Dict[str, Any]]] = None,
-        template_name: Optional[str] = None
+        template_name: Optional[str] = None,
+        file_context: Optional[Dict[str, Any]] = None
     ) -> str:
         """システムプロンプトをコンパイル
         
@@ -208,6 +235,7 @@ FILE_OPERATION:EDIT:既存ファイル.ext
             state: エージェント状態
             rag_results: RAG検索結果（任意）
             template_name: 使用するテンプレート名（任意）
+            file_context: ファイルコンテキスト（任意）
             
         Returns:
             コンパイルされたシステムプロンプト
@@ -217,7 +245,7 @@ FILE_OPERATION:EDIT:既存ファイル.ext
             selected_template = template_name
         elif state.last_error and state.retry_count > 0:
             selected_template = "system_error_recovery"
-        elif rag_results and len(rag_results) > 0:
+        elif (rag_results and len(rag_results) > 0) or (file_context and any(file_context.values())):
             selected_template = "system_rag_enhanced"
         else:
             selected_template = "system_base"
@@ -227,8 +255,12 @@ FILE_OPERATION:EDIT:既存ファイル.ext
         
         template = self.templates[selected_template]
         
-        # 変数を準備
-        variables = self._prepare_template_variables(state, rag_results)
+        # 変数を準備（記憶コンテキストも含む）
+        variables = self._prepare_template_variables(state, rag_results, file_context)
+        
+        # 記憶管理: 必要に応じて要約を実行
+        if state.needs_memory_management():
+            state.create_memory_summary()
         
         # 未定義の変数にデフォルト値を設定
         for var in template.variables:
@@ -241,18 +273,28 @@ FILE_OPERATION:EDIT:既存ファイル.ext
     def _prepare_template_variables(
         self, 
         state: AgentState, 
-        rag_results: Optional[List[Dict[str, Any]]] = None
+        rag_results: Optional[List[Dict[str, Any]]] = None,
+        file_context: Optional[Dict[str, Any]] = None
     ) -> Dict[str, str]:
         """テンプレート変数を準備
         
         Args:
             state: エージェント状態
             rag_results: RAG検索結果
+            file_context: ファイルコンテキスト
             
         Returns:
             テンプレート変数辞書
         """
         variables = {}
+        
+        # 記憶コンテキストを追加 (ステップ2c)
+        memory_context = state.get_memory_context()
+        variables["memory_context"] = memory_context if memory_context else "記憶コンテキストなし"
+        
+        # 対話履歴を追加
+        recent_conversation = self._format_recent_conversation(state)
+        variables["recent_conversation"] = recent_conversation
         
         # 基本情報
         variables["workspace_path"] = state.workspace.path if state.workspace else "未設定"
@@ -394,6 +436,44 @@ FILE_OPERATION:EDIT:既存ファイル.ext
         
         return "\n".join(history_parts)
     
+    def _format_recent_conversation(self, state: AgentState) -> str:
+        """最近の対話履歴をフォーマット
+        
+        Args:
+            state: エージェント状態
+            
+        Returns:
+            フォーマットされた対話履歴
+        """
+        if not state.conversation_history:
+            return "対話履歴なし"
+        
+        # 最新5ターンの対話を表示
+        recent_messages = state.get_recent_messages(10)
+        conversation_parts = []
+        
+        for msg in recent_messages:
+            timestamp = msg.timestamp.strftime("%H:%M")
+            role_label = {
+                "user": "ユーザー",
+                "assistant": "AI", 
+                "system": "システム"
+            }.get(msg.role, msg.role)
+            
+            # メッセージ内容を適切な長さに制限
+            content = msg.content[:300]
+            if len(msg.content) > 300:
+                content += "..."
+            
+            conversation_parts.append(f"[{timestamp}] {role_label}: {content}")
+        
+        if not conversation_parts:
+            return "対話履歴なし"
+        
+        # 履歴の説明を追加
+        header = "以下は最近の対話履歴です（最新が下）:"
+        return header + "\n" + "\n".join(conversation_parts)
+    
     def _get_default_value(self, variable_name: str) -> str:
         """変数のデフォルト値を取得
         
@@ -418,7 +498,9 @@ FILE_OPERATION:EDIT:既存ファイル.ext
             "failed_tool": "なし",
             "retry_count": "0",
             "max_retries": "3",
-            "execution_history": "なし"
+            "execution_history": "なし",
+            "memory_context": "記憶コンテキストなし",
+            "recent_conversation": "対話履歴なし"
         }
         
         return defaults.get(variable_name, "不明")

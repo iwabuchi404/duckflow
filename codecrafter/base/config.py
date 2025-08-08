@@ -65,6 +65,23 @@ class DevelopmentConfig(BaseModel):
     profiling: bool = Field(default=False, description="プロファイリング")
 
 
+class MemoryConfig(BaseModel):
+    """記憶管理設定クラス (ステップ2c)"""
+    
+    short_term: Dict[str, Any] = Field(default_factory=dict, description="短期記憶設定")
+    medium_term: Dict[str, Any] = Field(default_factory=dict, description="中期記憶設定")
+    long_term: Dict[str, Any] = Field(default_factory=dict, description="長期記憶設定")
+
+
+class SummaryLLMConfig(BaseModel):
+    """要約用LLM設定クラス (ステップ2c)"""
+    
+    provider: str = Field(description="要約用LLMプロバイダー")
+    openai: Dict[str, Any] = Field(default_factory=dict, description="OpenAI要約設定")
+    anthropic: Dict[str, Any] = Field(default_factory=dict, description="Anthropic要約設定")
+    groq: Dict[str, Any] = Field(default_factory=dict, description="Groq要約設定")
+
+
 class Config(BaseModel):
     """メイン設定クラス"""
     
@@ -74,6 +91,8 @@ class Config(BaseModel):
     security: SecurityConfig = Field(default_factory=SecurityConfig, description="セキュリティ設定")
     logging: LoggingConfig = Field(default_factory=LoggingConfig, description="ログ設定")
     development: DevelopmentConfig = Field(default_factory=DevelopmentConfig, description="開発設定")
+    memory: MemoryConfig = Field(default_factory=MemoryConfig, description="記憶管理設定")
+    summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig, description="要約用LLM設定")
 
 
 class ConfigManager:
