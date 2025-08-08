@@ -147,11 +147,20 @@ class RichUI:
         )
     
     def get_confirmation(self, message: str, default: bool = False) -> bool:
-        """確認の入力を取得"""
-        return Confirm.ask(
-            f"[{self.colors['warning']}]{message}[/]",
-            default=default
-        )
+        """確認の入力を取得 (y/n)。RichのConfirmが使えない場合は標準入力へフォールバック"""
+        label = "Y/n" if default else "y/N"
+        prompt_text = f"[{self.colors['warning']}]{escape(message)}[/] [{label}]"
+        try:
+            return Confirm.ask(prompt_text, default=default)
+        except Exception:
+            # フォールバック: 標準入力
+            try:
+                resp = input(f"{message} [{label}]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                return default
+            if not resp:
+                return default
+            return resp in ("y", "yes", "1", "true")
     
     def show_progress(self, description: str) -> Progress:
         """プログレス表示を開始"""

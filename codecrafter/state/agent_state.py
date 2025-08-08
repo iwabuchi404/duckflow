@@ -99,7 +99,14 @@ class AgentState(BaseModel):
     history_summary: Optional[str] = Field(default=None, description="対話履歴の要約")
     summary_created_at: Optional[datetime] = Field(default=None, description="要約作成時刻")
     original_conversation_length: int = Field(default=0, description="要約前の元の対話数")
-    
+
+    # --- 追加: ランタイムで参照される可変フィールド（安全性/分析/文脈） ---
+    safety_assessment: Dict[str, Any] = Field(default_factory=dict, description="安全性評価結果")
+    error_analysis: Dict[str, Any] = Field(default_factory=dict, description="エラー分析結果")
+    approval_result: Optional[str] = Field(default=None, description="人間承認の結果")
+    collected_context: Dict[str, Any] = Field(default_factory=dict, description="収集済みコンテキスト")
+    rag_context: List[Dict[str, Any]] = Field(default_factory=list, description="直近のRAG検索結果")
+
     def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """対話履歴にメッセージを追加"""
         message = ConversationMessage(
