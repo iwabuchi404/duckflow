@@ -1,0 +1,317 @@
+[
+  {
+    "timestamp": "2025-08-08T16:08:41.778438",
+    "scenario_name": "基本ファイル作成",
+    "metrics": {
+      "overall_score": 79.0,
+      "quality_score": 100.0,
+      "completeness_score": 62.5,
+      "efficiency_score": 70.0,
+      "execution_time": 0.007454872131347656,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:08:41.793219",
+    "scenario_name": "プロジェクト構造作成",
+    "metrics": {
+      "overall_score": 78.12698412698413,
+      "quality_score": 100.0,
+      "completeness_score": 60.317460317460316,
+      "efficiency_score": 70.0,
+      "execution_time": 0.013452529907226562,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:08:41.799163",
+    "scenario_name": "設定ファイル修正",
+    "metrics": {
+      "overall_score": 69.7,
+      "quality_score": 99.25,
+      "completeness_score": 40.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.004027605056762695,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:08:41.807289",
+    "scenario_name": "プロジェクト分析",
+    "metrics": {
+      "overall_score": 83.6,
+      "quality_score": 99.0,
+      "completeness_score": 75.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.006807565689086914,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 2
+  },
+  {
+    "timestamp": "2025-08-08T16:08:41.834109",
+    "scenario_name": "Webアプリ開発",
+    "metrics": {
+      "overall_score": 77.85,
+      "quality_score": 99.625,
+      "completeness_score": 60.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.025276899337768555,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 4
+  },
+  {
+    "timestamp": "2025-08-08T16:09:02.232057",
+    "scenario_name": "基本ファイル作成",
+    "metrics": {
+      "overall_score": 79.0,
+      "quality_score": 100.0,
+      "completeness_score": 62.5,
+      "efficiency_score": 70.0,
+      "execution_time": 0.007875919342041016,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:02.245313",
+    "scenario_name": "プロジェクト構造作成",
+    "metrics": {
+      "overall_score": 78.12698412698413,
+      "quality_score": 100.0,
+      "completeness_score": 60.317460317460316,
+      "efficiency_score": 70.0,
+      "execution_time": 0.011519908905029297,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:02.251919",
+    "scenario_name": "設定ファイル修正",
+    "metrics": {
+      "overall_score": 69.7,
+      "quality_score": 99.25,
+      "completeness_score": 40.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.004586458206176758,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:02.260459",
+    "scenario_name": "プロジェクト分析",
+    "metrics": {
+      "overall_score": 83.6,
+      "quality_score": 99.0,
+      "completeness_score": 75.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.0071489810943603516,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 2
+  },
+  {
+    "timestamp": "2025-08-08T16:09:02.279834",
+    "scenario_name": "Webアプリ開発",
+    "metrics": {
+      "overall_score": 77.85,
+      "quality_score": 99.625,
+      "completeness_score": 60.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.0176849365234375,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 4
+  },
+  {
+    "timestamp": "2025-08-08T16:09:35.122324",
+    "scenario_name": "基本ファイル作成",
+    "metrics": {
+      "overall_score": 79.0,
+      "quality_score": 100.0,
+      "completeness_score": 62.5,
+      "efficiency_score": 70.0,
+      "execution_time": 0.006258487701416016,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:47.420731",
+    "scenario_name": "基本ファイル作成",
+    "metrics": {
+      "overall_score": 79.0,
+      "quality_score": 100.0,
+      "completeness_score": 62.5,
+      "efficiency_score": 70.0,
+      "execution_time": 0.005512714385986328,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:47.438790",
+    "scenario_name": "プロジェクト構造作成",
+    "metrics": {
+      "overall_score": 78.12698412698413,
+      "quality_score": 100.0,
+      "completeness_score": 60.317460317460316,
+      "efficiency_score": 70.0,
+      "execution_time": 0.015914201736450195,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:47.446351",
+    "scenario_name": "設定ファイル修正",
+    "metrics": {
+      "overall_score": 69.7,
+      "quality_score": 99.25,
+      "completeness_score": 40.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.004975557327270508,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:47.455160",
+    "scenario_name": "プロジェクト分析",
+    "metrics": {
+      "overall_score": 83.6,
+      "quality_score": 99.0,
+      "completeness_score": 75.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.007175445556640625,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 2
+  },
+  {
+    "timestamp": "2025-08-08T16:09:47.478760",
+    "scenario_name": "Webアプリ開発",
+    "metrics": {
+      "overall_score": 77.85,
+      "quality_score": 99.625,
+      "completeness_score": 60.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.02190542221069336,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 4
+  },
+  {
+    "timestamp": "2025-08-08T16:09:54.579554",
+    "scenario_name": "基本ファイル作成",
+    "metrics": {
+      "overall_score": 79.0,
+      "quality_score": 100.0,
+      "completeness_score": 62.5,
+      "efficiency_score": 70.0,
+      "execution_time": 0.003795146942138672,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:54.595439",
+    "scenario_name": "プロジェクト構造作成",
+    "metrics": {
+      "overall_score": 78.12698412698413,
+      "quality_score": 100.0,
+      "completeness_score": 60.317460317460316,
+      "efficiency_score": 70.0,
+      "execution_time": 0.014084339141845703,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:54.603259",
+    "scenario_name": "設定ファイル修正",
+    "metrics": {
+      "overall_score": 69.7,
+      "quality_score": 99.25,
+      "completeness_score": 40.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.00493168830871582,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 3
+  },
+  {
+    "timestamp": "2025-08-08T16:09:54.610927",
+    "scenario_name": "プロジェクト分析",
+    "metrics": {
+      "overall_score": 83.6,
+      "quality_score": 99.0,
+      "completeness_score": 75.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.005743503570556641,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 2
+  },
+  {
+    "timestamp": "2025-08-08T16:09:54.619767",
+    "scenario_name": "Webアプリ開発",
+    "metrics": {
+      "overall_score": 77.85,
+      "quality_score": 99.625,
+      "completeness_score": 60.0,
+      "efficiency_score": 70.0,
+      "execution_time": 0.007082700729370117,
+      "files_created": 0,
+      "lines_of_code": 0,
+      "syntax_accuracy": 100.0
+    },
+    "recommendations_count": 4
+  }
+]
