@@ -464,12 +464,23 @@ class ImprovementEngine:
             waste_indicators = efficiency_analysis.get("waste_indicators", [])
             efficiency_suggestions = efficiency_analysis.get("optimization_suggestions", [])
             
+            # 安全な文字列結合のための処理
+            safe_suggestions = []
+            for suggestion in efficiency_suggestions[:3]:
+                if isinstance(suggestion, str):
+                    safe_suggestions.append(suggestion)
+                elif isinstance(suggestion, dict):
+                    # 辞書の場合は適切な文字列表現に変換
+                    safe_suggestions.append(str(suggestion.get('description', str(suggestion))))
+                else:
+                    safe_suggestions.append(str(suggestion))
+            
             improvements.append(PromptImprovement(
                 improvement_id=f"efficiency_{datetime.now().strftime('%H%M%S')}",
                 target_section="communication",
                 improvement_type="modification",
                 current_content="",
-                proposed_content=f"コミュニケーション効率を向上させるため、以下を心がけてください：{'; '.join(efficiency_suggestions[:3])}。冗長な表現を避け、情報密度の高い応答を提供してください。",
+                proposed_content=f"コミュニケーション効率を向上させるため、以下を心がけてください：{'; '.join(safe_suggestions)}。冗長な表現を避け、情報密度の高い応答を提供してください。",
                 rationale=f"コミュニケーション効率が低い（{efficiency_analysis.get('efficiency_score', 0):.2f}）ため",
                 expected_impact={"communication_efficiency": 20.0, "response_quality": 15.0},
                 risk_level="low",
@@ -643,7 +654,11 @@ class ImprovementEngine:
             (r"何でも実行", "無制限実行", "高")
         ]
         
-        all_content = " ".join(new_prompt.values())
+        # 安全な文字列結合
+        all_content = " ".join([
+            str(value) if not isinstance(value, dict) else str(value)
+            for value in new_prompt.values()
+        ])
         
         for pattern, description, severity_jp in dangerous_patterns:
             if re.search(pattern, all_content, re.IGNORECASE):
@@ -669,7 +684,11 @@ class ImprovementEngine:
             (["速く", "慎重に"], "速度と慎重性の矛盾")
         ]
         
-        all_content = " ".join(new_prompt.values()).lower()
+        # 安全な文字列結合
+        all_content = " ".join([
+            str(value) if not isinstance(value, dict) else str(value)
+            for value in new_prompt.values()
+        ]).lower()
         
         for contradiction_words, description in contradictions:
             if all(word in all_content for word in contradiction_words):

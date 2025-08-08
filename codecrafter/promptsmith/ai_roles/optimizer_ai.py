@@ -13,7 +13,10 @@ from datetime import datetime
 import statistics
 
 # Import PromptImprovement from improvement_engine
-from ..improvement_engine import PromptImprovement
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from improvement_engine import PromptImprovement
 
 
 @dataclass
