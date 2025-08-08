@@ -1,15 +1,15 @@
 # tests/test_main_integration.py
 """
-メインアプリケーションの統合テスト
+メインアプリケーションの統合テスト（V2対応）
 """
 import pytest
 from unittest.mock import Mock, patch, MagicMock
-from codecrafter.main import DuckflowAgent
+from codecrafter.main_v2 import DuckflowAgentV2 as DuckflowAgent
 from codecrafter.state.agent_state import AgentState
 
 
 class TestDuckflowAgentIntegration:
-    """DuckflowAgentの統合テスト"""
+    """DuckflowAgentの統合テスト (V2)"""
     
     def setup_method(self):
         """各テストメソッド実行前の初期化"""
@@ -17,8 +17,8 @@ class TestDuckflowAgentIntegration:
         self.mock_config.security.require_approval = {"file_write": False}
         self.mock_config.llm.provider = "test"
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
     def test_agent_initialization(self, mock_ui, mock_config_manager):
         """エージェント初期化のテスト"""
         mock_config_manager.load_config.return_value = self.mock_config
@@ -29,10 +29,10 @@ class TestDuckflowAgentIntegration:
         assert agent.config == self.mock_config
         assert isinstance(agent.state, AgentState)
         assert agent.running is True
-        assert agent.debug_mode is False
+        assert agent.state.debug_mode is False
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
     def test_command_processing_quit(self, mock_ui, mock_config_manager):
         """終了コマンドの処理テスト"""
         mock_config_manager.load_config.return_value = self.mock_config
@@ -54,8 +54,8 @@ class TestDuckflowAgentIntegration:
         agent._process_command("q")
         assert agent.running is False
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
     def test_command_processing_help(self, mock_ui, mock_config_manager):
         """ヘルプコマンドの処理テスト"""
         mock_config_manager.load_config.return_value = self.mock_config
@@ -69,8 +69,8 @@ class TestDuckflowAgentIntegration:
         call_args = mock_ui.print_panel.call_args
         assert "利用可能なコマンド" in call_args[0][0]
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
     def test_command_processing_status(self, mock_ui, mock_config_manager):
         """ステータスコマンドの処理テスト"""
         mock_config_manager.load_config.return_value = self.mock_config
@@ -84,10 +84,10 @@ class TestDuckflowAgentIntegration:
         call_args = mock_ui.print_panel.call_args
         assert "セッション情報" in call_args[0][0]
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
-    @patch('codecrafter.main.file_tools')
-    def test_file_operations_read(self, mock_file_tools, mock_ui, mock_config_manager):
+    @patch('codecrafter.main_v2.file_tools')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
+    def test_file_operations_read(self, mock_ui, mock_config_manager, mock_file_tools):
         """ファイル読み込みコマンドのテスト"""
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
@@ -100,10 +100,10 @@ class TestDuckflowAgentIntegration:
         mock_ui.print_file_content.assert_called_once()
         mock_ui.print_success.assert_called_once()
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
-    @patch('codecrafter.main.file_tools')
-    def test_file_operations_list(self, mock_file_tools, mock_ui, mock_config_manager):
+    @patch('codecrafter.main_v2.file_tools')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
+    def test_file_operations_list(self, mock_ui, mock_config_manager, mock_file_tools):
         """ファイル一覧コマンドのテスト"""
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
@@ -118,57 +118,47 @@ class TestDuckflowAgentIntegration:
         mock_file_tools.list_files.assert_called_once_with(".")
         mock_ui.print_file_list.assert_called_once()
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
-    @patch('codecrafter.main.llm_manager')
-    def test_ai_conversation_handling(self, mock_llm_manager, mock_ui, mock_config_manager):
-        """AI対話の処理テスト"""
+    @patch('codecrafter.main_v2.GraphOrchestrator')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
+    def test_ai_conversation_handling(self, mock_ui, mock_config_manager, mock_orchestrator):
+        """AI対話の処理テスト（LangGraph経由）"""
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
-        mock_llm_manager.chat.return_value = "AIからの応答です"
-        mock_llm_manager.get_provider_name.return_value = "test_provider"
+        
+        # orchestratorのモック
+        mock_instance = mock_orchestrator.return_value
         
         agent = DuckflowAgent()
         agent._process_command("Hello, AI!")
         
-        # LLMが呼び出される
-        mock_llm_manager.chat.assert_called_once()
-        
-        # 対話履歴に追加される
-        assert len(agent.state.conversation_history) == 2  # user + assistant
-        assert agent.state.conversation_history[0].role == "user"
-        assert agent.state.conversation_history[0].content == "Hello, AI!"
-        assert agent.state.conversation_history[1].role == "assistant"
-        assert agent.state.conversation_history[1].content == "AIからの応答です"
+        # LangGraphのオーケストレーションが呼ばれる
+        mock_instance.run_conversation.assert_called_once_with("Hello, AI!")
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
-    @patch('codecrafter.main.file_tools')
-    def test_file_operation_instruction_parsing(self, mock_file_tools, mock_ui, mock_config_manager):
-        """ファイル操作指示の解析テスト"""
+    @patch('codecrafter.main_v2.GraphOrchestrator')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
+    def test_file_operation_instruction_parsing(self, mock_ui, mock_config_manager, mock_orchestrator):
+        """ファイル操作指示の処理テスト（V2はオーケストレーション委譲を確認）"""
         mock_config_manager.load_config.return_value = self.mock_config
         mock_config_manager.is_debug_mode.return_value = False
-        mock_file_tools.write_file.return_value = {"size": 100, "backup_created": False}
+        mock_instance = mock_orchestrator.return_value
         
         agent = DuckflowAgent()
         
-        # ファイル作成指示を含むAI応答をシミュレート
-        ai_response = """
-        ファイルを作成します。
-
-        FILE_OPERATION:CREATE:hello.py
-        ```python
-        print("Hello, World!")
-        ```
-        """
+        # FILE_OPERATION指示を含む入力を、そのままユーザー入力として渡す
+        ai_like_input = (
+            "ファイルを作成します。\n\n"
+            "FILE_OPERATION:CREATE:hello.py\n"
+            "```python\nprint(\"Hello, World!\")\n```\n"
+        )
+        agent._handle_orchestrated_conversation(ai_like_input)
         
-        agent._execute_ai_instructions(ai_response, "Python script to print hello")
-        
-        # ファイル作成が実行される
-        mock_file_tools.write_file.assert_called_once_with("hello.py", 'print("Hello, World!")')
+        # オーケストレーションに委譲されていること
+        mock_instance.run_conversation.assert_called_once_with(ai_like_input)
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
     def test_language_guessing(self, mock_ui, mock_config_manager):
         """言語推測機能のテスト"""
         mock_config_manager.load_config.return_value = self.mock_config
@@ -190,8 +180,8 @@ class TestDuckflowAgentIntegration:
             result = agent._guess_language(filename)
             assert result == expected_language
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
     def test_history_command(self, mock_ui, mock_config_manager):
         """履歴コマンドのテスト"""
         mock_config_manager.load_config.return_value = self.mock_config
@@ -212,14 +202,13 @@ class TestDuckflowAgentIntegration:
 
 @pytest.mark.integration
 class TestEndToEndWorkflow:
-    """エンドツーエンドワークフローのテスト"""
+    """エンドツーエンドワークフローのテスト（V2）"""
     
-    @patch('codecrafter.main.config_manager')
-    @patch('codecrafter.main.rich_ui')
-    @patch('codecrafter.main.file_tools')
-    @patch('codecrafter.main.llm_manager')
-    def test_complete_file_creation_workflow(self, mock_llm_manager, mock_file_tools, mock_ui, mock_config_manager):
-        """完全なファイル作成ワークフローのテスト"""
+    @patch('codecrafter.main_v2.GraphOrchestrator')
+    @patch('codecrafter.main_v2.config_manager')
+    @patch('codecrafter.main_v2.rich_ui')
+    def test_complete_file_creation_workflow(self, mock_ui, mock_config_manager, mock_orchestrator):
+        """完全なファイル作成ワークフローのテスト（オーケストレーション呼び出し）"""
         # モックの設定
         mock_config = Mock()
         mock_config.security.require_approval = {"file_write": False}
@@ -227,40 +216,14 @@ class TestEndToEndWorkflow:
         mock_config_manager.load_config.return_value = mock_config
         mock_config_manager.is_debug_mode.return_value = False
         
-        mock_llm_manager.chat.return_value = """
-        Pythonスクリプトを作成します。
-
-        FILE_OPERATION:CREATE:hello.py
-        ```python
-        def main():
-            print("Hello, CodeCrafter!")
-
-        if __name__ == "__main__":
-            main()
-        ```
-        """
-        mock_llm_manager.get_provider_name.return_value = "test"
-        mock_file_tools.write_file.return_value = {"size": 100, "backup_created": False}
+        mock_instance = mock_orchestrator.return_value
         
         # エージェントの作成と実行
         agent = DuckflowAgent()
         
         # ユーザー入力をシミュレート
         user_input = "Create a Python script that prints Hello, CodeCrafter!"
-        agent._handle_ai_conversation(user_input)
+        agent._handle_orchestrated_conversation(user_input)
         
-        # 検証
-        # 1. LLMが呼び出された
-        mock_llm_manager.chat.assert_called_once()
-        
-        # 2. ファイルが作成された
-        mock_file_tools.write_file.assert_called_once()
-        call_args = mock_file_tools.write_file.call_args[0]
-        assert call_args[0] == "hello.py"
-        assert "Hello, CodeCrafter!" in call_args[1]
-        
-        # 3. 対話履歴に記録された
-        assert len(agent.state.conversation_history) == 2
-        assert agent.state.conversation_history[0].content == user_input
-        assert agent.state.conversation_history[0].role == "user"
-        assert agent.state.conversation_history[1].role == "assistant"
+        # 1. LangGraphが呼び出された
+        mock_instance.run_conversation.assert_called_once_with(user_input)
