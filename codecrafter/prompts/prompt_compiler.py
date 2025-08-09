@@ -216,6 +216,9 @@ FILE_OPERATION:EDIT:path/to/file.ext
 **🎯 関連コード文脈（RAG検索結果）:**
 {code_context}
 
+**📄 参照ファイル内容:**
+{file_contents_formatted}
+
 **📋 最近の作業履歴:**
 {recent_work}
 
@@ -232,6 +235,17 @@ FILE_OPERATION:EDIT:path/to/file.ext
 4. **品質保証**: 可読性・保守性・テスト可能性を重視
 
 **💻 ファイル操作指示:**
+
+⚠️ **重要な警告: ファイル確認とファイル編集の区別**
+- **ファイル内容を確認・分析するだけの場合**: FILE_OPERATION:READを使用（安全・読み取り専用）
+- **実際にファイルを変更する場合のみ**: FILE_OPERATION:EDITを使用
+- **FILE_OPERATION:EDITは既存ファイルを完全に上書きします** - 意図しない内容で実行しないでください
+
+```
+FILE_OPERATION:READ:確認したいファイル.ext
+```
+（ファイル内容を安全に読み取り、分析に使用）
+
 ```
 FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
 ```
@@ -242,7 +256,7 @@ FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
 FILE_OPERATION:EDIT:既存ファイル.ext  
 ```
 ```language
-// 既存コードとの一貫性を保った更新
+// 既存コードとの一貫性を保った更新（ファイルの全内容を記述）
 ```
 
 **🔖 参照プロトコル（重要）**
@@ -261,7 +275,8 @@ FILE_OPERATION:EDIT:既存ファイル.ext
             variables=[
                 "workspace_path", "current_file", "current_task", "index_status",
                 "total_files", "primary_languages", "recent_activity",
-                "code_context", "recent_work", "memory_context", "recent_conversation", "workspace_manifest"
+                "code_context", "recent_work", "memory_context", "recent_conversation", 
+                "workspace_manifest", "file_contents_formatted"
             ]
         )
         
@@ -413,6 +428,9 @@ FILE_OPERATION:EDIT:既存ファイル.ext
         
         # ワークスペースマニフェスト
         variables["workspace_manifest"] = self._format_workspace_manifest(state, file_context)
+        
+        # ファイル内容（前回調査で発見された欠損機能を修正）
+        variables["file_contents_formatted"] = self._format_file_contents(file_context)
         
         return variables
     
@@ -608,6 +626,37 @@ FILE_OPERATION:EDIT:既存ファイル.ext
             return "\n".join(lines) + more
         except Exception:
             return "(マニフェスト生成エラー)"
+    
+    def _format_file_contents(self, file_context: Optional[Dict[str, Any]]) -> str:
+        """収集されたファイル内容を整形してプロンプトに含める
+        
+        Args:
+            file_context: ファイルコンテキスト
+            
+        Returns:
+            フォーマットされたファイル内容
+        """
+        if not file_context or 'file_contents' not in file_context:
+            return "(ファイル内容未収集)"
+        
+        file_contents = file_context['file_contents']
+        if not file_contents:
+            return "(対象ファイル内容なし)"
+        
+        formatted_contents = []
+        for file_path, content in file_contents.items():
+            # 内容を適度に制限（プロンプト長制御）
+            display_content = content[:1500] if len(content) > 1500 else content
+            truncated = "...(省略)" if len(content) > 1500 else ""
+            
+            formatted_contents.append(f"""
+📁 **{file_path}** ({len(content)} 文字)
+```
+{display_content}{truncated}
+```
+""")
+        
+        return "\n".join(formatted_contents)
 
 
 # グローバルインスタンス

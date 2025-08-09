@@ -1,0 +1,24 @@
+# TestProject
+
+このプロジェクトは以下の機能を提供します：
+
+## 主な機能
+1. ユーザー管理システム
+2. データ分析ツール
+3. レポート生成機能
+
+## 技術スタック
+- Python 3.9+
+- FastAPI
+- SQLite
+- Pandas
+
+## インストール
+```bash
+pip install -r requirements.txt
+```
+
+## 実行
+```bash
+python main.py
+```

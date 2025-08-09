@@ -1,0 +1,24 @@
+{
+    "app_name": "DuckflowAnalyzer",
+    "version": "1.0.0",
+    "debug": true,
+    "database": {
+        "host": "localhost",
+        "port": 5432,
+        "name": "duckflow_db",
+        "ssl_enabled": false
+    },
+    "api": {
+        "rate_limit": 1000,
+        "timeout": 30,
+        "allowed_origins": [
+            "http://localhost:3000",
+            "https://duckflow.app"
+        ]
+    },
+    "features": {
+        "file_analysis": true,
+        "code_generation": true,
+        "auto_correction": false
+    }
+}

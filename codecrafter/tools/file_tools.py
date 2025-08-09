@@ -3,6 +3,7 @@
 """
 import os
 import shutil
+import locale
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -13,6 +14,11 @@ try:
     import subprocess
 except ImportError:
     subprocess = None
+
+try:
+    import chardet
+except ImportError:
+    chardet = None
 
 
 class FileOperationError(Exception):
@@ -93,7 +99,7 @@ class FileTools:
                 cmd,
                 capture_output=True,
                 text=True,
-                encoding='utf-8',
+                encoding=self._get_system_encoding(),
                 timeout=300  # 5分タイムアウト
             )
             end_time = datetime.now()
@@ -236,6 +242,103 @@ class FileTools:
         
         return failed_tests
     
+    def _get_system_encoding(self) -> str:
+        """システムのデフォルトエンコーディングを取得"""
+        import platform
+        
+        # Windows環境での適切なエンコーディング設定
+        if platform.system() == 'Windows':
+            try:
+                # Windows のコンソール出力エンコーディング
+                return 'cp932'
+            except:
+                return 'utf-8'
+        else:
+            # Unix系での標準エンコーディング
+            return locale.getpreferredencoding() or 'utf-8'
+    
+    def _get_default_encoding(self) -> str:
+        """ファイル操作のデフォルトエンコーディングを取得"""
+        import platform
+        
+        if platform.system() == 'Windows':
+            # Windows環境では状況に応じてエンコーディングを選択
+            return 'utf-8'  # 新規ファイルはUTF-8で作成
+        else:
+            return locale.getpreferredencoding() or 'utf-8'
+    
+    def _detect_encoding(self, file_path: Path) -> str:
+        """ファイルのエンコーディングを自動判定"""
+        # chardetライブラリが利用可能な場合
+        if chardet is not None:
+            try:
+                with open(file_path, 'rb') as f:
+                    raw_data = f.read(8192)  # 最初の8KBをサンプル
+                    result = chardet.detect(raw_data)
+                    if result and result['confidence'] > 0.7:
+                        encoding = result['encoding']
+                        # よくあるエンコーディング名の正規化
+                        if encoding and encoding.lower() in ['shift_jis', 'shift-jis']:
+                            return 'cp932'  # Windows日本語環境
+                        return encoding or 'utf-8'
+            except Exception:
+                pass
+        
+        # chardetが使えない場合のフォールバック
+        return self._detect_encoding_fallback(file_path)
+    
+    def _detect_encoding_fallback(self, file_path: Path) -> str:
+        """chardetが使えない場合のエンコーディング判定"""
+        import platform
+        
+        # Windows環境でのエンコーディング推測
+        if platform.system() == 'Windows':
+            # よく使われるエンコーディングの順番で試行
+            encodings = ['utf-8', 'cp932', 'shift_jis', 'utf-8-sig']
+        else:
+            encodings = ['utf-8', 'utf-8-sig', locale.getpreferredencoding()]
+        
+        for encoding in encodings:
+            if encoding is None:
+                continue
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    f.read(100)  # 最初の100文字を試し読み
+                return encoding
+            except UnicodeDecodeError:
+                continue
+        
+        # すべて失敗した場合はUTF-8を返す
+        return 'utf-8'
+    
+    def _read_with_fallback_encoding(self, file_path: Path, failed_encoding: str) -> str:
+        """エンコーディング失敗時のフォールバック読み取り"""
+        import platform
+        
+        # 失敗したエンコーディング以外を試行
+        if platform.system() == 'Windows':
+            fallback_encodings = ['cp932', 'shift_jis', 'utf-8', 'utf-8-sig', 'latin1']
+        else:
+            fallback_encodings = ['utf-8', 'utf-8-sig', 'latin1', locale.getpreferredencoding()]
+        
+        # 失敗したエンコーディングは除外
+        fallback_encodings = [enc for enc in fallback_encodings if enc != failed_encoding and enc is not None]
+        
+        last_exception = None
+        for encoding in fallback_encodings:
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                    # 読み取り成功した場合は警告メッセージを表示
+                    print(f"警告: ファイル '{file_path}' は {encoding} エンコーディングで読み取られました")
+                    return content
+            except UnicodeDecodeError as e:
+                last_exception = e
+                continue
+        
+        # すべて失敗した場合はエラーとして扱う
+        raise FileOperationError(f"ファイルのエンコーディングを判定できませんでした。最後のエラー: {last_exception}")
+
     def _validate_file_path(self, file_path: str) -> Path:
         """ファイルパスの検証"""
         path = Path(file_path).resolve()
@@ -316,13 +419,13 @@ class FileTools:
         except Exception as e:
             raise FileOperationError(f"ファイル一覧の取得に失敗しました: {e}")
     
-    def read_file(self, file_path: str, encoding: str = 'utf-8') -> str:
+    def read_file(self, file_path: str, encoding: Optional[str] = None) -> str:
         """
-        ファイルを読み取り
+        ファイルを読み取り（エンコーディング自動判定対応）
         
         Args:
             file_path: ファイルパス
-            encoding: 文字エンコーディング
+            encoding: 文字エンコーディング（Noneの場合は自動判定）
         
         Returns:
             ファイルの内容
@@ -337,20 +440,29 @@ class FileTools:
             if not path.is_file():
                 raise FileOperationError(f"パスがファイルではありません: {file_path}")
             
-            with open(path, 'r', encoding=encoding) as f:
-                return f.read()
+            # エンコーディングが指定されていない場合は自動判定
+            if encoding is None:
+                encoding = self._detect_encoding(path)
+            
+            # ファイル読み取りを試行
+            try:
+                with open(path, 'r', encoding=encoding) as f:
+                    return f.read()
+            except UnicodeDecodeError:
+                # 指定されたエンコーディングで失敗した場合、フォールバック試行
+                return self._read_with_fallback_encoding(path, encoding)
                 
         except Exception as e:
             raise FileOperationError(f"ファイル読み取りに失敗しました: {e}")
     
-    def write_file(self, file_path: str, content: str, encoding: str = 'utf-8', create_dirs: bool = True) -> Dict[str, Any]:
+    def write_file(self, file_path: str, content: str, encoding: Optional[str] = None, create_dirs: bool = True) -> Dict[str, Any]:
         """
-        ファイルに書き込み
+        ファイルに書き込み（エンコーディング自動選択対応）
         
         Args:
             file_path: ファイルパス
             content: 書き込む内容
-            encoding: 文字エンコーディング
+            encoding: 文字エンコーディング（Noneの場合は自動選択）
             create_dirs: 親ディレクトリを作成するかどうか
         
         Returns:
@@ -358,6 +470,10 @@ class FileTools:
         """
         try:
             path = self._validate_file_path(file_path)
+            
+            # エンコーディングが指定されていない場合は適切なエンコーディングを選択
+            if encoding is None:
+                encoding = self._get_default_encoding()
             
             # バックアップの作成
             backup_path = self._create_backup(path)
@@ -373,6 +489,7 @@ class FileTools:
             # 結果情報
             stat = path.stat()
             result = {
+                'success': True,  # テスト互換性のため追加
                 'path': str(path),
                 'size': stat.st_size,
                 'backup_created': backup_path is not None,

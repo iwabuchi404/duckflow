@@ -135,22 +135,23 @@ class GraphOrchestrator:
             # 直近ユーザー発話がファイル読取/要約要求か検知し、LLM応答を保留（未読時のみ）
             last_user = self._get_last_user_message(state_obj)
             if last_user and self._is_file_content_request(last_user):
-                # 既にファイル内容が収集済みなら通常の思考フローへ進む
-                file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
-                loaded = file_ctx.get('file_contents') if isinstance(file_ctx, dict) else None
-                has_loaded_content = bool(loaded) and any(bool(v) for v in loaded.values())
-                if not has_loaded_content:
-                    # 後段でコンテキスト収集→再思考させるため、ここでは応答しない/軽い通知
-                    rich_ui.print_message("[ROUTING] ユーザーがファイル内容の確認を要求 → コンテキスト収集へ", "info")
-                    state_obj.add_tool_execution(
-                        tool_name="plan",
-                        arguments={"action": "collect_context_for_file_read"},
-                        result="pending",
-                        execution_time=0,
-                    )
-                    # 軽いシステム案内のみ
-                    state_obj.add_message("assistant", "指定のファイル内容を確認してから回答します。")
-                    return state_obj
+                # 直前に『収集後に回答』フラグが立っている場合は、ここでの再ルーティングを抑止
+                if getattr(state_obj, 'collected_context', {}).get('needs_answer_after_context'):
+                    pass  # 再思考で回答すべきタイミング
+                else:
+                    file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
+                    loaded = file_ctx.get('file_contents') if isinstance(file_ctx, dict) else None
+                    has_loaded_content = bool(loaded) and any(bool(v) for v in loaded.values())
+                    if not has_loaded_content:
+                        rich_ui.print_message("[ROUTING] ユーザーがファイル内容の確認を要求 → コンテキスト収集へ", "info")
+                        state_obj.add_tool_execution(
+                            tool_name="plan",
+                            arguments={"action": "collect_context_for_file_read"},
+                            result="pending",
+                            execution_time=0,
+                        )
+                        state_obj.add_message("assistant", "指定のファイル内容を確認してから回答します。")
+                        return state_obj
             
             # システムプロンプトの生成
             system_prompt = self._create_thinking_prompt(state_obj)
@@ -198,23 +199,45 @@ class GraphOrchestrator:
             # 直近ユーザーの要求で解析（assistantではなくユーザー発話を見る）
             user_message = self._get_last_user_message(state_obj) or recent[-1].content
             
-            # ファイル情報要求を検出して実行
+            # 既存のコンテキスト
+            ctx = getattr(state_obj, 'collected_context', {}) or {}
+            prev_file_ctx = ctx.get('file_context') if isinstance(ctx, dict) else None
+            prev_contents = {}
+            if isinstance(prev_file_ctx, dict):
+                prev_contents = prev_file_ctx.get('file_contents', {}) or {}
+            
+            # リクエスト検出
             file_requests = self._detect_file_info_requests(user_message)
-            file_context = self._gather_file_context(file_requests, state_obj)
+            requested_files = file_requests.get('read_files', [])
+            need_read = bool(requested_files) and any(
+                (f not in prev_contents) or not prev_contents.get(f)
+                for f in requested_files
+            )
+            need_list = bool(file_requests.get('list_files'))
             
-            # RAG検索も実行（必要に応じて）
+            # ファイル情報収集（必要な場合のみ）
+            did_new_file_collect = False
+            if need_read or need_list:
+                file_context = self._gather_file_context(file_requests, state_obj)
+                did_new_file_collect = bool(file_context.get('file_contents')) or bool(file_context.get('files_list'))
+            else:
+                file_context = prev_file_ctx or {'file_contents': {}, 'errors': []}
+            
+            # RAG検索（必要に応じて）
             rag_context = self._gather_rag_context(user_message, state_obj)
+            did_rag = bool(rag_context)
             
-            # コンテキストを結合して保存
+            # コンテキストを保存
             if not hasattr(state_obj, 'collected_context'):
                 state_obj.collected_context = {}
             state_obj.collected_context.update({
                 'file_context': file_context,
                 'rag_context': rag_context,
-                'needs_answer_after_context': True  # 収集後に再思考で回答するためのフラグ
+                # 新規収集やRAGヒットがあった場合のみ、再思考で回答へ戻す
+                'needs_answer_after_context': bool(did_new_file_collect or did_rag)
             })
             
-            # 既存の仕組みとの互換性のため
+            # 互換フィールド
             state_obj.rag_context = rag_context
             
         except Exception as e:
@@ -413,8 +436,25 @@ class GraphOrchestrator:
         if user_msg:
             # ファイル内容を見て/要約/確認などの要求を検知
             if self._is_file_content_request(user_msg):
-                rich_ui.print_message("[ROUTING] ユーザーの読取要求を検出 → コンテキスト収集", "info")
-                return "collect_context"
+                # 既にファイル内容が収集済みなら再収集せず、後段処理へ
+                try:
+                    file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
+                    loaded = file_ctx.get('file_contents') if isinstance(file_ctx, dict) else None
+                    has_loaded_content = bool(loaded) and any(bool(v) for v in loaded.values())
+                except Exception:
+                    has_loaded_content = False
+                if not has_loaded_content:
+                    rich_ui.print_message("[ROUTING] ユーザーの読取要求を検出 → コンテキスト収集", "info")
+                    return "collect_context"
+                else:
+                    # 既にファイル内容があり、AI応答も生成済みの場合は完了
+                    recent_messages = state_obj.get_recent_messages(1)
+                    if recent_messages and recent_messages[-1].role == "assistant":
+                        rich_ui.print_message("[ROUTING] ファイル内容は既に収集済み、回答済み → 完了", "info")
+                        return "complete"
+                    else:
+                        rich_ui.print_message("[ROUTING] ファイル内容は既に収集済み → 危険性評価", "info")
+                        return "assess_safety"
         
         # 最新のAI応答に基づく既存判定
         recent_messages = state_obj.get_recent_messages(1)
@@ -439,7 +479,9 @@ class GraphOrchestrator:
         except Exception as e:
             rich_ui.print_message(f"[ROUTING] RAG状態確認エラー: {e}", "warning")
         
-        # デフォルトは完了
+        # デフォルトは完了（思考カウンタもリセット）
+        if hasattr(state_obj, '_think_count'):
+            state_obj._think_count = 0
         rich_ui.print_message("[ROUTING] 追加処理不要 → 完了", "info")
         return "complete"
 
@@ -469,13 +511,22 @@ class GraphOrchestrator:
                     return "direct_execution"
             
             # ツール実行対象がなく、直前にコンテキスト収集が行われた場合は再思考へ戻す
-            if getattr(state_obj, 'collected_context', {}).get('needs_answer_after_context'):
+            needs_answer = getattr(state_obj, 'collected_context', {}).get('needs_answer_after_context', False)
+            if needs_answer:
+                # 無限ループ防止：think_count を追加してチェック
+                think_count = getattr(state_obj, '_think_count', 0)
+                if think_count >= 2:  # 3回目以降は強制完了
+                    rich_ui.print_message("[ROUTING] 思考回数制限に到達 → 強制完了", "warning")
+                    state_obj._think_count = 0  # リセット
+                    return "complete"
+                
                 # 一度だけ戻すためフラグをクリア
                 try:
                     state_obj.collected_context['needs_answer_after_context'] = False
+                    state_obj._think_count = think_count + 1  # カウンタ増加
                 except Exception:
                     pass
-                rich_ui.print_message("[ROUTING] コンテキスト収集完了 → 再思考で回答", "info")
+                rich_ui.print_message(f"[ROUTING] コンテキスト収集完了 → 再思考で回答 (回数: {think_count + 1})", "info")
                 return "think"
             
             rich_ui.print_message("[ROUTING] 実行対象なし → 完了", "info")
@@ -756,9 +807,9 @@ class GraphOrchestrator:
     
     # ------------- 追加ヘルパー（ルーティング検知） -------------
     def _get_last_user_message(self, state: AgentState) -> Optional[str]:
-        """直近のユーザー発話内容を取得"""
+        """直近のユーザー発話内容を取得（conversation_history を参照）"""
         try:
-            for m in reversed(state.messages):
+            for m in reversed(state.conversation_history):
                 if m.role == 'user':
                     return m.content
         except Exception:
@@ -803,21 +854,52 @@ class GraphOrchestrator:
         # ファイル読み込み要求
         read_keywords = ['読んで', '読み込', 'read', '内容', '内容を', '中身', '中身を', '確認', '見て', '要約', '概要', '把握', 'open', 'open file']
         if any(k in msg_lower for k in read_keywords):
-            import re
-            # Windows/UNIX両対応の簡易パターン
-            pattern = r'[A-Za-z]:\\[^\n\r]+?\.[A-Za-z0-9]{1,8}|[\w\-\./\\]+?\.[A-Za-z0-9]{1,8}'
-            file_patterns = re.findall(pattern, user_message)
-            if file_patterns:
-                # 同一重複を排除しつつ最大3件
-                seen = set()
-                ordered = []
-                for p in file_patterns:
-                    if p not in seen:
-                        seen.add(p)
-                        ordered.append(p)
-                    if len(ordered) >= 3:
+            import re, os
+            candidates: list[str] = []
+            # パターン1: 既存（ドライブレター / 相対パス含む）
+            p1 = r'[A-Za-z]:\\[^\n\r]+?\.[A-Za-z0-9]{1,8}|[\w\-\./\\]+?\.[A-Za-z0-9]{1,8}'
+            candidates += re.findall(p1, user_message)
+            # パターン2: 区切りを含む相対/絶対パス（少し厳密）
+            p2 = r'(?:[A-Za-z]:)?(?:[\\/][^\s\n\r]+)+?\.[A-Za-z0-9]{1,8}'
+            candidates += re.findall(p2, user_message)
+            # パターン3: ディレクトリ名+ファイル名形式（区切り必須）
+            p3 = r'[\w\.-]+(?:[\\/][\w\.-]+)+\.[A-Za-z0-9]{1,8}'
+            candidates += re.findall(p3, user_message)
+
+            # 正規化（末尾の句読点や括弧を除去）
+            normalized: list[str] = []
+            for c in candidates:
+                t = c.strip().rstrip('。、.）)』』]')
+                normalized.append(t)
+            
+            # 重複排除しつつ順序維持
+            seen = set()
+            ordered = []
+            for p in normalized:
+                if p not in seen:
+                    seen.add(p)
+                    ordered.append(p)
+            
+            # サフィックス重複（長いパスに内包される短いサブパス）を除外
+            def normsep(s: str) -> str:
+                return s.replace('/', os.path.sep).replace('\\', os.path.sep)
+            filtered = []
+            for i, p in enumerate(ordered):
+                p_n = normsep(p)
+                drop = False
+                for j, q in enumerate(ordered):
+                    if i == j:
+                        continue
+                    q_n = normsep(q)
+                    if len(q_n) > len(p_n) and q_n.endswith(p_n):
+                        # 例: q = "temp_test_files\\users.csv", p = "\\users.csv"
+                        drop = True
                         break
-                requests['read_files'].extend(ordered)
+                if not drop:
+                    filtered.append(p)
+            
+            # 最大3件
+            requests['read_files'].extend(filtered[:3])
         
         return requests
 
@@ -860,6 +942,12 @@ class GraphOrchestrator:
             # ファイル読み込み
             for file_path in requests.get('read_files', []):
                 try:
+                    # 不正なルート相対/短縮パスをスキップ（例: "\\users.csv"）
+                    import re
+                    if re.match(r"^[\\/][^\\/].*", file_path) and not re.match(r"^[A-Za-z]:", file_path):
+                        rich_ui.print_warning(f"[SKIP] ルート相対などの不正な可能性があるパスをスキップ: {file_path}")
+                        continue
+                    
                     rich_ui.print_message(f"[READ] ファイルを読み込み中: {file_path}", "info")
                     content = file_tools.read_file(file_path)
                     context['file_contents'][file_path] = content[:2000]  # 最大2000文字
@@ -913,7 +1001,8 @@ class GraphOrchestrator:
             return []
     
     def _create_thinking_prompt(self, state: AgentState, use_rag: bool = False) -> str:
-        rag_results = getattr(state, "rag_context", None) if use_rag else None
+        # RAGコンテキストが存在すれば常に活用（use_rag引数は後方互換のため残置）
+        rag_results = getattr(state, "rag_context", None)
         file_context = getattr(state, 'collected_context', {}).get('file_context', {})
         return prompt_compiler.compile_system_prompt(state, rag_results, file_context=file_context)
 
@@ -928,6 +1017,11 @@ class GraphOrchestrator:
                     current_op = parts[1].upper()
                     filename = parts[2]
                     buf = []
+                    
+                    # READ操作の場合は即座に実行（コードブロック不要）
+                    if current_op == "READ":
+                        self._execute_single_file_operation(current_op, filename, "", state)
+                        current_op, filename = None, None
                     continue
             if line.strip().startswith("```"):
                 if in_code and current_op and filename:
@@ -947,6 +1041,41 @@ class GraphOrchestrator:
     ) -> None:
         try:
             from pathlib import Path
+            
+            # READ操作の処理
+            if operation == "READ":
+                try:
+                    file_content = file_tools.read_file(filename)
+                    read_msg = f"""📄 ファイル内容を読み取りました: {filename}
+
+--- ファイル内容 ---
+{file_content}
+--- 終了 ---
+
+ファイルサイズ: {len(file_content)} 文字
+読み取り完了。内容を分析してご回答します。"""
+                    
+                    rich_ui.print_message(f"[READ] ファイル読み取り: {filename}", "info")
+                    state.add_message("system", read_msg)
+                    state.add_tool_execution(
+                        tool_name="read_file",
+                        arguments={"filename": filename},
+                        result=f"読み取り成功 ({len(file_content)} 文字)",
+                        execution_time=0,
+                    )
+                except Exception as e:
+                    error_msg = f"ファイル読み取りエラー ({filename}): {e}"
+                    rich_ui.print_warning(error_msg)
+                    state.record_error(error_msg)
+                    state.add_tool_execution(
+                        tool_name="read_file",
+                        arguments={"filename": filename},
+                        result=None,
+                        error=error_msg,
+                        execution_time=0,
+                    )
+                return
+            
             # EDIT時は対象ファイルの実在を厳密チェック
             if operation == "EDIT":
                 p = Path(filename)
@@ -970,6 +1099,40 @@ class GraphOrchestrator:
                     execution_time=0,
                 )
             elif operation == "EDIT":
+                # 安全チェック: ファイル内容の大幅削減を検知
+                try:
+                    current_content = file_tools.read_file(filename)
+                    content_reduction_ratio = 1 - (len(content) / len(current_content)) if len(current_content) > 0 else 0
+                    
+                    # 70%以上の削減または空ファイル化を検知
+                    if content_reduction_ratio >= 0.7 or len(content.strip()) == 0:
+                        warning_msg = f"""🚨 EDIT操作の安全チェックが作動しました
+
+ファイル: {filename}
+元のサイズ: {len(current_content)} 文字
+新しいサイズ: {len(content)} 文字
+削減率: {content_reduction_ratio*100:.1f}%
+
+このファイル操作は危険です。ファイル内容の大幅な削減が検出されました。
+バックアップは作成されていますが、意図しない操作の可能性があります。
+
+操作を中止しました。ファイル内容を確認したい場合は、編集ではなく読み取りを行ってください。"""
+                        
+                        rich_ui.print_warning(warning_msg)
+                        state.add_message("system", warning_msg)
+                        state.record_error("ファイル内容大幅削減のため操作中止")
+                        state.add_tool_execution(
+                            tool_name="write_file",
+                            arguments={"filename": filename, "content_length": len(content)},
+                            result=None,
+                            error="安全チェックにより操作中止",
+                            execution_time=0,
+                        )
+                        return
+                except Exception as read_error:
+                    # ファイル読み込みに失敗した場合は通常の警告のみで処理を続行
+                    rich_ui.print_warning(f"ファイル読み込みエラーのため安全チェックをスキップ: {read_error}")
+                
                 result = file_tools.write_file(filename, content)
                 state.add_tool_execution(
                     tool_name="write_file",
@@ -1183,16 +1346,51 @@ class GraphOrchestrator:
     
     # ------------- 応答検証 -------------
     def _verify_file_mentions(self, ai_response: str, state: AgentState) -> List[str]:
-        """AI応答に含まれるファイルらしき文字列を抽出し、実在を検証。未知ファイルのリストを返す。"""
+        """AI応答に含まれるファイルらしき文字列を抽出し、実在を検証。未知ファイルのリストを返す。
+        ノイズ低減のため以下を除外:
+          - コードブロック内の文字列
+          - URL/ドメイン名らしきトークン
+          - メールアドレス
+          - パス区切りを含まない単語で、一般的拡張子に該当しないもの
+        """
         import re, os
+        # コードブロックとURLを事前に除去
+        cleaned = re.sub(r"```.*?```", "", ai_response, flags=re.S)
+        cleaned = re.sub(r"https?://\S+", "", cleaned)
+
         mentioned = set()
-        # 拡張子を持つパスらしきトークンを抽出 (単純化)
-        for m in re.findall(r"[\w\-_/\\.]+\.[a-zA-Z0-9]{1,8}", ai_response):
-            # コードブロックやURLの一部などノイズを簡易除外可能ならここで
+        for m in re.findall(r"[\w\-_/\\.]+\.[a-zA-Z0-9]{1,8}", cleaned):
             mentioned.add(m)
         if not mentioned:
             return []
-        # 既知ファイル一覧を取得（収集済みコンテキスト or ワークスペース情報）
+
+        # ノイズ除外フィルタ
+        def is_domain_like(tok: str) -> bool:
+            # パス区切りが無く、ドメイン風（example.com, sub.example.co.jp など）
+            if any(sep in tok for sep in ['\\', '/', os.path.sep]):
+                return False
+            return re.match(r"^[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", tok) is not None
+        def is_email(tok: str) -> bool:
+            return '@' in tok
+        known_exts = {
+            'py','md','txt','json','yaml','yml','csv','ts','js','tsx','jsx','toml','ini','cfg','conf',
+            'ipynb','sh','bat','ps1','lock','html','css','sql','xml','rst','mdx','pdf','png','jpg','jpeg'
+        }
+        filtered = set()
+        for tok in mentioned:
+            if is_email(tok) or is_domain_like(tok):
+                continue
+            # パス区切りを含まない場合は、拡張子が既知のものだけ対象にする
+            if all(sep not in tok for sep in ['\\', '/', os.path.sep]):
+                ext = tok.rsplit('.', 1)[-1].lower()
+                if ext not in known_exts:
+                    continue
+            filtered.add(tok)
+
+        if not filtered:
+            return []
+
+        # 既知ファイル一覧を収集
         known_paths = set()
         try:
             ctx = getattr(state, 'collected_context', {}).get('file_context', {})
@@ -1202,15 +1400,15 @@ class GraphOrchestrator:
                     p = f.get('path') or f.get('relative_path') or f.get('name')
                     if p:
                         known_paths.add(os.path.normpath(p))
-            # 代替: workspace.files
             if not known_paths and state.workspace and state.workspace.files:
                 for p in state.workspace.files:
                     known_paths.add(os.path.normpath(p))
         except Exception:
             pass
+
         # 実在チェック（ファイルシステムにも確認）
         unknown = []
-        for m in mentioned:
+        for m in filtered:
             nm = os.path.normpath(m)
             if nm in known_paths:
                 continue

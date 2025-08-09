@@ -74,7 +74,7 @@ tools:
   # ファイル操作
   file_operations:
     max_file_size_mb: 10
-    allowed_extensions: [".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", ".yaml", ".yml", ".md", ".txt"]
+    allowed_extensions: [".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", ".yaml", ".yml", ".md", ".txt", ".csv"]
     backup_enabled: true
   
   # シェル実行 (ホワイトリスト)

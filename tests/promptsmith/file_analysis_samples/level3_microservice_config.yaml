@@ -1,0 +1,197 @@
+# レベル3テスト: 複雑なマイクロサービス設定ファイル
+# 分析者は設定の整合性、セキュリティ、運用上の課題を特定する必要がある
+
+version: '3.8'
+
+# サービス定義
+services:
+  # API Gateway
+  api-gateway:
+    image: nginx:1.21-alpine
+    ports:
+      - "80:80"
+      - "443:443"  # SSL設定が不完全？
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro  # SSL証明書の管理は？
+    environment:
+      - NGINX_HOST=api.example.com
+      - NGINX_PORT=80
+    depends_on:
+      - user-service
+      - order-service
+      - payment-service
+    networks:
+      - frontend
+      - backend
+    restart: unless-stopped
+    # ヘルスチェックが未定義
+
+  # User Service
+  user-service:
+    build: 
+      context: ./user-service
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://user:password123@postgres:5432/userdb  # パスワードが平文
+      - JWT_SECRET=super-secret-key  # ハードコーディングされたシークレット
+      - REDIS_URL=redis://redis:6379
+      - NODE_ENV=production
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - backend
+    deploy:
+      replicas: 2  # ロードバランシングの設定は？
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    # ログ設定が欠如
+
+  # Order Service  
+  order-service:
+    build: ./order-service
+    environment:
+      - DATABASE_URL=mongodb://mongo:27017/orders
+      - KAFKA_BROKERS=kafka:9092
+      - USER_SERVICE_URL=http://user-service:3000
+    depends_on:
+      - mongo
+      - kafka
+    networks:
+      - backend
+    volumes:
+      - order-logs:/app/logs  # ログボリュームは定義されているが...
+
+  # Payment Service (外部APIと連携)
+  payment-service:
+    image: payment-service:latest
+    environment:
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY}  # 環境変数は適切だが...
+      - DATABASE_URL=postgresql://payment:${PAYMENT_DB_PASSWORD}@postgres:5432/paymentdb
+      - WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET}
+      - ENCRYPTION_KEY=${PAYMENT_ENCRYPTION_KEY}
+    depends_on:
+      - postgres
+    networks:
+      - backend
+      - external  # 外部ネットワークだが設定は？
+    # セキュリティ設定が不十分
+
+# データベースサービス
+  postgres:
+    image: postgres:13
+    environment:
+      - POSTGRES_DB=maindb
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=admin123  # 弱いパスワード
+      - POSTGRES_MULTIPLE_DATABASES=userdb,paymentdb  # カスタム機能？
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d  # 初期化スクリプトの内容は？
+    networks:
+      - backend
+    # バックアップ戦略なし
+
+  mongo:
+    image: mongo:4.4
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=rootpass  # 弱いパスワード
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - backend
+    # レプリケーション設定なし
+
+  redis:
+    image: redis:6-alpine
+    command: redis-server --requirepass redispass123  # パスワードが平文
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    # 永続化設定は適切？
+
+# メッセージキューシステム
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    environment:
+      - KAFKA_ZOOKEEPER_CONNECT=zookeeper:2181
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1  # 本番環境でのレプリケーション不足
+    depends_on:
+      - zookeeper
+    networks:
+      - backend
+    # パーティション設定、データ保持ポリシーが不明
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    environment:
+      - ZOOKEEPER_CLIENT_PORT=2181
+      - ZOOKEEPER_TICK_TIME=2000
+    networks:
+      - backend
+
+# 監視・ログ系
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"  # 外部公開は適切？
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - monitoring
+    # 設定ファイルの内容は？
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"  # デフォルトポートの外部公開
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin  # デフォルトパスワード
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - monitoring
+
+# ネットワーク定義
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+    internal: true  # 外部アクセス制限
+  monitoring:
+    driver: bridge
+  external:
+    external: true  # 外部ネットワークだが詳細不明
+
+# ボリューム定義
+volumes:
+  postgres-data:
+    driver: local
+  mongo-data:
+    driver: local
+  redis-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  order-logs:
+    driver: local
+
+# 設定ファイルの問題点（分析対象）：
+# 1. セキュリティ：平文パスワード、弱い認証情報
+# 2. 可用性：レプリケーション設定不足、ヘルスチェック欠如
+# 3. 運用性：ログ設定不足、バックアップ戦略なし
+# 4. 監視：不完全なメトリクス設定
+# 5. スケーラビリティ：リソース制限と自動スケーリング設定不足
+# 6. ネットワーク：セキュリティグループとトラフィック制御
+# 7. 設定管理：環境別設定、シークレット管理
+# 8. デプロイメント：ローリングアップデート戦略なし
