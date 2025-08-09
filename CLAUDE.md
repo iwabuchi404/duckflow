@@ -67,6 +67,10 @@ Duckflowは、開発者のローカル環境で動作する、対話型のAIコ�
 *   **LLMプロバイダー:** OpenAI, Anthropic, Google, Groq, OpenRouter対応
 *   **状態・設定管理:** Pydantic, PyYAML, python-dotenv
 
+### 開発時注意
+*   **Pythonの実行:** 必ずUVを使う、文字化けを防ぐため-X utf8オプションをつける
+
+
 ## 4. ディレクトリ構成（現在）
 
 ```
