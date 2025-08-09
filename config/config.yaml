@@ -28,7 +28,7 @@ llm:
     max_tokens: 8192
   
   openrouter:
-    model: "anthropic/claude-3-sonnet"
+    model: "anthropic/claude-3-5-sonnet-20241022"
     temperature: 0.1
     max_tokens: 4096
 
@@ -50,6 +50,11 @@ summary_llm:
   
   groq:
     model: "llama-3.1-8b-instant"  # 高速
+    temperature: 0.0
+    max_tokens: 1000
+  
+  openrouter:
+    model: "meta-llama/llama-3.1-8b-instruct"  # 高速・安価
     temperature: 0.0
     max_tokens: 1000
 
@@ -156,6 +161,105 @@ memory:
     enabled: false
     # セッション間での記憶継続
     cross_session: false
+
+# PromptSmith評価システム設定
+promptsmith:
+  # 評価モード設定
+  evaluation:
+    enabled: true
+    separate_ai_roles: true  # 役割別AI使用の有効化
+    timeout_seconds: 120     # 各シナリオのタイムアウト
+    max_retries: 3          # 失敗時の再試行回数
+  
+  # TesterAI設定（挑戦的シナリオ生成）
+  tester_ai:
+    provider: "groq"
+    model_settings:
+      openai:
+        model: "gpt-4o-mini"
+        temperature: 0.3      # 創造的なシナリオ生成のため少し高め
+        max_tokens: 2048
+      anthropic:
+        model: "claude-3-haiku-20240307"
+        temperature: 0.3
+        max_tokens: 2048
+      groq:
+        model: "llama-3.1-8b-instant"
+        temperature: 0.3
+        max_tokens: 2048
+      openrouter:
+        model: "meta-llama/llama-3.1-8b-instruct"
+        temperature: 0.3
+        max_tokens: 2048
+  
+  # EvaluatorAI設定（対話品質評価）
+  evaluator_ai:
+    provider: "anthropic"
+    model_settings:
+      openai:
+        model: "gpt-4-turbo-preview"
+        temperature: 0.0      # 一貫した評価のため低温度
+        max_tokens: 4096
+      anthropic:
+        model: "claude-3-5-sonnet-20241022"
+        temperature: 0.0
+        max_tokens: 4096
+      groq:
+        model: "llama-3.1-70b-versatile"
+        temperature: 0.0
+        max_tokens: 4096
+      openrouter:
+        model: "anthropic/claude-3-5-sonnet-20241022"
+        temperature: 0.0
+        max_tokens: 4096
+  
+  # OptimizerAI設定（改善提案生成）
+  optimizer_ai:
+    provider: "openai"
+    model_settings:
+      openai:
+        model: "gpt-4-turbo-preview"
+        temperature: 0.2      # バランスの取れた提案のため
+        max_tokens: 3072
+      anthropic:
+        model: "claude-3-5-sonnet-20241022"
+        temperature: 0.2
+        max_tokens: 3072
+      groq:
+        model: "llama-3.1-70b-versatile"
+        temperature: 0.2
+        max_tokens: 3072
+      openrouter:
+        model: "openai/gpt-4-turbo-preview"
+        temperature: 0.2
+        max_tokens: 3072
+  
+  # ConversationAnalyzer設定（対話分析）
+  conversation_analyzer:
+    provider: "anthropic"
+    model_settings:
+      openai:
+        model: "gpt-4-turbo-preview"
+        temperature: 0.1      # 正確な分析のため
+        max_tokens: 2048
+      anthropic:
+        model: "claude-3-5-sonnet-20241022"
+        temperature: 0.1
+        max_tokens: 2048
+      groq:
+        model: "llama-3.1-70b-versatile"
+        temperature: 0.1
+        max_tokens: 2048
+      openrouter:
+        model: "anthropic/claude-3-5-sonnet-20241022"
+        temperature: 0.1
+        max_tokens: 2048
+  
+  # 被評価AI設定（実際のDuckflowエージェント）
+  target_ai:
+    use_main_llm: true      # メインLLM設定を使用するか
+    override_provider: null # nullの場合はメインLLM、指定すればそのプロバイダーを使用
+    override_model: null    # モデルの上書き指定
 
 # 開発設定
 development:

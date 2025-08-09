@@ -27,6 +27,9 @@ try:
 except ImportError:
     GROQ_AVAILABLE = False
 
+# OpenRouterはOpenAI互換なので、OpenAIが利用可能ならOpenRouterも利用可能
+OPENROUTER_AVAILABLE = OPENAI_AVAILABLE
+
 from .config import config_manager
 
 
@@ -193,6 +196,59 @@ class GroqClient(BaseLLMClient):
         return GROQ_AVAILABLE and config_manager.get_api_key('groq') is not None
 
 
+class OpenRouterClient(BaseLLMClient):
+    """OpenRouter APIクライアント（OpenAI互換）"""
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        if not OPENROUTER_AVAILABLE:
+            raise LLMClientError("langchain-openai がインストールされていません（OpenRouter用）")
+        
+        api_key = config_manager.get_api_key('openrouter')
+        if not api_key:
+            raise LLMClientError("OPENROUTER_API_KEY が設定されていません")
+        
+        # OpenRouterはOpenAI互換API
+        self.client = ChatOpenAI(
+            model=config.get('model', 'anthropic/claude-3-sonnet'),
+            temperature=config.get('temperature', 0.1),
+            max_tokens=config.get('max_tokens', 4096),
+            openai_api_key=api_key,
+            openai_api_base="https://openrouter.ai/api/v1",
+            model_kwargs={
+                "extra_headers": {
+                    "HTTP-Referer": "https://duckflow.app",
+                    "X-Title": "Duckflow AI Coding Agent"
+                }
+            }
+        )
+    
+    def chat(self, messages: List[Dict[str, str]]) -> str:
+        """チャット形式での対話"""
+        # 辞書形式をLangChainメッセージに変換
+        langchain_messages = []
+        for msg in messages:
+            role = msg['role']
+            content = msg['content']
+            
+            if role == 'user':
+                langchain_messages.append(HumanMessage(content=content))
+            elif role == 'assistant':
+                langchain_messages.append(AIMessage(content=content))
+            elif role == 'system':
+                langchain_messages.append(SystemMessage(content=content))
+        
+        try:
+            response = self.client(langchain_messages)
+            return response.content
+        except Exception as e:
+            raise LLMClientError(f"OpenRouter API error: {str(e)}")
+    
+    def is_available(self) -> bool:
+        """利用可能かどうかを確認"""
+        return OPENROUTER_AVAILABLE and config_manager.get_api_key('openrouter') is not None
+
+
 class MockClient(BaseLLMClient):
     """モッククライアント（テスト用）"""
     
@@ -227,6 +283,8 @@ class LLMManager:
                 self.current_client = AnthropicClient(llm_config)
             elif provider == 'groq':
                 self.current_client = GroqClient(llm_config)
+            elif provider == 'openrouter':
+                self.current_client = OpenRouterClient(llm_config)
             else:
                 # 未対応のプロバイダーまたは設定不備の場合はモッククライアント
                 self.current_client = MockClient(llm_config)
@@ -247,6 +305,8 @@ class LLMManager:
                     self.summary_client = AnthropicClient(summary_config)
                 elif summary_provider == 'groq':
                     self.summary_client = GroqClient(summary_config)
+                elif summary_provider == 'openrouter':
+                    self.summary_client = OpenRouterClient(summary_config)
                 else:
                     self.summary_client = self.current_client  # フォールバック
             else:
@@ -295,6 +355,8 @@ class LLMManager:
             return "Anthropic"
         elif isinstance(self.current_client, GroqClient):
             return "Groq"
+        elif isinstance(self.current_client, OpenRouterClient):
+            return "OpenRouter"
         elif isinstance(self.current_client, MockClient):
             return "Mock"
         else:

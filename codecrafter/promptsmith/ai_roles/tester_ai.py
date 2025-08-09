@@ -9,6 +9,7 @@ import random
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
+from codecrafter.promptsmith.llm_manager import promptsmith_llm_manager
 
 
 @dataclass
@@ -39,6 +40,7 @@ class TesterAI:
             "contradictory", # 矛盾した要求
             "vague_domain"   # ドメイン知識が曖昧
         ]
+        self.llm_manager = promptsmith_llm_manager
     
     def generate_challenging_scenario(self, difficulty: str = "medium", 
                                     challenge_type: Optional[str] = None) -> ChallengeScenario:
@@ -128,6 +130,100 @@ class TesterAI:
         ]
         
         return random.choice(change_patterns)
+    
+    def generate_ai_powered_scenario(self, context: str, difficulty: str = "medium") -> ChallengeScenario:
+        """
+        AIを使用してコンテキストに応じた挑戦的シナリオを生成
+        
+        Args:
+            context: シナリオのコンテキスト（プロジェクトの内容など）
+            difficulty: 難易度
+            
+        Returns:
+            生成されたシナリオ
+        """
+        prompt = f"""以下のコンテキストに基づいて、挑戦的な開発シナリオを生成してください。
+
+コンテキスト: {context}
+難易度: {difficulty}
+
+以下の条件を満たすシナリオを作成してください：
+1. 実際の開発現場で起こりうる状況
+2. 適度に曖昧で、AI が要件を明確化する必要がある
+3. 複数の解決策が考えられる問題
+
+以下のJSON形式で回答してください：
+{{
+    "name": "シナリオ名",
+    "description": "シナリオの説明",
+    "user_request": "ユーザーからの要求（意図的に曖昧に）",
+    "challenge_type": "ambiguous|incomplete|complex|contradictory",
+    "expected_challenges": ["予想される困難点1", "予想される困難点2"],
+    "success_criteria": {{"評価観点": "期待される結果"}}
+}}
+"""
+        
+        try:
+            response = self.llm_manager.chat_with_role("tester_ai", prompt)
+            # JSONを解析してシナリオオブジェクトを作成
+            scenario_data = json.loads(response)
+            
+            return ChallengeScenario(
+                scenario_id=f"ai_generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                name=scenario_data["name"],
+                description=scenario_data["description"],
+                user_request=scenario_data["user_request"],
+                difficulty=difficulty,
+                challenge_type=scenario_data["challenge_type"],
+                expected_challenges=scenario_data["expected_challenges"],
+                success_criteria=scenario_data["success_criteria"]
+            )
+        except Exception as e:
+            print(f"[WARNING] AI-powered scenario generation failed: {e}")
+            # フォールバックとして基本的なシナリオを生成
+            return self.generate_challenging_scenario(difficulty)
+    
+    def analyze_scenario_difficulty(self, scenario: ChallengeScenario) -> Dict[str, Any]:
+        """
+        シナリオの難易度を詳細分析
+        
+        Args:
+            scenario: 分析対象のシナリオ
+            
+        Returns:
+            難易度分析結果
+        """
+        analysis_prompt = f"""以下のシナリオの難易度と挑戦要素を分析してください：
+
+シナリオ名: {scenario.name}
+ユーザー要求: {scenario.user_request}
+挑戦タイプ: {scenario.challenge_type}
+予想される困難点: {scenario.expected_challenges}
+
+以下の観点で分析し、JSON形式で回答してください：
+{{
+    "estimated_difficulty": "easy|medium|hard|extreme",
+    "complexity_factors": ["要因1", "要因2"],
+    "required_skills": ["必要スキル1", "必要スキル2"],
+    "estimated_dialogue_rounds": "予想対話回数",
+    "success_probability": "成功確率（0-1）",
+    "improvement_suggestions": ["改善提案1", "改善提案2"]
+}}
+"""
+        
+        try:
+            response = self.llm_manager.chat_with_role("tester_ai", analysis_prompt)
+            return json.loads(response)
+        except Exception as e:
+            print(f"[WARNING] Scenario analysis failed: {e}")
+            return {
+                "estimated_difficulty": scenario.difficulty,
+                "complexity_factors": ["分析失敗"],
+                "required_skills": ["不明"],
+                "estimated_dialogue_rounds": "3-5",
+                "success_probability": 0.5,
+                "improvement_suggestions": ["AI分析が利用できませんでした"]
+            }
     
     def generate_incomplete_scenario(self) -> ChallengeScenario:
         """不完全な情報のシナリオを生成"""

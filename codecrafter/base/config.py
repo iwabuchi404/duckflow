@@ -80,6 +80,42 @@ class SummaryLLMConfig(BaseModel):
     openai: Dict[str, Any] = Field(default_factory=dict, description="OpenAI要約設定")
     anthropic: Dict[str, Any] = Field(default_factory=dict, description="Anthropic要約設定")
     groq: Dict[str, Any] = Field(default_factory=dict, description="Groq要約設定")
+    openrouter: Dict[str, Any] = Field(default_factory=dict, description="OpenRouter要約設定")
+
+
+class PromptSmithAIConfig(BaseModel):
+    """PromptSmith AI役割設定クラス"""
+    
+    provider: str = Field(description="使用するLLMプロバイダー")
+    model_settings: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="プロバイダー別モデル設定")
+
+
+class PromptSmithEvaluationConfig(BaseModel):
+    """PromptSmith評価設定クラス"""
+    
+    enabled: bool = Field(default=True, description="評価システム有効化")
+    separate_ai_roles: bool = Field(default=True, description="役割別AI使用の有効化")
+    timeout_seconds: int = Field(default=120, description="シナリオタイムアウト(秒)")
+    max_retries: int = Field(default=3, description="失敗時の再試行回数")
+
+
+class PromptSmithTargetAIConfig(BaseModel):
+    """PromptSmith被評価AI設定クラス"""
+    
+    use_main_llm: bool = Field(default=True, description="メインLLM設定を使用するか")
+    override_provider: Optional[str] = Field(default=None, description="プロバイダー上書き")
+    override_model: Optional[str] = Field(default=None, description="モデル上書き")
+
+
+class PromptSmithConfig(BaseModel):
+    """PromptSmith設定クラス"""
+    
+    evaluation: PromptSmithEvaluationConfig = Field(default_factory=PromptSmithEvaluationConfig, description="評価設定")
+    tester_ai: PromptSmithAIConfig = Field(default_factory=PromptSmithAIConfig, description="TesterAI設定")
+    evaluator_ai: PromptSmithAIConfig = Field(default_factory=PromptSmithAIConfig, description="EvaluatorAI設定")
+    optimizer_ai: PromptSmithAIConfig = Field(default_factory=PromptSmithAIConfig, description="OptimizerAI設定")
+    conversation_analyzer: PromptSmithAIConfig = Field(default_factory=PromptSmithAIConfig, description="ConversationAnalyzer設定")
+    target_ai: PromptSmithTargetAIConfig = Field(default_factory=PromptSmithTargetAIConfig, description="被評価AI設定")
 
 
 class Config(BaseModel):
@@ -93,6 +129,7 @@ class Config(BaseModel):
     development: DevelopmentConfig = Field(default_factory=DevelopmentConfig, description="開発設定")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="記憶管理設定")
     summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig, description="要約用LLM設定")
+    promptsmith: Optional[PromptSmithConfig] = Field(default=None, description="PromptSmith設定")
 
 
 class ConfigManager:
@@ -279,6 +316,97 @@ class ConfigManager:
             'backup_count': config.logging.backup_count,
             'conversation': config.logging.conversation,
         }
+    
+    def get_promptsmith_config(self) -> Optional[PromptSmithConfig]:
+        """PromptSmith設定を取得"""
+        config = self.load_config()
+        return config.promptsmith
+    
+    def get_promptsmith_ai_config(self, ai_role: str) -> Optional[Dict[str, Any]]:
+        """
+        PromptSmith特定AI役割の設定を取得
+        
+        Args:
+            ai_role: AI役割名 ("tester_ai", "evaluator_ai", "optimizer_ai", "conversation_analyzer", "target_ai")
+            
+        Returns:
+            AI設定辞書またはNone
+        """
+        promptsmith_config = self.get_promptsmith_config()
+        if not promptsmith_config:
+            return None
+        
+        if not promptsmith_config.evaluation.separate_ai_roles:
+            # 役割別設定が無効の場合はメインLLM設定を返す
+            return self.get_llm_config()
+        
+        ai_config_mapping = {
+            "tester_ai": promptsmith_config.tester_ai,
+            "evaluator_ai": promptsmith_config.evaluator_ai,
+            "optimizer_ai": promptsmith_config.optimizer_ai,
+            "conversation_analyzer": promptsmith_config.conversation_analyzer,
+        }
+        
+        if ai_role == "target_ai":
+            target_config = promptsmith_config.target_ai
+            if target_config.use_main_llm:
+                config = self.get_llm_config()
+                # 上書き設定があれば適用
+                if target_config.override_provider:
+                    provider_config = getattr(self.load_config().llm, target_config.override_provider, {})
+                    if isinstance(provider_config, dict):
+                        config = provider_config.copy()
+                if target_config.override_model and isinstance(config, dict):
+                    config["model"] = target_config.override_model
+                return config
+            else:
+                # メインLLMを使用しない場合の処理（将来拡張用）
+                return None
+        
+        ai_config = ai_config_mapping.get(ai_role)
+        if not ai_config:
+            return None
+        
+        # プロバイダー別設定を取得
+        provider = ai_config.provider
+        model_settings = ai_config.model_settings.get(provider, {})
+        
+        return model_settings
+    
+    def get_promptsmith_provider(self, ai_role: str) -> Optional[str]:
+        """
+        PromptSmith特定AI役割のプロバイダーを取得
+        
+        Args:
+            ai_role: AI役割名
+            
+        Returns:
+            プロバイダー名またはNone
+        """
+        promptsmith_config = self.get_promptsmith_config()
+        if not promptsmith_config:
+            return None
+        
+        if not promptsmith_config.evaluation.separate_ai_roles:
+            # 役割別設定が無効の場合はメインプロバイダーを返す
+            return self.load_config().llm.provider
+        
+        if ai_role == "target_ai":
+            target_config = promptsmith_config.target_ai
+            if target_config.use_main_llm:
+                return target_config.override_provider or self.load_config().llm.provider
+            else:
+                return None
+        
+        ai_config_mapping = {
+            "tester_ai": promptsmith_config.tester_ai,
+            "evaluator_ai": promptsmith_config.evaluator_ai,
+            "optimizer_ai": promptsmith_config.optimizer_ai,
+            "conversation_analyzer": promptsmith_config.conversation_analyzer,
+        }
+        
+        ai_config = ai_config_mapping.get(ai_role)
+        return ai_config.provider if ai_config else None
 
 
 # グローバルな設定管理インスタンス
