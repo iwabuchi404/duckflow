@@ -856,21 +856,24 @@ class GraphOrchestrator:
         if any(k in msg_lower for k in read_keywords):
             import re, os
             candidates: list[str] = []
-            # パターン1: 既存（ドライブレター / 相対パス含む）
-            p1 = r'[A-Za-z]:\\[^\n\r]+?\.[A-Za-z0-9]{1,8}|[\w\-\./\\]+?\.[A-Za-z0-9]{1,8}'
+            # パターン1: 日本語対応（ドライブレター / 相対パス含む）
+            p1 = r'[A-Za-z]:\\[^\n\r]+?\.[A-Za-z0-9]{1,8}|[\w\-\./\\ぁ-ゖァ-ヾ一-龯・]+?\.[A-Za-z0-9]{1,8}'
             candidates += re.findall(p1, user_message)
-            # パターン2: 区切りを含む相対/絶対パス（少し厳密）
+            # パターン2: 日本語対応 区切りを含む相対/絶対パス
             p2 = r'(?:[A-Za-z]:)?(?:[\\/][^\s\n\r]+)+?\.[A-Za-z0-9]{1,8}'
             candidates += re.findall(p2, user_message)
-            # パターン3: ディレクトリ名+ファイル名形式（区切り必須）
-            p3 = r'[\w\.-]+(?:[\\/][\w\.-]+)+\.[A-Za-z0-9]{1,8}'
+            # パターン3: 日本語対応 ディレクトリ名+ファイル名形式（区切り必須）
+            p3 = r'[\w\.\-ぁ-ゖァ-ヾ一-龯・]+(?:[\\/][\w\.\-ぁ-ゖァ-ヾ一-龯・]+)+\.[A-Za-z0-9]{1,8}'
             candidates += re.findall(p3, user_message)
 
-            # 正規化（末尾の句読点や括弧を除去）
+            # 正規化（末尾の句読点や括弧を除去、日本語対応）
             normalized: list[str] = []
             for c in candidates:
-                t = c.strip().rstrip('。、.）)』』]')
-                normalized.append(t)
+                t = c.strip().rstrip('。、.）)』】」》〉】〕]')
+                # バックスラッシュを正規化（Windows環境対応）
+                t = t.replace('\\', '/')
+                if t:  # 空文字列を除外
+                    normalized.append(t)
             
             # 重複排除しつつ順序維持
             seen = set()
@@ -942,14 +945,28 @@ class GraphOrchestrator:
             # ファイル読み込み
             for file_path in requests.get('read_files', []):
                 try:
+                    # パス正規化と日本語ファイル名対応
+                    import re, os
+                    from pathlib import Path
+                    
                     # 不正なルート相対/短縮パスをスキップ（例: "\\users.csv"）
-                    import re
                     if re.match(r"^[\\/][^\\/].*", file_path) and not re.match(r"^[A-Za-z]:", file_path):
                         rich_ui.print_warning(f"[SKIP] ルート相対などの不正な可能性があるパスをスキップ: {file_path}")
                         continue
                     
-                    rich_ui.print_message(f"[READ] ファイルを読み込み中: {file_path}", "info")
-                    content = file_tools.read_file(file_path)
+                    # パスの正規化（日本語ファイル名対応）
+                    resolved_path = file_path
+                    
+                    # 作業ディレクトリからの相対パス解決を試行
+                    if not os.path.isabs(file_path):
+                        if state.workspace and state.workspace.path:
+                            work_dir = state.workspace.path
+                        else:
+                            work_dir = os.getcwd()
+                        resolved_path = os.path.join(work_dir, file_path)
+                    
+                    rich_ui.print_message(f"[READ] ファイルを読み込み中: {resolved_path}", "info")
+                    content = file_tools.read_file(resolved_path)
                     context['file_contents'][file_path] = content[:2000]  # 最大2000文字
                     state.add_tool_execution(
                         tool_name="read_file",
