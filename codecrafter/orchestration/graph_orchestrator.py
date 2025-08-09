@@ -25,6 +25,7 @@ from ..tools.rag_tools import rag_tools, RAGToolError
 from ..tools.shell_tools import shell_tools, ShellExecutionError, ShellSecurityError
 from ..prompts.prompt_compiler import prompt_compiler
 from ..ui.rich_ui import rich_ui
+from .routing_engine import RoutingEngine
 
 # ---------- グラフ状態 ----------
 class GraphOrchestrator:
@@ -33,6 +34,7 @@ class GraphOrchestrator:
     """
     def __init__(self, state: AgentState):
         self.state = state
+        self.routing_engine = RoutingEngine()  # RoutingEngineを初期化
         self.graph = self._build_graph()
 
     def _build_graph(self) -> StateGraph:
@@ -132,26 +134,45 @@ class GraphOrchestrator:
             except Exception as e:
                 rich_ui.print_warning(f"[INFO] 軽量マニフェスト準備に失敗: {e}")
 
-            # 直近ユーザー発話がファイル読取/要約要求か検知し、LLM応答を保留（未読時のみ）
+            # RoutingEngineによる直近ユーザー発話のファイル読取/要約要求検知
             last_user = self._get_last_user_message(state_obj)
-            if last_user and self._is_file_content_request(last_user):
-                # 直前に『収集後に回答』フラグが立っている場合は、ここでの再ルーティングを抑止
-                if getattr(state_obj, 'collected_context', {}).get('needs_answer_after_context'):
-                    pass  # 再思考で回答すべきタイミング
-                else:
-                    file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
-                    loaded = file_ctx.get('file_contents') if isinstance(file_ctx, dict) else None
-                    has_loaded_content = bool(loaded) and any(bool(v) for v in loaded.values())
-                    if not has_loaded_content:
-                        rich_ui.print_message("[ROUTING] ユーザーがファイル内容の確認を要求 → コンテキスト収集へ", "info")
-                        state_obj.add_tool_execution(
-                            tool_name="plan",
-                            arguments={"action": "collect_context_for_file_read"},
-                            result="pending",
-                            execution_time=0,
-                        )
-                        state_obj.add_message("assistant", "指定のファイル内容を確認してから回答します。")
-                        return state_obj
+            if last_user:
+                # ワークスペースファイル一覧の取得
+                workspace_files = []
+                if state_obj.workspace and hasattr(state_obj.workspace, 'files'):
+                    workspace_files = state_obj.workspace.files or []
+                
+                # RoutingEngineでファイル内容要求を検知
+                routing_decision = self.routing_engine.analyze_user_intent(last_user, workspace_files)
+                
+                if routing_decision.needs_file_read:
+                    # 直前に『収集後に回答』フラグが立っている場合は、ここでの再ルーティングを抑止
+                    if getattr(state_obj, 'collected_context', {}).get('needs_answer_after_context'):
+                        pass  # 再思考で回答すべきタイミング
+                    else:
+                        # 既存ファイル内容をチェック
+                        existing_file_contents = {}
+                        try:
+                            file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
+                            if isinstance(file_ctx, dict):
+                                existing_file_contents = file_ctx.get('file_contents', {}) or {}
+                        except Exception:
+                            pass
+                        
+                        # 応答を延期すべきかRoutingEngineで判定
+                        if self.routing_engine.should_defer_response(routing_decision, existing_file_contents):
+                            rich_ui.print_message(
+                                f"[ROUTING] {self.routing_engine.generate_deferral_message(routing_decision)}", 
+                                "info"
+                            )
+                            state_obj.add_tool_execution(
+                                tool_name="routing_engine",
+                                arguments={"action": "defer_for_file_collection", "files": routing_decision.target_files},
+                                result="pending",
+                                execution_time=0,
+                            )
+                            state_obj.add_message("assistant", self.routing_engine.generate_deferral_message(routing_decision))
+                            return state_obj
             
             # システムプロンプトの生成
             system_prompt = self._create_thinking_prompt(state_obj)
@@ -199,6 +220,14 @@ class GraphOrchestrator:
             # 直近ユーザーの要求で解析（assistantではなくユーザー発話を見る）
             user_message = self._get_last_user_message(state_obj) or recent[-1].content
             
+            # RoutingEngineで再度ユーザー意図を分析（確実性を高める）
+            workspace_files = []
+            if state_obj.workspace and hasattr(state_obj.workspace, 'files'):
+                workspace_files = state_obj.workspace.files or []
+            
+            routing_decision = self.routing_engine.analyze_user_intent(user_message, workspace_files)
+            rich_ui.print_message(f"[CONTEXT] RoutingEngine判定: {routing_decision.routing_reason}", "info")
+            
             # 既存のコンテキスト
             ctx = getattr(state_obj, 'collected_context', {}) or {}
             prev_file_ctx = ctx.get('file_context') if isinstance(ctx, dict) else None
@@ -206,20 +235,45 @@ class GraphOrchestrator:
             if isinstance(prev_file_ctx, dict):
                 prev_contents = prev_file_ctx.get('file_contents', {}) or {}
             
-            # リクエスト検出
-            file_requests = self._detect_file_info_requests(user_message)
-            requested_files = file_requests.get('read_files', [])
-            need_read = bool(requested_files) and any(
+            # RoutingEngineの決定に基づく強制的ファイル読み取り
+            requested_files = routing_decision.target_files
+            need_read = routing_decision.needs_file_read and any(
                 (f not in prev_contents) or not prev_contents.get(f)
                 for f in requested_files
             )
-            need_list = bool(file_requests.get('list_files'))
+            need_list = routing_decision.needs_file_list
             
-            # ファイル情報収集（必要な場合のみ）
+            # 従来の検出ロジックも並行実行（フォールバック）
+            fallback_requests = self._detect_file_info_requests(user_message)
+            if not requested_files:  # RoutingEngineでファイルが検出されなかった場合
+                requested_files.extend(fallback_requests.get('read_files', []))
+                need_read = need_read or (bool(fallback_requests.get('read_files', [])) and any(
+                    (f not in prev_contents) or not prev_contents.get(f)
+                    for f in fallback_requests.get('read_files', [])
+                ))
+                need_list = need_list or bool(fallback_requests.get('list_files'))
+            
+            # ファイル情報収集（RoutingEngineベース + 従来ロジック）
             did_new_file_collect = False
             if need_read or need_list:
-                file_context = self._gather_file_context(file_requests, state_obj)
+                # RoutingEngineの判定とフォールバック判定を統合したリクエストを作成
+                unified_requests = {
+                    'read_files': list(set(requested_files)),  # 重複排除
+                    'list_files': need_list
+                }
+                rich_ui.print_message(f"[CONTEXT] ファイル収集実行: {unified_requests}", "info")
+                file_context = self._gather_file_context(unified_requests, state_obj)
                 did_new_file_collect = bool(file_context.get('file_contents')) or bool(file_context.get('files_list'))
+                
+                # RoutingEngineが強制読み込みを要求したファイルが取得できたかチェック
+                if routing_decision.needs_file_read and routing_decision.target_files:
+                    collected_files = set(file_context.get('file_contents', {}).keys())
+                    missing_files = set(routing_decision.target_files) - collected_files
+                    if missing_files:
+                        rich_ui.print_message(
+                            f"[CONTEXT] 警告: RoutingEngineが要求したファイルが未収集: {list(missing_files)}", 
+                            "warning"
+                        )
             else:
                 file_context = prev_file_ctx or {'file_contents': {}, 'errors': []}
             
@@ -423,7 +477,7 @@ class GraphOrchestrator:
         return state_obj
 
     def _should_collect_context(self, state: Any) -> str:
-        """コンテキスト収集が必要かどうかを判断（直近ユーザー発話を優先）"""
+        """RoutingEngineを使用した決定論的ルーティング判断"""
         state_obj = AgentState.parse_obj(state) if isinstance(state, dict) else state
         
         # ループ制限チェック
@@ -433,48 +487,77 @@ class GraphOrchestrator:
         
         # 直近ユーザー発話を取得
         user_msg = self._get_last_user_message(state_obj)
-        if user_msg:
-            # ファイル内容を見て/要約/確認などの要求を検知
-            if self._is_file_content_request(user_msg):
-                # 既にファイル内容が収集済みなら再収集せず、後段処理へ
-                try:
-                    file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
-                    loaded = file_ctx.get('file_contents') if isinstance(file_ctx, dict) else None
-                    has_loaded_content = bool(loaded) and any(bool(v) for v in loaded.values())
-                except Exception:
-                    has_loaded_content = False
-                if not has_loaded_content:
-                    rich_ui.print_message("[ROUTING] ユーザーの読取要求を検出 → コンテキスト収集", "info")
-                    return "collect_context"
-                else:
-                    # 既にファイル内容があり、AI応答も生成済みの場合は完了
-                    recent_messages = state_obj.get_recent_messages(1)
-                    if recent_messages and recent_messages[-1].role == "assistant":
-                        rich_ui.print_message("[ROUTING] ファイル内容は既に収集済み、回答済み → 完了", "info")
-                        return "complete"
-                    else:
-                        rich_ui.print_message("[ROUTING] ファイル内容は既に収集済み → 危険性評価", "info")
-                        return "assess_safety"
+        if not user_msg:
+            # ユーザー発話がない場合はデフォルト処理
+            recent_messages = state_obj.get_recent_messages(1)
+            if recent_messages and recent_messages[-1].role == "assistant":
+                ai_response = recent_messages[-1].content
+                if "FILE_OPERATION:" in ai_response:
+                    rich_ui.print_message("[ROUTING] ファイル操作指示を検出 → 安全性評価", "info")
+                    return "assess_safety"
+            # デフォルトは完了（思考カウンタもリセット）
+            if hasattr(state_obj, '_think_count'):
+                state_obj._think_count = 0
+            rich_ui.print_message("[ROUTING] ユーザー発話なし → 完了", "info")
+            return "complete"
         
-        # 最新のAI応答に基づく既存判定
+        # ワークスペース内ファイル一覧を取得（RoutingEngineで使用）
+        workspace_files = []
+        if state_obj.workspace and hasattr(state_obj.workspace, 'files'):
+            workspace_files = state_obj.workspace.files or []
+        
+        # RoutingEngineでユーザー意図を分析
+        routing_decision = self.routing_engine.analyze_user_intent(user_msg, workspace_files)
+        
+        # 既存のファイル内容をチェック
+        existing_file_contents = {}
+        try:
+            file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
+            if isinstance(file_ctx, dict):
+                existing_file_contents = file_ctx.get('file_contents', {}) or {}
+        except Exception:
+            pass
+        
+        # 応答を延期すべきか（ファイル内容がまだ収集されていない場合）
+        if self.routing_engine.should_defer_response(routing_decision, existing_file_contents):
+            rich_ui.print_message(
+                f"[ROUTING] {self.routing_engine.generate_deferral_message(routing_decision)}", 
+                "info"
+            )
+            return "collect_context"
+        
+        # ファイル一覧要求の場合
+        if routing_decision.needs_file_list:
+            # 既にファイル一覧が収集済みかチェック
+            has_file_list = False
+            try:
+                file_ctx = getattr(state_obj, 'collected_context', {}).get('file_context', {})
+                files_list = file_ctx.get('files_list', []) if isinstance(file_ctx, dict) else []
+                has_file_list = bool(files_list)
+            except Exception:
+                pass
+            
+            if not has_file_list:
+                rich_ui.print_message("[ROUTING] ファイル一覧要求を検出 → コンテキスト収集", "info")
+                return "collect_context"
+        
+        # 既存のAI応答ベースの判定（FILE_OPERATION指示の検出）
         recent_messages = state_obj.get_recent_messages(1)
         if recent_messages and recent_messages[-1].role == "assistant":
             ai_response = recent_messages[-1].content
-            
-            # ツール実行指示がある場合は安全性評価へ
             if "FILE_OPERATION:" in ai_response:
                 rich_ui.print_message("[ROUTING] ファイル操作指示を検出 → 安全性評価", "info")
                 return "assess_safety"
         
-        # RAGインデックスが利用可能で情報要求がある場合はコンテキスト収集
+        # RAGインデックスが利用可能な場合のコンテキスト収集
         try:
             status = rag_tools.get_index_status()
             if status.get("status") == "ready":
-                # 情報を求めている質問かどうか判定（ユーザー発話基準）
+                # 情報を求めている質問かどうか判定
                 info_keywords = ['どこ', 'なに', '何', 'どのように', 'どの', '教えて', '見せて', '確認', '検索']
-                text = (user_msg or '').lower()
+                text = user_msg.lower()
                 if any(keyword in text for keyword in info_keywords):
-                    rich_ui.print_message("[ROUTING] 情報要求を検出 → コンテキスト収集", "info")
+                    rich_ui.print_message("[ROUTING] 情報要求 + RAGインデックス利用可能 → コンテキスト収集", "info")
                     return "collect_context"
         except Exception as e:
             rich_ui.print_message(f"[ROUTING] RAG状態確認エラー: {e}", "warning")
@@ -482,7 +565,7 @@ class GraphOrchestrator:
         # デフォルトは完了（思考カウンタもリセット）
         if hasattr(state_obj, '_think_count'):
             state_obj._think_count = 0
-        rich_ui.print_message("[ROUTING] 追加処理不要 → 完了", "info")
+        rich_ui.print_message("[ROUTING] RoutingEngine分析完了、追加処理不要 → 完了", "info")
         return "complete"
 
     def _should_use_tools_after_context(self, state: Any) -> str:
@@ -817,24 +900,30 @@ class GraphOrchestrator:
         return None
 
     def _is_file_content_request(self, text: str) -> bool:
-        """ファイル内容を『見て/要約/確認』する要求かを簡易判定"""
-        if not text:
+        """【非推奨】ファイル内容要求の簡易判定 - RoutingEngineに移行中"""
+        # RoutingEngineベースの判定にフォールバック
+        try:
+            routing_decision = self.routing_engine.analyze_user_intent(text, [])
+            return routing_decision.needs_file_read
+        except Exception:
+            # 従来ロジック（フォールバック）
+            if not text:
+                return False
+            import re
+            lowered = text.lower()
+            keywords = [
+                '見て', '内容', '中身', '要約', '概要', '把握', '確認', '開いて',
+                'read', 'show', 'open', 'summarize', 'overview'
+            ]
+            if any(k in lowered for k in keywords) or any(k in text for k in ['内容', '中身', '要約', '概要']):
+                # パス表記や拡張子付きトークンが含まれるか
+                if re.search(r"[A-Za-z]:\\\\|/|\\\\", text) or re.search(r"[\w\-_/\\.]+\.[A-Za-z0-9]{1,8}", text):
+                    return True
+                # 明示的なファイル名がなくても、『design-doc』等の既知名を含む場合
+                hints = ['design-doc', 'readme', 'changelog']
+                if any(h in lowered for h in hints):
+                    return True
             return False
-        import re
-        lowered = text.lower()
-        keywords = [
-            '見て', '内容', '中身', '要約', '概要', '把握', '確認', '開いて',
-            'read', 'show', 'open', 'summarize', 'overview'
-        ]
-        if any(k in lowered for k in keywords) or any(k in text for k in ['内容', '中身', '要約', '概要']):
-            # パス表記や拡張子付きトークンが含まれるか
-            if re.search(r"[A-Za-z]:\\\\|/|\\\\", text) or re.search(r"[\w\-_/\\.]+\.[A-Za-z0-9]{1,8}", text):
-                return True
-            # 明示的なファイル名がなくても、『design-doc』等の既知名を含む場合
-            hints = ['design-doc', 'readme', 'changelog']
-            if any(h in lowered for h in hints):
-                return True
-        return False
 
     def _detect_file_info_requests(self, user_message: str) -> Dict[str, Any]:
         """ユーザーメッセージからファイル情報要求（一覧/読み込み）を検出"""

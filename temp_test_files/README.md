@@ -14,11 +14,7 @@
 - Pandas
 
 ## インストール
-```bash
-pip install -r requirements.txt
-```
+
 
 ## 実行
-```bash
-python main.py
-```
+
