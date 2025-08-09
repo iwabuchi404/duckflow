@@ -1021,7 +1021,14 @@ class GraphOrchestrator:
         # RAGコンテキストが存在すれば常に活用（use_rag引数は後方互換のため残置）
         rag_results = getattr(state, "rag_context", None)
         file_context = getattr(state, 'collected_context', {}).get('file_context', {})
-        return prompt_compiler.compile_system_prompt(state, rag_results, file_context=file_context)
+        
+        # ステップ2e: DTOベースのプロンプト生成を試行、失敗時は従来方式でフォールバック
+        return prompt_compiler.compile_with_dto_fallback(
+            state=state, 
+            rag_results=rag_results, 
+            file_context=file_context,
+            use_dto=True  # DTOベースを優先使用
+        )
 
     # ------------- 実行系（ファイル/シェル/テスト/リンター） -------------
     def _execute_file_operations(self, ai_response: str, state: AgentState) -> None:

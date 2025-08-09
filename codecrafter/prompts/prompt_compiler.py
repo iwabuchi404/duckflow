@@ -8,6 +8,8 @@ import os
 
 from ..state.agent_state import AgentState
 from ..base.config import config_manager
+from .prompt_context import PromptContext
+from .context_builder import PromptContextBuilder
 
 
 class PromptTemplate:
@@ -221,6 +223,155 @@ FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
         )
         
         return templates
+    
+    def compile_system_prompt_dto(self, context: PromptContext) -> str:
+        """DTOベースのシステムプロンプトコンパイル（ステップ2e対応）
+        
+        Args:
+            context: PromptContext DTO
+            
+        Returns:
+            コンパイルされたシステムプロンプト
+        """
+        template_name = context.template_name
+        
+        if template_name not in self.templates:
+            template_name = "system_base"  # フォールバック
+        
+        template = self.templates[template_name]
+        
+        # DTOから変数を直接準備
+        variables = self._prepare_dto_variables(context)
+        
+        # 未定義の変数にデフォルト値を設定
+        for var in template.variables:
+            if var not in variables:
+                variables[var] = self._get_default_value(var)
+        
+        # プロンプトを描画
+        return template.render(**variables)
+    
+    def _prepare_dto_variables(self, context: PromptContext) -> Dict[str, str]:
+        """PromptContextから変数を準備
+        
+        Args:
+            context: PromptContext DTO
+            
+        Returns:
+            テンプレート変数辞書
+        """
+        variables = {}
+        
+        # 基本情報
+        variables["workspace_path"] = context.workspace_path
+        variables["current_file"] = context.current_file or "なし"
+        variables["current_task"] = context.current_task or "なし"
+        variables["session_duration"] = f"{context.session_duration_minutes:.1f}"
+        
+        # 記憶・対話
+        variables["recent_conversation"] = context.get_recent_conversation_formatted()
+        variables["memory_context"] = context.memory_summary or "記憶コンテキストなし"
+        
+        # ワークスペース
+        variables["workspace_manifest"] = context.get_manifest_formatted()
+        
+        # ファイル内容
+        variables["file_contents_formatted"] = context.get_file_contents_formatted()
+        
+        # RAG情報
+        if context.has_rag_results_available():
+            variables["code_context"] = context.get_rag_context_formatted()
+            variables["index_status"] = context.rag_context.index_status
+            variables["total_files"] = str(context.rag_context.total_files)
+            variables["primary_languages"] = ", ".join(context.rag_context.primary_languages[:3])
+            variables["recent_activity"] = context.rag_context.recent_activity or "不明"
+        else:
+            variables["code_context"] = "関連するコードコンテキストは見つかりませんでした"
+            variables["index_status"] = "未インデックス"
+            variables["total_files"] = "0"
+            variables["primary_languages"] = "不明"
+            variables["recent_activity"] = "不明"
+        
+        # 最近の作業（空実装）
+        variables["recent_work"] = "最近の作業なし"
+        
+        # エラー対応（空実装）
+        variables["error_message"] = "なし"
+        variables["failed_tool"] = "なし"
+        variables["retry_count"] = "0"
+        variables["max_retries"] = "3"
+        variables["execution_history"] = "なし"
+        
+        return variables
+    
+    def build_context_from_state(
+        self,
+        state: AgentState,
+        rag_results: Optional[List[Dict[str, Any]]] = None,
+        template_name: Optional[str] = None,
+        file_context: Optional[Dict[str, Any]] = None,
+        token_budget: int = 8000
+    ) -> PromptContext:
+        """AgentStateからPromptContextを構築するヘルパーメソッド
+        
+        Args:
+            state: エージェント状態
+            rag_results: RAG検索結果（任意）
+            template_name: 使用するテンプレート名（任意）
+            file_context: ファイルコンテキスト（任意）
+            token_budget: トークン予算
+            
+        Returns:
+            構築されたPromptContext
+        """
+        builder = PromptContextBuilder(token_budget=token_budget)
+        return builder.from_agent_state(
+            state=state,
+            template_name=template_name,
+            rag_results=rag_results,
+            file_context_dict=file_context
+        ).build()
+    
+    def compile_with_dto_fallback(
+        self,
+        state: AgentState,
+        rag_results: Optional[List[Dict[str, Any]]] = None,
+        template_name: Optional[str] = None,
+        file_context: Optional[Dict[str, Any]] = None,
+        use_dto: bool = True
+    ) -> str:
+        """DTOベースまたは従来方式でプロンプトをコンパイル
+        
+        Args:
+            state: エージェント状態
+            rag_results: RAG検索結果（任意）
+            template_name: 使用するテンプレート名（任意）
+            file_context: ファイルコンテキスト（任意）
+            use_dto: DTOベースを使用するかどうか
+            
+        Returns:
+            コンパイルされたシステムプロンプト
+        """
+        if use_dto:
+            try:
+                context = self.build_context_from_state(
+                    state=state,
+                    rag_results=rag_results,
+                    template_name=template_name,
+                    file_context=file_context
+                )
+                return self.compile_system_prompt_dto(context)
+            except Exception as e:
+                # DTOベースが失敗した場合は従来方式にフォールバック
+                print(f"[WARNING] DTOベースのプロンプトコンパイルが失敗、従来方式にフォールバック: {e}")
+        
+        # 従来方式
+        return self.compile_system_prompt(
+            state=state,
+            rag_results=rag_results,
+            template_name=template_name,
+            file_context=file_context
+        )
     
     def compile_system_prompt(
         self, 
