@@ -1,0 +1,15 @@
+{
+  "applied": true,
+  "improvements_count": 2,
+  "version_id": "v_20250810_001540_80da6b94",
+  "validation": {
+    "is_safe": true,
+    "risk_level": "low",
+    "issues": [],
+    "recommendations": [
+      "安全性に問題は検出されませんでした"
+    ],
+    "safety_score": 1.0
+  },
+  "variant_id": "single_completeness_001540"
+}

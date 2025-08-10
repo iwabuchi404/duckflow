@@ -66,5 +66,5 @@ def extract_e2e_metrics(e2e_report_path: str) -> Dict[str, Any]:
     return {
         "e2e_success_rate": e2e_success_rate,
         "total_interactions": total_interactions,
-        "e2e_success": e2_success,
+        "e2e_success": e2e_success,
     }

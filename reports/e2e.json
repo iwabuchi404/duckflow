@@ -1,6 +1,4 @@
 {
-  "total": 3,
-  "hallucinations": 1,
-  "total_interactions": 2,
-  "context_correct": 1
+  "total_interactions": 0,
+  "e2e_success": 0
 }
