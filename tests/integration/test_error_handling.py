@@ -19,7 +19,7 @@ if sys.platform == "win32":
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from codecrafter.orchestration.graph_orchestrator import GraphOrchestrator
+from codecrafter.orchestration.four_node_orchestrator import FourNodeOrchestrator
 from codecrafter.state.agent_state import AgentState
 from codecrafter.base.config import ConfigManager
 
@@ -36,7 +36,7 @@ async def test_file_not_found_error():
         os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
         config_manager = ConfigManager()
         config = config_manager.load_config()
-        orchestrator = GraphOrchestrator(config)
+        orchestrator = FourNodeOrchestrator(state)
         
         state = AgentState(
             session_id="test_error_001",
@@ -74,7 +74,7 @@ async def test_safety_assessment_integration():
         os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
         config_manager = ConfigManager()
         config = config_manager.load_config()
-        orchestrator = GraphOrchestrator(config)
+        orchestrator = FourNodeOrchestrator(state)
         
         state = AgentState(
             session_id="test_safety_001",
@@ -115,7 +115,7 @@ async def test_tool_error_analysis():
     os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
     config_manager = ConfigManager()
     config = config_manager.load_config()
-    orchestrator = GraphOrchestrator(config)
+    orchestrator = FourNodeOrchestrator(state)
     
     # 異なるタイプのエラーをテスト
     test_errors = [
@@ -178,7 +178,7 @@ async def test_retry_logic():
     os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'  
     config_manager = ConfigManager()
     config = config_manager.load_config()
-    orchestrator = GraphOrchestrator(config)
+    orchestrator = FourNodeOrchestrator(state)
     
     # リトライ判断のテスト
     test_states = [

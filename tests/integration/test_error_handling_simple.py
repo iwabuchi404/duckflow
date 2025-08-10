@@ -15,7 +15,7 @@ if sys.platform == "win32":
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from codecrafter.orchestration.graph_orchestrator import GraphOrchestrator
+from codecrafter.orchestration.four_node_orchestrator import FourNodeOrchestrator
 from codecrafter.state.agent_state import AgentState
 from codecrafter.base.config import ConfigManager
 
@@ -27,7 +27,10 @@ def test_safety_risk_analysis():
     os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
     config_manager = ConfigManager()
     config = config_manager.load_config()
-    orchestrator = GraphOrchestrator(config)
+    # FourNodeOrchestratorはAgentStateを受け取る
+    from codecrafter.state.agent_state import AgentState
+    state = AgentState(session_id="test_session")
+    orchestrator = FourNodeOrchestrator(state)
     
     # 異なるリスクレベルのテストケース
     test_cases = [
@@ -99,7 +102,10 @@ def test_error_categorization():
     os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
     config_manager = ConfigManager()
     config = config_manager.load_config()
-    orchestrator = GraphOrchestrator(config)
+    # FourNodeOrchestratorはAgentStateを受け取る
+    from codecrafter.state.agent_state import AgentState
+    state = AgentState(session_id="test_session")
+    orchestrator = FourNodeOrchestrator(state)
     
     # 異なるエラータイプのテストケース
     test_errors = [
@@ -216,7 +222,10 @@ def test_retry_decision_logic():
     os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
     config_manager = ConfigManager()
     config = config_manager.load_config()
-    orchestrator = GraphOrchestrator(config)
+    # FourNodeOrchestratorはAgentStateを受け取る
+    from codecrafter.state.agent_state import AgentState
+    state = AgentState(session_id="test_session")
+    orchestrator = FourNodeOrchestrator(state)
     
     # リトライ判断のテストケース
     test_cases = [

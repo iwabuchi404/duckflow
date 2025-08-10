@@ -16,7 +16,7 @@ if sys.platform == "win32":
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from codecrafter.orchestration.graph_orchestrator import GraphOrchestrator
+from codecrafter.orchestration.four_node_orchestrator import FourNodeOrchestrator
 from codecrafter.state.agent_state import AgentState
 from codecrafter.base.config import Config
 
@@ -35,7 +35,8 @@ async def test_basic_graph_flow():
         os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
         config = Config()
     
-    orchestrator = GraphOrchestrator(config)
+    state = AgentState(session_id="test_session")
+    orchestrator = FourNodeOrchestrator(state)
     
     # テスト用の初期状態
     state = AgentState(
@@ -81,7 +82,8 @@ async def test_safety_assessment():
         os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
         config = Config()
     
-    orchestrator = GraphOrchestrator(config)
+    state = AgentState(session_id="test_session")
+    orchestrator = FourNodeOrchestrator(state)
     
     state = AgentState(
         session_id="test_session_002", 
@@ -119,7 +121,8 @@ async def test_error_handling():
         os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
         config = Config()
     
-    orchestrator = GraphOrchestrator(config)
+    state = AgentState(session_id="test_session")
+    orchestrator = FourNodeOrchestrator(state)
     
     state = AgentState(
         session_id="test_session_003",

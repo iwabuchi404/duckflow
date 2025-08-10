@@ -15,31 +15,30 @@ if sys.platform == "win32":
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from codecrafter.orchestration.graph_orchestrator import GraphOrchestrator
+from codecrafter.orchestration.four_node_orchestrator import FourNodeOrchestrator
 from codecrafter.state.agent_state import AgentState
 from codecrafter.base.config import ConfigManager
 
 
 def test_graph_structure():
-    """グラフ構造の定義テスト"""
-    print("=== グラフ構造テスト ===")
+    """4ノードグラフ構造の定義テスト"""
+    print("=== 4ノードグラフ構造テスト ===")
     
     # ダミー設定でテスト
     os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
-    config_manager = ConfigManager()
-    config = config_manager.load_config()
-    orchestrator = GraphOrchestrator(config)
+    state = AgentState(session_id="test_graph_structure")
+    orchestrator = FourNodeOrchestrator(state)
     
     try:
         # グラフ構築をテスト
-        graph = orchestrator._build_graph()
-        print("✅ グラフ構築成功")
+        graph = orchestrator.graph
+        print("✅ 4ノードグラフ構築成功")
         
         # ノード一覧を取得
         nodes = list(graph.nodes.keys())
         expected_nodes = [
-            "思考", "コンテキスト収集", "危険性評価", 
-            "人間承認", "ツール実行", "結果確認", "エラー分析"
+            "__start__", "理解・計画", "情報収集", 
+            "安全実行", "評価・継続"
         ]
         
         print(f"定義されたノード: {nodes}")
@@ -47,7 +46,7 @@ def test_graph_structure():
         
         # ノードの数をチェック
         if len(nodes) == len(expected_nodes):
-            print("✅ ノード数が正しい")
+            print("✅ 4ノード数が正しい")
         else:
             print(f"❌ ノード数が違います: {len(nodes)} != {len(expected_nodes)}")
         
@@ -72,22 +71,18 @@ def test_graph_structure():
 
 
 def test_node_functions():
-    """ノード関数の存在テスト"""
-    print("\n=== ノード関数存在テスト ===")
+    """4ノード関数の存在テスト"""
+    print("\n=== 4ノード関数存在テスト ===")
     
     os.environ['GROQ_API_KEY'] = 'dummy_key_for_test'
-    config_manager = ConfigManager()
-    config = config_manager.load_config()
-    orchestrator = GraphOrchestrator(config)
+    state = AgentState(session_id="test_node_functions")
+    orchestrator = FourNodeOrchestrator(state)
     
     expected_methods = [
-        '_thinking_node',
-        '_context_collection_node',
-        '_safety_assessment_node',
-        '_human_approval_node',
-        '_tool_execution_node',
-        '_result_verification_node',
-        '_error_analysis_node'
+        '_understanding_planning_node',
+        '_information_gathering_node',
+        '_safe_execution_node',
+        '_evaluation_continuation_node'
     ]
     
     missing_methods = []
