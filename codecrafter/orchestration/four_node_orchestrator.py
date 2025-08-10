@@ -672,3 +672,34 @@ class FourNodeOrchestrator:
             )
         self.four_node_context.execution_phase += 1
         self.four_node_context.current_node = NodeType.UNDERSTANDING
+    
+    def run_conversation(self, user_input: str) -> None:
+        """
+        ユーザーとの対話を実行（main_v2からの互換性のため）
+        """
+        from ..ui.rich_ui import rich_ui
+        
+        # ユーザーメッセージを追加
+        self.state.add_message("user", user_input)
+        
+        try:
+            rich_ui.print_message("[4NODE] 4ノード統合処理を開始...", "info")
+            
+            # 4ノードグラフを実行
+            final_state = self.graph.invoke(self.state)
+            
+            # 状態を更新
+            if isinstance(final_state, dict):
+                from ..state.agent_state import AgentState
+                self.state = AgentState.model_validate(final_state)
+            else:
+                self.state = final_state
+                
+            rich_ui.print_message("[4NODE] 4ノード統合処理が完了しました", "success")
+            
+        except Exception as e:
+            self.state.record_error(f"4ノード実行エラー: {e}")
+            rich_ui.print_error(f"[ERROR] 4ノード処理中にエラーが発生: {e}")
+            import traceback
+            if self.state.debug_mode:
+                traceback.print_exc()

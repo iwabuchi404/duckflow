@@ -11,7 +11,7 @@ from typing import Optional
 from .base.config import config_manager
 from .base.llm_client import llm_manager, LLMClientError
 from .state.agent_state import AgentState, WorkspaceInfo
-from .orchestration.graph_orchestrator import GraphOrchestrator
+from .orchestration.four_node_orchestrator import FourNodeOrchestrator
 from .tools.file_tools import file_tools, FileOperationError
 from .tools.rag_tools import rag_tools, RAGToolError
 from .ui.rich_ui import rich_ui
@@ -37,7 +37,7 @@ class DuckflowAgentV2:
             debug_mode=config_manager.is_debug_mode()
         )
         
-        self.orchestrator = GraphOrchestrator(self.state)
+        self.orchestrator = FourNodeOrchestrator(self.state)
         self.running = True
     
     def start(self) -> None:
@@ -45,8 +45,8 @@ class DuckflowAgentV2:
         try:
             # ヘッダー表示
             rich_ui.print_header(
-                "Duckflow v0.2.0-alpha (Step 2a)",
-                "AI-powered coding agent with LangGraph orchestration"
+                "Duckflow v0.3.0-alpha (4-Node Architecture)",
+                "AI-powered coding agent with 4-node integrated orchestration"
             )
             
             if self.state.debug_mode:

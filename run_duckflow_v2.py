@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Duckflow v0.2.1-alpha テスト用エントリーポイント
-ステップ2b（RAG機能）対応版のテスト起動スクリプト
+Duckflow v0.3.0-alpha 標準エントリーポイント
+4ノード統合アーキテクチャ対応版
 """
 import sys
 import os
@@ -17,9 +17,9 @@ try:
     from codecrafter.main_v2 import main
     
     if __name__ == "__main__":
-        print("🚀 Starting Duckflow v0.2.1-alpha (Step 2b - RAG enabled)")
-        print("📚 New features: Project-wide code search, RAG-enhanced prompts")
-        print("⚡ Commands: index, search, index-status, graph")
+        print("🚀 Starting Duckflow v0.3.0-alpha (4-Node Architecture)")
+        print("🧠 Revolutionary: Information transmission loss problem solved")
+        print("⚡ 4-Node Flow: Understanding → Gathering → Execution → Evaluation")
         print()
         main()
         
