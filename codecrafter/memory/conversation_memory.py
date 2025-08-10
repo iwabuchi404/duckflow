@@ -233,22 +233,20 @@ class ConversationMemory:
         if len(messages) <= keep_turns * 2:  # user + assistant のペア
             return summary, messages
         
-        # ユーザー・AI のメッセージペアを特定
-        recent_messages = []
-        user_ai_pairs = []
+        # 🔧 修正: 最新メッセージを必ず保持する安全策
+        # 少なくとも最新の6メッセージ（3ペア相当）を保持
+        min_keep_messages = keep_turns * 2
         
-        # 最新から遡ってペアを収集
-        i = len(messages) - 1
-        while i >= 0 and len(user_ai_pairs) < keep_turns:
-            if messages[i].role == "assistant" and i > 0 and messages[i-1].role == "user":
-                user_ai_pairs.insert(0, (messages[i-1], messages[i]))
-                i -= 2
-            else:
-                i -= 1
-        
-        # ペアを展開してメッセージリストに変換
-        for user_msg, ai_msg in user_ai_pairs:
-            recent_messages.extend([user_msg, ai_msg])
+        # 最新メッセージからさかのぼって保持対象を決定
+        if len(messages) > min_keep_messages:
+            # 最新メッセージが単独のuserメッセージの場合は+1して保持
+            keep_count = min_keep_messages
+            if messages[-1].role == "user":
+                keep_count += 1  # 最新のuserメッセージを必ず保持
+            
+            recent_messages = messages[-keep_count:]
+        else:
+            recent_messages = messages
         
         return summary, recent_messages
     

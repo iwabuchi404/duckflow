@@ -1431,13 +1431,11 @@ class GraphOrchestrator:
         if isinstance(self.state, dict):
             self.state = AgentState.parse_obj(self.state)
         
-        # 記憶管理を実行 (ステップ2c)
-        if self.state.needs_memory_management():
-            rich_ui.print_message("[MEMORY] 記憶管理を実行中...", "info")
-            if self.state.create_memory_summary():
-                rich_ui.print_success("[MEMORY] 対話履歴を要約し、記憶を整理しました")
-            else:
-                rich_ui.print_warning("[MEMORY] 記憶管理でエラーが発生しましたが、処理を続行します")
+        # 🔧 修正: 記憶管理を応答後に延期（ユーザー質問を保持するため）
+        # 記憶管理が必要かをチェックするが、実行は応答完了後に行う
+        needs_memory_cleanup = self.state.needs_memory_management()
+        if needs_memory_cleanup:
+            rich_ui.print_message("[MEMORY] 処理完了後に記憶整理を実行予定", "info")
         
         try:
             rich_ui.print_message("[GRAPH] 処理を開始します...", "info")
@@ -1453,9 +1451,26 @@ class GraphOrchestrator:
             else:
                 self.state = final_state
             rich_ui.print_message("[GRAPH] 処理が完了しました", "success")
+            
+            # 🔧 修正: 応答完了後に記憶整理を実行
+            if needs_memory_cleanup:
+                rich_ui.print_message("[MEMORY] 記憶整理を実行中...", "info")
+                if self.state.create_memory_summary():
+                    rich_ui.print_success("[MEMORY] 対話履歴を要約し、記憶を整理しました")
+                else:
+                    rich_ui.print_warning("[MEMORY] 記憶管理でエラーが発生しました")
+                    
         except Exception as e:
             self.state.record_error(f"会話実行エラー: {e}")
             rich_ui.print_error(f"[ERROR] 処理中にエラーが発生しました: {e}")
+            
+            # エラー時も記憶整理を実行（データ保護のため）
+            if needs_memory_cleanup:
+                try:
+                    rich_ui.print_message("[MEMORY] エラー後の記憶整理を実行中...", "info")
+                    self.state.create_memory_summary()
+                except Exception as mem_error:
+                    rich_ui.print_warning(f"[MEMORY] 記憶整理エラー: {mem_error}")
     
     # ------------- 応答検証 -------------
     def _verify_file_mentions(self, ai_response: str, state: AgentState) -> List[str]:
