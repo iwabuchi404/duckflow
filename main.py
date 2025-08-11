@@ -1,35 +1,36 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Duckflow á¤ó¨óÈêüİ¤óÈ
-4ÎüÉq¢ü­Æ¯ÁãH
+Duckflow ã‚¨ãƒ³ãƒˆãƒªãƒ¼ãƒã‚¤ãƒ³ãƒˆ
+4ãƒãƒ¼ãƒ‰çµ±åˆã‚¢ãƒ¼ã‚­ãƒ†ã‚¯ãƒãƒ£
 """
 import sys
 import os
 
-# ×í¸§¯ÈëüÈ’Ñ¹kı 
+# ãƒ—ãƒ­ã‚¸ã‚§ã‚¯ãƒˆãƒ«ãƒ¼ãƒˆãƒ‘ã‚¹è¿½åŠ 
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-# ‡W¨ó³üÇ£ó°-š
+# UTF-8ã‚¨ãƒ³ã‚³ãƒ¼ãƒ‡ã‚£ãƒ³ã‚°è¨­å®š
 os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 if __name__ == "__main__":
     try:
         from codecrafter.main_v2 import main
         
-        print("=€ Duckflow v0.3.0-alpha - 4ÎüÉqAI³üÇ£ó°¨ü¸§óÈ")
-        print("=¡ Å1Tí¹OL’ãzW_Ÿ(„jAI‹zÑüÈÊü")
-        print("= 4ÎüÉÕíü: ãû; ’ Å1ÎÆ ’ ‰hŸL ’ U¡û™š")
+        print("ğŸ¦† Duckflow v0.3.0-alpha - 4ãƒãƒ¼ãƒ‰AIã‚³ãƒ¼ãƒ‡ã‚£ãƒ³ã‚°ã‚¨ãƒ¼ã‚¸ã‚§ãƒ³ãƒˆ")
+        print("ğŸ¯ çµ±åˆã‚¢ãƒ¼ã‚­ãƒ†ã‚¯ãƒãƒ£ã«ã‚ˆã‚‹é«˜åŠ¹ç‡AIé–‹ç™ºæ”¯æ´")
+        print("ğŸ”„ 4ã¤ã®ãƒãƒ¼ãƒ‰: ç†è§£â†’åé›†â†’å®Ÿè¡Œâ†’è©•ä¾¡")
         print()
         
         main()
         
     except ImportError as e:
-        print(f"L ¤óİüÈ¨éü: {e}")
-        print("X¢Â’¤ó¹ÈüëWfO`UD: uv sync")
+        print(f"âŒ ã‚¤ãƒ³ãƒãƒ¼ãƒˆã‚¨ãƒ©ãƒ¼: {e}")
+        print("ä¾å­˜é–¢ä¿‚ã‚’ã‚¤ãƒ³ã‚¹ãƒˆãƒ¼ãƒ«: uv sync")
         sys.exit(1)
     except Exception as e:
-        print(f"L wÕ¨éü: {e}")
+        print(f"âŒ å®Ÿè¡Œã‚¨ãƒ©ãƒ¼: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

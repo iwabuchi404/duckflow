@@ -141,10 +141,17 @@ class RichUI:
     
     def get_user_input(self, prompt: str, default: Optional[str] = None) -> str:
         """ユーザー入力を取得"""
-        return Prompt.ask(
-            f"[{self.colors['primary']}]{prompt}[/]",
-            default=default
-        )
+        try:
+            return Prompt.ask(
+                f"[{self.colors['primary']}]{prompt}[/]",
+                default=default
+            )
+        except EOFError:
+            # EOF（Ctrl+D、パイプ終了等）の場合は終了を示す特殊値を返す
+            return "quit"
+        except KeyboardInterrupt:
+            # Ctrl+Cの場合は中断を示す
+            raise
     
     def get_confirmation(self, message: str, default: bool = False) -> bool:
         """確認の入力を取得 (y/n)。RichのConfirmが使えない場合は標準入力へフォールバック"""

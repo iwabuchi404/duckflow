@@ -148,6 +148,10 @@ class FourNodePromptCompiler:
         
         current_task = context.task_chain[-1]
         
+        # デバッグ: 使用されるユーザーメッセージを確認
+        print(f"[TEMPLATE_DEBUG] task_chain size: {len(context.task_chain)}")
+        print(f"[TEMPLATE_DEBUG] current_task.user_message: '{current_task.user_message}'")
+        
         # 会話履歴の追加
         conversation_context = self._build_conversation_context(context.recent_messages)
         

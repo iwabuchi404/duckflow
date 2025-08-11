@@ -96,13 +96,8 @@ class FourNodeOrchestrator:
                     )
                     task_chain.append(task)
         
-        # タスクチェーンが空の場合はダミータスクを追加
-        if not task_chain:
-            task_chain.append(FourNodeTaskStep(
-                step_id="initial_task",
-                user_message="初期タスク",
-                timestamp=datetime.now()
-            ))
+        # タスクチェーンは空で開始（実行時にconversation_historyから更新される）
+        # 初期化時はダミータスクを作らない
         
         # 会話履歴の更新（最新10件を保持）
         recent_messages = []
@@ -119,23 +114,49 @@ class FourNodeOrchestrator:
     
     def _update_context_with_conversation(self) -> None:
         """4ノードコンテキストの会話履歴を最新状態に更新"""
-        if hasattr(self.state, 'conversation_history') and self.state.conversation_history:
-            # 最新の会話履歴を反映
-            self.four_node_context.recent_messages = self.state.conversation_history[-10:]
+        # デバッグ: AgentStateの構造を確認  
+        rich_ui.print_message(f"[STATE_DEBUG] _update_context_with_conversation called", "info")
+        rich_ui.print_message(f"[STATE_DEBUG] AgentState type: {type(self.state)}", "info")
+        rich_ui.print_message(f"[STATE_DEBUG] hasattr conversation_history: {hasattr(self.state, 'conversation_history')}", "info")
+        
+        if hasattr(self.state, 'conversation_history'):
+            conv_history = self.state.conversation_history
+            rich_ui.print_message(f"[CONV_DEBUG] conversation_history type: {type(conv_history)}", "info")
+            rich_ui.print_message(f"[CONV_DEBUG] conversation_history size: {len(conv_history) if conv_history else 'None'}", "info")
             
-            # タスクチェーンも更新
-            new_tasks = []
-            for msg in self.state.conversation_history[-3:]:
-                if msg.role == 'user':
-                    task = FourNodeTaskStep(
-                        step_id=f"task_{len(new_tasks)}",
-                        user_message=msg.content,
-                        timestamp=msg.timestamp if hasattr(msg, 'timestamp') else datetime.now()
-                    )
-                    new_tasks.append(task)
+            if conv_history:
+                # 最新の会話履歴の詳細を確認
+                for i, msg in enumerate(conv_history[-3:]):
+                    rich_ui.print_message(f"[CONV_DEBUG] {i}: role='{msg.role}', content='{msg.content}'", "info")
+                    
+                # 最新の会話履歴を反映
+                self.four_node_context.recent_messages = conv_history[-10:]
             
-            if new_tasks:
-                self.four_node_context.task_chain = new_tasks
+                # タスクチェーンも更新
+                new_tasks = []
+                for msg in conv_history[-3:]:
+                    if msg.role == 'user':
+                        task = FourNodeTaskStep(
+                            step_id=f"task_{len(new_tasks)}",
+                            user_message=msg.content,
+                            timestamp=msg.timestamp if hasattr(msg, 'timestamp') else datetime.now()
+                        )
+                        new_tasks.append(task)
+                        rich_ui.print_message(f"[TASK_CREATE] Created task with message: '{msg.content}'", "info")
+                
+                rich_ui.print_message(f"[CONV_DEBUG] new_tasks created: {len(new_tasks)}", "info")
+                
+                if new_tasks:
+                    self.four_node_context.task_chain = new_tasks
+                    # デバッグ: task_chainの内容を確認
+                    for i, task in enumerate(new_tasks):
+                        rich_ui.print_message(f"[TASK_CHAIN] {i}: '{task.user_message}'", "info")
+                else:
+                    rich_ui.print_message("[CONV_DEBUG] new_tasks is empty - no user messages in recent history", "info")
+            else:
+                rich_ui.print_message("[CONV_DEBUG] conversation_history exists but is empty", "info")
+        else:
+            rich_ui.print_message("[CONV_DEBUG] conversation_history is empty or not found", "info")
     
     def _build_graph(self) -> StateGraph:
         """4ノード構成のグラフを構築"""
@@ -727,13 +748,12 @@ class FourNodeOrchestrator:
             # 会話履歴に基づく4ノードコンテキストの更新
             self._update_context_with_conversation()
             
-            # 現在のタスクを追加
-            current_task = FourNodeTaskStep(
-                step_id=f"task_{len(self.four_node_context.task_chain)}",
-                user_message=user_message,
-                timestamp=datetime.now()
-            )
-            self.four_node_context.task_chain.append(current_task)
+            # デバッグ: 最終的なtask_chainの内容を確認
+            if self.four_node_context.task_chain:
+                latest_task = self.four_node_context.task_chain[-1]
+                rich_ui.print_message(f"[FINAL_TASK] '{latest_task.user_message}'", "debug")
+            else:
+                rich_ui.print_message("[ERROR] task_chainが空です - conversation_history更新に失敗", "error")
             
             rich_ui.print_info("🚀 4ノードオーケストレーション開始（会話履歴更新済み）")
             
@@ -1212,6 +1232,16 @@ class FourNodeOrchestrator:
         
         try:
             rich_ui.print_message("[4NODE] 4ノード統合処理を開始...", "info")
+            
+            # 会話履歴に基づく4ノードコンテキストの更新
+            self._update_context_with_conversation()
+            
+            # デバッグ: 最終的なtask_chainの内容を確認
+            if self.four_node_context.task_chain:
+                latest_task = self.four_node_context.task_chain[-1]
+                rich_ui.print_message(f"[FINAL_TASK] '{latest_task.user_message}'", "info")
+            else:
+                rich_ui.print_message("[ERROR] task_chainが空です - conversation_history更新に失敗", "error")
             
             # 4ノードグラフを実行
             final_state = self.graph.invoke(self.state)
@@ -2005,3 +2035,14 @@ class FourNodeOrchestrator:
         rich_ui.print_message("[再計画] 理解・計画ノードに戻り、追加調査を実行します", "info")
         
         return state_obj
+    
+    def _get_latest_user_message(self) -> Optional[str]:
+        """最新のユーザーメッセージを取得"""
+        try:
+            if hasattr(self.state, 'conversation_history') and self.state.conversation_history:
+                for msg in reversed(self.state.conversation_history):
+                    if msg.role == 'user':
+                        return msg.content
+        except Exception:
+            pass
+        return None
