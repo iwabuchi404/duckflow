@@ -78,10 +78,32 @@ class FourNodeHelpers:
             if state_obj.workspace and hasattr(state_obj.workspace, 'files'):
                 workspace_files = state_obj.workspace.files or []
             
+            # ワークスペース情報がない場合はfile_toolsを使って動的に取得
+            if not workspace_files:
+                try:
+                    file_list_result = file_tools.list_files(".", recursive=True)
+                    if isinstance(file_list_result, list):
+                        workspace_files = [f.get('path', f.get('name', str(f))) for f in file_list_result if isinstance(f, dict)]
+                    elif isinstance(file_list_result, dict) and 'files' in file_list_result:
+                        workspace_files = [f.get('path', f.get('name', str(f))) for f in file_list_result['files'] if isinstance(f, dict)]
+                    
+                    # デバッグ: ワークスペースファイル数を表示
+                    rich_ui.print_message(f"[DEBUG] ワークスペースファイル数: {len(workspace_files)}", "info")
+                    
+                    
+                except Exception as e:
+                    rich_ui.print_warning(f"ワークスペースファイル取得エラー: {e}")
+                    workspace_files = []
+            
             # RoutingEngineによる分析
             routing_decision = self.routing_engine.analyze_user_intent(
                 last_user_message, workspace_files
             )
+            
+            # デバッグ: ルーティング結果を表示
+            rich_ui.print_message(f"[DEBUG] ルーティング結果: needs_file_read={routing_decision.needs_file_read}, target_files={len(routing_decision.target_files)}件", "info")
+            if routing_decision.target_files:
+                rich_ui.print_message(f"[DEBUG] 対象ファイル: {routing_decision.target_files[:3]}", "info")
             
             return {
                 "needs_file_read": routing_decision.needs_file_read,
@@ -135,11 +157,27 @@ class FourNodeHelpers:
             理解結果
         """
         try:
+            # タスク種別情報をfour_node_contextに設定
+            operation_type = routing_decision.get("operation_type", "chat")
+            four_node_context.operation_type = operation_type
+            rich_ui.print_message(f"[TASK_TYPE] 設定完了: {operation_type}", "info")
+            
+            # タスクチェーンが空の場合はエラーにしない
+            if not hasattr(four_node_context, 'task_chain') or not four_node_context.task_chain:
+                rich_ui.print_warning("タスクチェーンが空です - フォールバック応答を使用")
+                return self._create_fallback_understanding_result(state_obj)
+            
             # プロンプトの生成
-            prompt = self.prompt_compiler.compile_node_prompt(four_node_context)
+            try:
+                prompt = self.prompt_compiler.compile_node_prompt(four_node_context)
+            except Exception as pe:
+                rich_ui.print_warning(f"プロンプト生成エラー: {pe} - シンプルプロンプトを使用")
+                # シンプルなフォールバックプロンプト
+                last_message = self._get_last_user_message(state_obj)
+                prompt = f"ユーザー要求: {last_message}\n\nこの要求を理解し、実行計画を立案してください。"
             
             # LLMの実行
-            response = llm_manager.invoke(prompt)
+            response = llm_manager.chat(prompt)
             
             # レスポンスの解析
             understanding_result = self._parse_understanding_response(response, routing_decision, is_retry)
@@ -187,25 +225,48 @@ class FourNodeHelpers:
         collected_files = {}
         
         try:
+            # デバッグ: 実行計画の詳細を表示
+            rich_ui.print_message(f"[DEBUG] 実行計画のファイル数: {len(understanding_result.execution_plan.expected_files)}", "info")
+            rich_ui.print_message(f"[DEBUG] 実行計画のファイル: {understanding_result.execution_plan.expected_files}", "info")
+            
             # 実行計画で指定されたファイルを収集
             for file_path in understanding_result.execution_plan.expected_files:
                 try:
+                    rich_ui.print_message(f"ファイル読み取り中: {file_path}", "info")
+                    
                     # ファイル読み取り
                     content = file_tools.read_file(file_path)
                     if content:
                         # ファイル情報の取得
-                        file_info = file_tools.get_file_info(file_path)
+                        try:
+                            file_info = file_tools.get_file_info(file_path)
+                            size = file_info.get('size', len(content))
+                        except:
+                            size = len(content)
                         
                         collected_files[file_path] = FileContent(
                             path=file_path,
-                            content=content[:5000],  # 最大5000文字に制限
+                            content=content[:8000],  # 最大8000文字に制限（design-doc.mdは長い）
                             encoding="utf-8",  # 簡略化
-                            size=len(content),
+                            size=size,
                             last_modified=datetime.now(),  # 簡略化
                             relevance_score=0.9  # 計画で指定されたファイルは高い関連度
                         )
+                        rich_ui.print_success(f"ファイル読み取り完了: {file_path} ({len(content)}文字)")
+                    else:
+                        rich_ui.print_warning(f"ファイル {file_path} は空です")
+                        
                 except Exception as e:
                     rich_ui.print_warning(f"ファイル {file_path} の読み取りに失敗: {e}")
+                    # 読み取りに失敗しても、空の内容で追加
+                    collected_files[file_path] = FileContent(
+                        path=file_path,
+                        content=f"[読み取りエラー: {str(e)}]",
+                        encoding="utf-8",
+                        size=0,
+                        last_modified=datetime.now(),
+                        relevance_score=0.1
+                    )
                     
             # 関連ファイルの自動発見（必要に応じて）
             if understanding_result.execution_plan.estimated_complexity in ["medium", "high"]:
@@ -343,19 +404,27 @@ class FourNodeHelpers:
             
             # ツールベースのリスク評価
             for tool_name in understanding_result.execution_plan.required_tools:
-                if tool_name in ['write_file', 'create_directory']:
+                if tool_name in ['read_file', 'list_files', 'get_file_info']:
+                    # 読み取り専用操作は低リスク
+                    risk_factors.append(f"ファイル読み取り: {tool_name}")
+                    # overall_riskは変更しない（LOW のまま）
+                elif tool_name in ['write_file', 'create_directory']:
                     risk_factors.append(f"ファイルシステム変更: {tool_name}")
                     overall_risk = RiskLevel.MEDIUM
                 elif tool_name in ['execute_shell_command']:
                     risk_factors.append(f"シェルコマンド実行: {tool_name}")
                     overall_risk = RiskLevel.HIGH
             
-            # ファイル変更のリスク評価
-            for file_path in understanding_result.execution_plan.expected_files:
-                if gathered_info and file_path in gathered_info.collected_files:
-                    risk_factors.append(f"既存ファイル変更: {file_path}")
-                    if overall_risk == RiskLevel.LOW:
-                        overall_risk = RiskLevel.MEDIUM
+            # ファイル変更のリスク評価（読み取り専用の場合はスキップ）
+            is_read_only = all(tool in ['read_file', 'list_files', 'get_file_info'] 
+                              for tool in understanding_result.execution_plan.required_tools)
+            
+            if not is_read_only:
+                for file_path in understanding_result.execution_plan.expected_files:
+                    if gathered_info and file_path in gathered_info.collected_files:
+                        risk_factors.append(f"既存ファイル変更: {file_path}")
+                        if overall_risk == RiskLevel.LOW:
+                            overall_risk = RiskLevel.MEDIUM
             
             # 複雑度ベースのリスク調整
             if understanding_result.execution_plan.estimated_complexity == "high":
@@ -406,11 +475,10 @@ class FourNodeHelpers:
             approval_message = self._create_approval_message(risk_assessment, understanding_result)
             
             rich_ui.print_warning("⚠️  承認が必要な操作があります")
-            rich_ui.print_info(approval_message)
+            rich_ui.print_message(approval_message, "info")
             
-            # 簡単な承認プロセス（実際の実装では rich_ui を使用）
-            user_input = input("\n続行しますか？ (y/N): ").lower().strip()
-            granted = user_input in ['y', 'yes']
+            # RichUIを使用した承認プロセス
+            granted = rich_ui.get_confirmation("続行しますか？", default=False)
             
             return ApprovalStatus(
                 requested=True,
@@ -459,21 +527,59 @@ class FourNodeHelpers:
     
     def _parse_understanding_response(self, response: str, routing_decision: Dict[str, Any], is_retry: bool) -> UnderstandingResult:
         """理解プロンプトのレスポンスを解析"""
-        # 簡略化された実装（実際はより詳細な解析が必要）
+        
+        # RoutingEngineの結果に基づいて適切な計画を作成
+        operation_type = routing_decision.get("operation_type", "chat")
+        needs_file_read = routing_decision.get("needs_file_read", False)
+        target_files = routing_decision.get("target_files", [])
+        
+        # 実行計画の構築
+        if needs_file_read and target_files:
+            # ファイル読み取りが必要な場合（読み取り専用）
+            summary = f"ファイル '{', '.join(target_files)}' の内容を確認し、理解・分析を行う（読み取り専用）"
+            steps = [
+                f"ファイル読み取り: {', '.join(target_files)}",
+                "ファイル内容の分析・理解", 
+                "ユーザーへの回答生成"
+            ]
+            required_tools = ["read_file"]  # 読み取り専用ツール
+            complexity = "low"  # ファイル読み取りは低複雑度
+            
+        elif operation_type == "file_list":
+            # ファイル一覧が必要な場合
+            summary = "ワークスペース内のファイル構造を確認し、一覧を提供する"
+            steps = [
+                "ファイル一覧の取得",
+                "ファイル構造の整理",
+                "ユーザーへの結果表示"
+            ]
+            required_tools = ["list_files"]
+            complexity = "low"
+            
+        else:
+            # 通常の対話
+            summary = "ユーザーの要求を理解し、適切な回答を提供する"
+            steps = [
+                "要求の分析",
+                "回答の生成"
+            ]
+            required_tools = []
+            complexity = "low"
+        
         return UnderstandingResult(
             requirement_analysis=response[:500],  # 最初の500文字
             execution_plan=ExecutionPlan(
-                summary="基本的な実行計画",
-                steps=["ステップ1: 分析", "ステップ2: 実行"],
-                required_tools=["read_file"] if routing_decision.get("needs_file_read") else [],
-                expected_files=routing_decision.get("target_files", []),
-                estimated_complexity="medium",
-                success_criteria="ユーザーの要求を満たす"
+                summary=summary,
+                steps=steps,
+                required_tools=required_tools,
+                expected_files=target_files,
+                estimated_complexity=complexity,
+                success_criteria="ユーザーの要求を正確に満たす"
             ),
-            identified_risks=["一般的なリスク"],
-            information_needs=["追加情報"] if not routing_decision.get("target_files") else [],
-            confidence=0.8,
-            complexity_assessment="中程度の複雑さ"
+            identified_risks=["ファイル読み取りエラーの可能性"] if needs_file_read else ["なし"],
+            information_needs=[] if target_files else ["追加情報が必要"],
+            confidence=0.9 if needs_file_read else 0.8,
+            complexity_assessment=f"{complexity}レベルの複雑さ"
         )
     
     def _create_fallback_understanding_result(self, state_obj: AgentState) -> UnderstandingResult:

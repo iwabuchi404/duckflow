@@ -15,6 +15,9 @@ understanding_fresh: |
   - **プロジェクト概要**: {workspace_overview}
   - **ユーザーメッセージ**: {user_message}
   
+  ## 会話の文脈
+  {conversation_context}
+  
   ## あなたのミッション
   1. **要求の本質理解**: ユーザーが「本当に」求めていることを理解する
   2. **実行可能性評価**: 現在の状況で実現可能かを判断する  
@@ -38,6 +41,9 @@ understanding_retry: |
   - **プロジェクト概要**: {workspace_overview}
   - **ユーザーメッセージ**: {user_message}
   - **再試行回数**: {retry_count}回目
+  
+  ## 会話の文脈
+  {conversation_context}
   
   ## 前回の失敗情報
   {previous_failure}

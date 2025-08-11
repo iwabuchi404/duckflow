@@ -147,9 +147,14 @@ class FourNodePromptCompiler:
             raise ValueError("タスクチェーンが空です")
         
         current_task = context.task_chain[-1]
+        
+        # 会話履歴の追加
+        conversation_context = self._build_conversation_context(context.recent_messages)
+        
         return {
             "user_message": current_task.user_message,
-            "execution_phase": str(context.execution_phase)
+            "execution_phase": str(context.execution_phase),
+            "conversation_context": conversation_context
         }
     
     def _prepare_retry_variables(self, context: FourNodePromptContext) -> Dict[str, str]:
@@ -160,10 +165,14 @@ class FourNodePromptCompiler:
         retry_ctx = context.retry_context
         current_task = context.task_chain[-1] if context.task_chain else None
         
+        # 会話履歴の追加
+        conversation_context = self._build_conversation_context(context.recent_messages)
+        
         vars_dict = {
             "user_message": current_task.user_message if current_task else "継続タスク",
             "retry_count": str(retry_ctx.retry_count),
-            "execution_phase": str(context.execution_phase)
+            "execution_phase": str(context.execution_phase),
+            "conversation_context": conversation_context
         }
         
         # 前回の失敗分析を展開
@@ -432,3 +441,65 @@ class FourNodePromptCompiler:
                     return f"ステップ{i+1}: {step}"
         
         return "不明なステップ"
+    
+    def _build_conversation_context(self, recent_messages: List) -> str:
+        """
+        会話履歴から文脈を構築
+        
+        Args:
+            recent_messages: 最近のメッセージリスト
+            
+        Returns:
+            フォーマットされた会話文脈
+        """
+        if not recent_messages:
+            return "会話履歴なし"
+        
+        context_parts = []
+        for i, message in enumerate(recent_messages[-5:]):  # 最新5件
+            role_display = {
+                'user': 'ユーザー',
+                'assistant': 'AI',
+                'system': 'システム'
+            }.get(message.role, message.role)
+            
+            # メッセージ内容を適切に切り詰め
+            content = message.content
+            if len(content) > 200:
+                content = content[:197] + "..."
+                
+            context_parts.append(f"{role_display}: {content}")
+        
+        return "\n".join(context_parts)
+    
+    def _extract_user_intent_from_conversation(self, recent_messages: List) -> str:
+        """
+        会話履歴からユーザーの意図を抽出
+        
+        Args:
+            recent_messages: 最近のメッセージリスト
+            
+        Returns:
+            抽出されたユーザー意図
+        """
+        if not recent_messages:
+            return "意図不明"
+            
+        # 最新のユーザーメッセージから意図を抽出
+        for message in reversed(recent_messages):
+            if message.role == 'user':
+                content = message.content.lower()
+                
+                # キーワードベースの意図分析（簡易版）
+                if any(word in content for word in ['実装', 'コード', 'プログラム', '作成', '追加']):
+                    return "実装要求"
+                elif any(word in content for word in ['調査', '調べ', '確認', '見つ', '探']):
+                    return "情報調査"
+                elif any(word in content for word in ['修正', '修理', '直', 'バグ', 'エラー']):
+                    return "問題解決"
+                elif any(word in content for word in ['説明', '教え', 'どう', 'なぜ', '理由']):
+                    return "解説要求"
+                else:
+                    return "一般的な要求"
+        
+        return "意図不明"

@@ -238,6 +238,14 @@ class RichUI:
             padding=(0, 1)
         )
         self.console.print(panel)
+    
+    def print_step(self, step: str, description: str = "") -> None:
+        """ステップ表示（4ノードオーケストレーター用）"""
+        if description:
+            message = f"{step}: {description}"
+        else:
+            message = step
+        self.print_message(message, "info")
 
 
 # グローバルなUIインスタンス

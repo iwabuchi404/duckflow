@@ -494,6 +494,9 @@ class DuckflowAgentV2:
         try:
             rich_ui.print_message("[ORCHESTRATION] LangGraphで処理中...", "info")
             
+            # ユーザーメッセージを会話履歴に追加
+            self.state.add_message("user", user_message)
+            
             # グラフ状態をリセット（新しい対話のため）
             self.state.graph_state.loop_count = 0
             self.state.retry_count = 0
@@ -504,6 +507,13 @@ class DuckflowAgentV2:
             
             # 状態を同期
             self.state = self.orchestrator.state
+            
+            # デバッグ: 対話履歴の確認
+            assistant_messages = [msg for msg in self.state.conversation_history if msg.role == 'assistant']
+            rich_ui.print_message(f"対話履歴: {len(self.state.conversation_history)}件、アシスタント応答: {len(assistant_messages)}件", "info")
+            
+            # 最新のアシスタント応答を表示
+            self._display_latest_assistant_response()
             
             rich_ui.print_message("[ORCHESTRATION] 処理完了", "success")
             
@@ -518,6 +528,30 @@ class DuckflowAgentV2:
             else:
                 rich_ui.print_error(f"[ERROR] 処理中にエラーが発生しました: {error_msg}")
             
+            if self.state.debug_mode:
+                import traceback
+                rich_ui.print_error(traceback.format_exc())
+    
+    def _display_latest_assistant_response(self) -> None:
+        """最新のアシスタント応答をUIに表示"""
+        try:
+            # 対話履歴から最新のアシスタントメッセージを取得
+            if self.state.conversation_history:
+                for message in reversed(self.state.conversation_history):
+                    if message.role == 'assistant':
+                        # アシスタントの応答を表示
+                        rich_ui.print_conversation_message(
+                            role=message.role,
+                            content=message.content,
+                            timestamp=message.timestamp.strftime('%H:%M:%S') if hasattr(message, 'timestamp') else None
+                        )
+                        return
+            
+            # アシスタントの応答が見つからない場合
+            rich_ui.print_warning("アシスタントの応答が見つかりませんでした")
+            
+        except Exception as e:
+            rich_ui.print_error(f"応答表示エラー: {e}")
             if self.state.debug_mode:
                 import traceback
                 rich_ui.print_error(traceback.format_exc())

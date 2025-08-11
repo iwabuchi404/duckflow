@@ -215,6 +215,7 @@ class FourNodePromptContext:
     # 📂 基本情報
     workspace_path: Path                 # ワークスペースパス
     current_task: Optional[str] = None   # 現在のタスク
+    operation_type: str = "chat"         # タスク種別（拡張版）
     
     # 📊 段階別蓄積情報
     understanding: Optional[UnderstandingResult] = None    # 1️⃣の結果

@@ -91,7 +91,7 @@ class OpenAIClient(BaseLLMClient):
                     langchain_messages.append(HumanMessage(content=content))
             
             # LLMに送信
-            response = self.client(langchain_messages)
+            response = self.client.invoke(langchain_messages)
             return response.content
             
         except Exception as e:
@@ -138,7 +138,7 @@ class AnthropicClient(BaseLLMClient):
                     langchain_messages.append(HumanMessage(content=content))
             
             # LLMに送信
-            response = self.client(langchain_messages)
+            response = self.client.invoke(langchain_messages)
             return response.content
             
         except Exception as e:
@@ -185,7 +185,7 @@ class GroqClient(BaseLLMClient):
                     langchain_messages.append(HumanMessage(content=content))
             
             # LLMに送信
-            response = self.client(langchain_messages)
+            response = self.client.invoke(langchain_messages)
             return response.content
             
         except Exception as e:
@@ -239,7 +239,7 @@ class OpenRouterClient(BaseLLMClient):
                 langchain_messages.append(SystemMessage(content=content))
         
         try:
-            response = self.client(langchain_messages)
+            response = self.client.invoke(langchain_messages)
             return response.content
         except Exception as e:
             raise LLMClientError(f"OpenRouter API error: {str(e)}")

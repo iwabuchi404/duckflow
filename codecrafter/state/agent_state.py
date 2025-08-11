@@ -106,6 +106,13 @@ class AgentState(BaseModel):
     approval_result: Optional[str] = Field(default=None, description="人間承認の結果")
     collected_context: Dict[str, Any] = Field(default_factory=dict, description="収集済みコンテキスト")
     rag_context: List[Dict[str, Any]] = Field(default_factory=list, description="直近のRAG検索結果")
+    
+    # Phase 2: 継続ループ機能
+    continuation_context: Optional[Any] = Field(default=None, description="継続実行コンテキスト")
+    
+    # Phase 1: 知的探索・分析エンジン
+    investigation_plan: List[str] = Field(default_factory=list, description="調査対象ファイルの優先順位リスト")
+    project_summary: Optional[str] = Field(default=None, description="プロジェクト統合理解結果")
 
     def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """対話履歴にメッセージを追加"""
