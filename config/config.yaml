@@ -261,6 +261,70 @@ promptsmith:
     override_provider: null # nullの場合はメインLLM、指定すればそのプロバイダーを使用
     override_model: null    # モデルの上書き指定
 
+# The Duck Keeper - 統合アクセス制御システム設定
+duck_keeper:
+  # 許可される拡張子のホワイトリスト
+  allowed_extensions:
+    - ".py"
+    - ".md"
+    - ".json"
+    - ".yaml"
+    - ".yml"
+    - ".txt"
+    - ".csv"
+    - ".js"
+    - ".ts"
+    - ".jsx"
+    - ".tsx"
+    - ".html"
+    - ".css"
+    - ".toml"
+    - ".ini"
+    - ".cfg"
+    - ".log"
+  
+  # 常に除外するディレクトリのブラックリスト
+  directory_blacklist:
+    - ".git"
+    - ".idea"
+    - ".vscode"
+    - "node_modules"
+    - "__pycache__"
+    - ".pytest_cache"
+    - ".venv"
+    - "venv"
+    - ".env"
+    - ".DS_Store"
+    - "target"
+    - "dist"
+    - "build"
+    - ".next"
+    - ".nuxt"
+    - "coverage"
+  
+  # プロジェクトワークスペース境界の強制
+  enforce_workspace_boundary: true
+  
+  # .gitignoreファイルの尊重
+  respect_gitignore: true
+  
+  # ファイル読み取り最大トークン数制限
+  max_file_read_tokens: 8000
+  
+  # Duck Scanの高速検索設定
+  scan_settings:
+    # ripgrep使用の有効化
+    use_ripgrep: true
+    
+    # 検索結果の最大数
+    max_search_results: 100
+    
+    # ディレクトリスキャンの最大深度
+    max_scan_depth: 10
+    
+    # キーワード検索のタイムアウト（秒）
+    search_timeout: 30
+
 # 開発設定
 development:
   debug: false

@@ -9,6 +9,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 from ..base.config import config_manager
+from ..keeper import duck_fs, FileReadResult, FileWriteResult, DuckFileSystemError
 
 try:
     import subprocess
@@ -421,7 +422,7 @@ class FileTools:
     
     def read_file(self, file_path: str, encoding: Optional[str] = None) -> str:
         """
-        ファイルを読み取り（エンコーディング自動判定対応）
+        ファイルを読み取り（Duck Keeper統合版）
         
         Args:
             file_path: ファイルパス
@@ -430,6 +431,19 @@ class FileTools:
         Returns:
             ファイルの内容
         """
+        # まずDuck FSを試行
+        duck_fs_error = None
+        try:
+            result = duck_fs.read(file_path)
+            return result.content
+        except DuckFileSystemError as e:
+            duck_fs_error = e
+            print(f"[DEBUG] Duck FSエラー: {str(e)}")
+        except Exception as e:
+            duck_fs_error = e
+            print(f"[DEBUG] Duck FS予期外エラー: {str(e)}")
+        
+        # Duck FSが失敗した場合、フォールバック処理を実行
         try:
             path = self._validate_file_path(file_path)
             self._validate_file_size(path)
@@ -446,18 +460,21 @@ class FileTools:
             
             # ファイル読み取りを試行
             try:
-                with open(path, 'r', encoding=encoding) as f:
-                    return f.read()
+                with open(path, 'r', encoding=encoding, errors='replace') as f:
+                    content = f.read()
+                print(f"[DEBUG] フォールバック読み取り成功: {len(content)} chars")
+                return content
             except UnicodeDecodeError:
                 # 指定されたエンコーディングで失敗した場合、フォールバック試行
                 return self._read_with_fallback_encoding(path, encoding)
                 
-        except Exception as e:
-            raise FileOperationError(f"ファイル読み取りに失敗しました: {e}")
+        except Exception as fallback_error:
+            # 両方失敗した場合は両方のエラーを報告
+            raise FileOperationError(f"Duck Keeper読み取りエラー: {duck_fs_error}, フォールバック読み取りエラー: {fallback_error}")
     
     def write_file(self, file_path: str, content: str, encoding: Optional[str] = None, create_dirs: bool = True) -> Dict[str, Any]:
         """
-        ファイルに書き込み（エンコーディング自動選択対応）
+        ファイルに書き込み（Duck Keeper統合版）
         
         Args:
             file_path: ファイルパス
@@ -469,38 +486,56 @@ class FileTools:
             操作結果の情報
         """
         try:
-            path = self._validate_file_path(file_path)
+            # Duck FSを使用した安全な書き込み
+            result = duck_fs.write(file_path, content, backup=self.backup_enabled)
             
-            # エンコーディングが指定されていない場合は適切なエンコーディングを選択
-            if encoding is None:
-                encoding = self._get_default_encoding()
-            
-            # バックアップの作成
-            backup_path = self._create_backup(path)
-            
-            # 親ディレクトリの作成
-            if create_dirs:
-                path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # ファイルに書き込み
-            with open(path, 'w', encoding=encoding) as f:
-                f.write(content)
-            
-            # 結果情報
-            stat = path.stat()
-            result = {
-                'success': True,  # テスト互換性のため追加
-                'path': str(path),
-                'size': stat.st_size,
-                'backup_created': backup_path is not None,
-                'backup_path': str(backup_path) if backup_path else None,
-                'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            # 既存API互換性のための結果変換
+            return {
+                'success': result.success,
+                'path': result.path,
+                'size': result.bytes_written,
+                'backup_created': result.backup_path is not None,
+                'backup_path': result.backup_path,
+                'modified': result.timestamp.isoformat(),
             }
             
-            return result
-            
+        except DuckFileSystemError as e:
+            raise FileOperationError(f"Duck Keeper書き込みエラー: {str(e)}")
         except Exception as e:
-            raise FileOperationError(f"ファイル書き込みに失敗しました: {e}")
+            # フォールバック: 既存の書き込み方式
+            try:
+                path = self._validate_file_path(file_path)
+                
+                # エンコーディングが指定されていない場合は適切なエンコーディングを選択
+                if encoding is None:
+                    encoding = self._get_default_encoding()
+                
+                # バックアップの作成
+                backup_path = self._create_backup(path)
+                
+                # 親ディレクトリの作成
+                if create_dirs:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # ファイルに書き込み
+                with open(path, 'w', encoding=encoding) as f:
+                    f.write(content)
+                
+                # 結果情報
+                stat = path.stat()
+                result = {
+                    'success': True,  # テスト互換性のため追加
+                    'path': str(path),
+                    'size': stat.st_size,
+                    'backup_created': backup_path is not None,
+                    'backup_path': str(backup_path) if backup_path else None,
+                    'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                }
+                
+                return result
+                
+            except Exception as fallback_error:
+                raise FileOperationError(f"ファイル書き込みに失敗しました: {str(fallback_error)}")
     
     def create_directory(self, directory_path: str, parents: bool = True) -> Dict[str, Any]:
         """
@@ -577,9 +612,47 @@ class FileTools:
         except Exception as e:
             raise FileOperationError(f"ファイル削除に失敗しました: {e}")
     
+    def read_file_range(self, file_path: str, start_line: int, end_line: int) -> str:
+        """
+        ファイルの指定行範囲を読み取り（Duck Keeper統合版）
+        
+        Args:
+            file_path: ファイルパス
+            start_line: 開始行番号（1から始まる）
+            end_line: 終了行番号（包含）
+        
+        Returns:
+            指定範囲の内容
+        """
+        try:
+            result = duck_fs.read_range(file_path, start_line, end_line)
+            return result.content
+        except DuckFileSystemError as e:
+            raise FileOperationError(f"Duck Keeper範囲読み取りエラー: {str(e)}")
+        except Exception as e:
+            raise FileOperationError(f"範囲読み取りに失敗しました: {str(e)}")
+    
+    def get_file_summary(self, file_path: str) -> str:
+        """
+        大型ファイルの構造要約を取得（Duck Keeper統合版）
+        
+        Args:
+            file_path: ファイルパス
+        
+        Returns:
+            ファイルの構造要約
+        """
+        try:
+            result = duck_fs.get_summary(file_path)
+            return result.content
+        except DuckFileSystemError as e:
+            raise FileOperationError(f"Duck Keeper要約生成エラー: {str(e)}")
+        except Exception as e:
+            raise FileOperationError(f"要約生成に失敗しました: {str(e)}")
+    
     def get_file_info(self, file_path: str) -> Dict[str, Any]:
         """
-        ファイル情報を取得
+        ファイル情報を取得（Duck Keeper統合版）
         
         Args:
             file_path: ファイルパス
@@ -588,27 +661,53 @@ class FileTools:
             ファイル情報
         """
         try:
-            path = Path(file_path).resolve()
-            
-            if not path.exists():
-                raise FileOperationError(f"ファイルが存在しません: {file_path}")
-            
-            stat = path.stat()
+            # Duck FSの読み取り機能で詳細情報を取得
+            result = duck_fs.read(file_path)
             
             return {
-                'name': path.name,
-                'path': str(path),
-                'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                'created': datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                'is_file': path.is_file(),
-                'is_directory': path.is_dir(),
-                'extension': path.suffix,
-                'parent': str(path.parent),
+                'name': Path(result.path).name,
+                'path': result.path,
+                'size': result.total_size_bytes,
+                'read_percentage': result.read_percentage,
+                'file_type': result.file_type,
+                'encoding': result.encoding,
+                'is_truncated': result.is_truncated,
+                'modified': result.metadata.get('modified_time', '').isoformat() if result.metadata.get('modified_time') else '',
+                'created': result.metadata.get('created_time', '').isoformat() if result.metadata.get('created_time') else '',
+                'is_file': True,
+                'is_directory': False,
+                'extension': result.metadata.get('file_extension', ''),
+                'parent': str(Path(result.path).parent),
+                'mime_type': result.metadata.get('mime_type', 'unknown'),
+                'validation_warnings': result.metadata.get('validation_warnings', [])
             }
             
+        except DuckFileSystemError as e:
+            # フォールバック: 従来の方式
+            try:
+                path = Path(file_path).resolve()
+                
+                if not path.exists():
+                    raise FileOperationError(f"ファイルが存在しません: {file_path}")
+                
+                stat = path.stat()
+                
+                return {
+                    'name': path.name,
+                    'path': str(path),
+                    'size': stat.st_size,
+                    'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    'created': datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    'is_file': path.is_file(),
+                    'is_directory': path.is_dir(),
+                    'extension': path.suffix,
+                    'parent': str(path.parent),
+                    'duck_keeper_error': str(e)
+                }
+            except Exception as fallback_error:
+                raise FileOperationError(f"ファイル情報の取得に失敗しました: {str(fallback_error)}")
         except Exception as e:
-            raise FileOperationError(f"ファイル情報の取得に失敗しました: {e}")
+            raise FileOperationError(f"ファイル情報の取得に失敗しました: {str(e)}")
 
 
 # グローバルなファイルツールインスタンス

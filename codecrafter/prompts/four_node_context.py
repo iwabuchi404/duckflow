@@ -168,6 +168,10 @@ class UnderstandingResult:
     information_needs: List[str]         # 必要な情報
     confidence: float                    # 理解信頼度
     complexity_assessment: str           # 複雑度評価
+    # 5ノードアーキテクチャ用の新フィールド
+    task_profile_type: Optional[Any] = None      # TaskProfileType (циркулярインポート回避のためAny)
+    content_structure_plan: Dict[str, Any] = field(default_factory=dict)  # コンテンツ構造計画
+    extracted_targets: List[str] = field(default_factory=list)  # 抽出されたターゲット
 
 
 @dataclass

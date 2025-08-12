@@ -118,6 +118,16 @@ class PromptSmithConfig(BaseModel):
     target_ai: PromptSmithTargetAIConfig = Field(default_factory=PromptSmithTargetAIConfig, description="被評価AI設定")
 
 
+class DuckKeeperConfig(BaseModel):
+    """Duck Keeper設定クラス"""
+    
+    allowed_extensions: List[str] = Field(default_factory=lambda: [".py", ".md", ".json", ".yaml", ".yml", ".txt", ".csv"], description="許可される拡張子")
+    directory_blacklist: List[str] = Field(default_factory=lambda: [".git", ".idea", "node_modules", "__pycache__"], description="除外ディレクトリ")
+    enforce_workspace_boundary: bool = Field(default=True, description="ワークスペース境界の強制")
+    respect_gitignore: bool = Field(default=True, description=".gitignoreの尊重")
+    max_file_read_tokens: int = Field(default=8000, description="ファイル読み取り最大トークン数")
+
+
 class Config(BaseModel):
     """メイン設定クラス"""
     
@@ -130,6 +140,7 @@ class Config(BaseModel):
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="記憶管理設定")
     summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig, description="要約用LLM設定")
     promptsmith: Optional[PromptSmithConfig] = Field(default=None, description="PromptSmith設定")
+    duck_keeper: DuckKeeperConfig = Field(default_factory=DuckKeeperConfig, description="Duck Keeper設定")
 
 
 class ConfigManager:

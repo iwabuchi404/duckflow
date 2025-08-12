@@ -24,9 +24,13 @@ from ..state.agent_state import (
     WorkspaceInfo,
     TaskStep,
 )
+from ..state.pecking_order import Task, TaskStatus, PeckingOrderManager
 from ..tools.file_tools import file_tools, FileOperationError
 from ..tools.rag_tools import rag_tools, RAGToolError
 from ..tools.shell_tools import shell_tools, ShellExecutionError, ShellSecurityError
+from ..tools.file_discovery_tools import file_discovery_tools, FileDiscoveryResult
+# Duck Keeperシステム統合（ステップ4対応）
+from ..keeper import duck_fs, duck_keeper, FileReadResult, DuckFileSystemError
 from ..prompts.four_node_compiler import FourNodePromptCompiler
 from ..prompts.four_node_context import (
     FourNodePromptContext, NodeType, NextAction, RiskLevel,
@@ -37,26 +41,28 @@ from ..prompts.four_node_context import (
 from ..ui.rich_ui import rich_ui
 from .routing_engine import RoutingEngine
 from .four_node_helpers import FourNodeHelpers
+from .response_generation_node import response_generator
 from ..services import llm_service, task_objective_manager, TaskObjective, SatisfactionEvaluation
 
 
 class FourNodeOrchestrator:
     """
-    4ノード統合アーキテクチャ - 情報伝達ロスを防ぐシンプルなオーケストレーター
+    5ノード統合アーキテクチャ - LLM処理集約と決定論的応答生成
     
-    4つのノード構成:
-    1. 理解・計画ノード (Understanding & Planning)
+    5つのノード構成:
+    1. 理解・計画ノード (Understanding & Planning) - LLM集約
     2. 情報収集ノード (Information Gathering)  
-    3. 安全実行ノード (Safe Execution)
+    3. 安全実行ノード (Safe Execution) - 決定論的
     4. 評価・継続ノード (Evaluation & Continuation)
+    5. 応答生成ノード (Response Generation) - 決定論的
     """
     
     def __init__(self, state: AgentState):
         """
-        4ノードオーケストレーターを初期化
+        5ノードオーケストレーターを初期化
         
         Args:
-            state: 既存のAgentState（7ノード版からの移行対応）
+            state: 既存のAgentState
         """
         self.state = state
         self.routing_engine = RoutingEngine()
@@ -159,19 +165,20 @@ class FourNodeOrchestrator:
             rich_ui.print_message("[CONV_DEBUG] conversation_history is empty or not found", "info")
     
     def _build_graph(self) -> StateGraph:
-        """4ノード構成のグラフを構築"""
+        """5ノード構成のグラフを構築"""
         workflow = StateGraph(AgentState)
         
-        # 4ノード定義
+        # 5ノード定義
         workflow.add_node("理解・計画", self._understanding_planning_node)
         workflow.add_node("情報収集", self._information_gathering_node)
         workflow.add_node("安全実行", self._safe_execution_node)
         workflow.add_node("評価・継続", self._evaluation_continuation_node)
+        workflow.add_node("応答生成", self._response_generation_node)
         
         # エントリーポイント
         workflow.set_entry_point("理解・計画")
         
-        # フロー定義（シンプル化された分岐）
+        # フロー定義（5ノード対応）
         workflow.add_conditional_edges(
             "理解・計画",
             self._after_understanding_planning,
@@ -201,9 +208,12 @@ class FourNodeOrchestrator:
             {
                 "continue": "理解・計画",
                 "retry": "理解・計画",
+                "response": "応答生成",  # 新しい分岐
                 "complete": END,
             },
         )
+        
+        workflow.add_edge("応答生成", END)
         
         return workflow.compile()
     
@@ -281,6 +291,9 @@ class FourNodeOrchestrator:
                     self._initialize_task_objective_from_state(state_obj)
                 
                 understanding_result = self._execute_initial_planning(state_obj)
+            
+            # The Pecking Order の構築・更新
+            self._build_or_update_pecking_order(state_obj, understanding_result, is_continuation)
             
             # 結果の保存
             self.four_node_context.understanding = understanding_result
@@ -364,6 +377,14 @@ class FourNodeOrchestrator:
             state_obj.collected_context = state_obj.collected_context or {}
             state_obj.collected_context['gathered_info'] = self._serialize_gathered_info(gathered_info)
             
+            # 重要: collected_contextにgathered_info詳細を保存（応答生成ノードで使用）
+            state_obj.collected_context['gathered_info_detailed'] = {
+                'collected_files': {path: {'content': fc.content, 'size': fc.size, 'path': path} 
+                                   for path, fc in gathered_info.collected_files.items()},
+                'file_count': len(gathered_info.collected_files)
+            }
+            print(f"[GATHERED_INFO_DEBUG] collected_contextにgathered_info設定: {len(gathered_info.collected_files)}個のファイル")
+            
             rich_ui.print_success(f"情報収集完了: {len(collected_files)}ファイル, {len(rag_results)}件のRAG結果")
             
             return state_obj
@@ -441,13 +462,14 @@ class FourNodeOrchestrator:
     
     def _evaluation_continuation_node(self, state: Any) -> AgentState:
         """
-        ノード4: 評価・継続ノード（Phase 2-3: 調査タスク対応）
+        ノード4: 評価・継続ノード（Phase 2-3: 調査タスク対応）+ Duck Pacemaker統合
         
         責務:
         - 実行結果または調査結果の評価・検証
         - エラーの分析と修正提案
         - 次のアクションの決定
         - タスク完了判定
+        - Duck Pacemakerによるバイタルサイン更新
         """
         state_obj = AgentState.parse_obj(state) if isinstance(state, dict) else state
         
@@ -455,6 +477,9 @@ class FourNodeOrchestrator:
             # ノード状態の更新
             state_obj.update_graph_state(current_node="評価・継続", add_to_path="評価・継続")
             self.four_node_context.current_node = NodeType.EVALUATION
+            
+            # Duck Pacemaker: バイタルサインの更新
+            self._update_duck_pacemaker(state_obj)
             
             rich_ui.print_step("[評価・継続] フェーズ開始")
             
@@ -479,7 +504,7 @@ class FourNodeOrchestrator:
                 # 蓄積された結果を更新
                 self.task_objective.accumulated_results.update({
                     'execution_result': execution_result.model_dump() if hasattr(execution_result, 'model_dump') else str(execution_result),
-                    'gathered_info': gathered_info.model_dump() if gathered_info and hasattr(gathered_info, 'model_dump') else str(gathered_info),
+                    'gathered_info': self._serialize_gathered_info(gathered_info) if gathered_info else {},
                     'understanding': understanding_result.model_dump() if hasattr(understanding_result, 'model_dump') else str(understanding_result)
                 })
                 
@@ -600,23 +625,30 @@ class FourNodeOrchestrator:
             state_obj.collected_context = state_obj.collected_context or {}
             state_obj.collected_context['evaluation_result'] = self._serialize_evaluation_result(evaluation_result)
             
-            # 7. 最終的なユーザー応答の生成
-            final_response = self._generate_final_response(evaluation_result, understanding_result, execution_result)
-            
-            # ファイル内容が収集されている場合は、それも含めて応答
-            if (self.four_node_context.gathered_info and 
-                self.four_node_context.gathered_info.collected_files):
-                rich_ui.print_message(f"ファイル応答生成中: {len(self.four_node_context.gathered_info.collected_files)}件のファイル", "info")
-                file_content_response = self._generate_file_content_response(
-                    self.four_node_context.gathered_info.collected_files,
-                    understanding_result
-                )
-                final_response = file_content_response + "\n\n" + final_response
-                rich_ui.print_message("ファイル内容を含む応答を生成しました", "info")
+            # 7. 完了判定と応答生成の分岐
+            if next_action == NextAction.COMPLETE:
+                # 完了時は応答生成ノードへ移行
+                rich_ui.print_message("✅ タスク完了 - 応答生成ノードへ移行", "info")
+                # 評価結果を状態に保存して応答生成ノードで利用
+                state_obj.collected_context['final_evaluation'] = evaluation_result
             else:
-                rich_ui.print_warning("収集されたファイル情報が見つかりません")
-            
-            state_obj.add_message("assistant", final_response)
+                # 継続時は従来通りの応答生成（後方互換性）
+                final_response = self._generate_final_response(evaluation_result, understanding_result, execution_result)
+                
+                # ファイル内容が収集されている場合は、それも含めて応答
+                if (self.four_node_context.gathered_info and 
+                    self.four_node_context.gathered_info.collected_files):
+                    rich_ui.print_message(f"ファイル応答生成中: {len(self.four_node_context.gathered_info.collected_files)}件のファイル", "info")
+                    file_content_response = self._generate_file_content_response(
+                        self.four_node_context.gathered_info.collected_files,
+                        understanding_result
+                    )
+                    final_response = file_content_response + "\n\n" + final_response
+                    rich_ui.print_message("ファイル内容を含む応答を生成しました", "info")
+                else:
+                    rich_ui.print_warning("収集されたファイル情報が見つかりません")
+                
+                state_obj.add_message("assistant", final_response)
             
             action_text = {
                 NextAction.COMPLETE: "完了",
@@ -680,15 +712,20 @@ class FourNodeOrchestrator:
             if not gathered_info:
                 return "complete"
             
-            # 読み取り専用操作の場合は実行をスキップして直接評価へ
+            # 読み取り専用操作でもLLM分析が含まれている場合は実行フェーズへ
             if understanding_result:
-                is_read_only = all(tool in ['read_file', 'list_files', 'get_file_info'] 
-                                  for tool in understanding_result.execution_plan.required_tools)
-                if is_read_only:
+                required_tools = understanding_result.execution_plan.required_tools
+                read_only_tools = ['read_file', 'list_files', 'get_file_info', 'llm_analysis']
+                is_read_only = all(tool in read_only_tools for tool in required_tools)
+                has_analysis = 'llm_analysis' in required_tools
+                
+                if is_read_only and not has_analysis:
                     rich_ui.print_message("読み取り専用操作のため実行フェーズをスキップし、評価ノードへ", "info")
                     # 実行結果を模擬的に作成
                     self._create_mock_execution_result_for_read_only(understanding_result, gathered_info)
                     return "evaluate"  # 評価ノードへ
+                elif has_analysis:
+                    rich_ui.print_message("分析処理が必要なため実行フェーズへ", "info")
             
             # 重大な情報ギャップがある場合は再計画
             if gathered_info.information_gaps and len(gathered_info.information_gaps) > 2:
@@ -702,17 +739,24 @@ class FourNodeOrchestrator:
             return "complete"
     
     def _after_evaluation_continuation(self, state: Any) -> str:
-        """評価・継続ノード後の分岐判定"""
+        """評価・継続ノード後の分岐判定 + Duck Pacemaker統合"""
         state_obj = AgentState.parse_obj(state) if isinstance(state, dict) else state
         
         try:
+            # Duck Pacemaker: 介入チェック
+            intervention = state_obj.needs_duck_intervention()
+            if intervention["required"]:
+                rich_ui.print_warning(f"🦆 Duck Pacemaker介入: {intervention['reason']}")
+                return self._handle_duck_intervention(state_obj, intervention)
+            
             evaluation_result = self.four_node_context.evaluation
             if not evaluation_result:
                 return "complete"
             
-            # 次のアクションに基づく分岐
+            # 次のアクションに基づく分岐（5ノード対応）
             if evaluation_result.next_action == NextAction.COMPLETE:
-                return "complete"
+                # タスク完了時は応答生成ノードへ
+                return "response"
             elif evaluation_result.next_action == NextAction.CONTINUE:
                 # 継続計画で4ノードコンテキストを更新
                 if evaluation_result.continuation_plan:
@@ -723,11 +767,207 @@ class FourNodeOrchestrator:
                 self._prepare_retry_context(evaluation_result.error_analysis)
                 return "retry"
             else:
-                return "complete"
+                return "response"
                 
         except Exception as e:
             rich_ui.print_error(f"評価・継続後の分岐判定エラー: {e}")
             return "complete"
+    
+    def _response_generation_node(self, state: Any) -> AgentState:
+        """
+        ノード5: 応答生成ノード - TaskProfileテンプレートによる決定論的応答生成
+        
+        責務:
+        - TaskProfileに基づいた構造化レポート生成
+        - 収集データの機械的抽出・整理
+        - LLM非依存の予測可能な応答作成
+        """
+        state_obj = AgentState.parse_obj(state) if isinstance(state, dict) else state
+        
+        try:
+            # ノード状態の更新
+            state_obj.update_graph_state(current_node="応答生成", add_to_path="応答生成")
+            
+            rich_ui.print_step("[応答生成] フェーズ開始")
+            
+            # 応答生成ノードで最終レポートを生成
+            final_response = response_generator.generate_response(state_obj)
+            
+            # 応答をAgentStateに追加
+            state_obj.add_message("assistant", final_response)
+            
+            rich_ui.print_success("[応答生成] 完了")
+            
+            return state_obj
+            
+        except Exception as e:
+            rich_ui.print_error(f"応答生成ノードでエラー: {e}")
+            # フォールバック: シンプルな応答を生成
+            fallback_response = f"## エラーレポート\n\n処理中にエラーが発生しました: {str(e)}\n\n収集された情報は正常に処理されましたが、応答生成でエラーが発生しました。"
+            state_obj.add_message("assistant", fallback_response)
+            return state_obj
+    
+    # ===== Duck Pacemaker メソッド =====
+    
+    def _update_duck_pacemaker(self, state_obj: AgentState) -> None:
+        """Duck Pacemakerのバイタルサインを更新
+        
+        Args:
+            state_obj: AgentState オブジェクト
+        """
+        try:
+            # コンテキストサイズを計算
+            context_size = 0
+            if hasattr(self.four_node_context, 'recent_messages'):
+                for msg in self.four_node_context.recent_messages:
+                    context_size += len(msg.content) if hasattr(msg, 'content') else 0
+            
+            # エラー状況をチェック
+            had_error = (
+                state_obj.error_count > 0 or 
+                any(exec.error for exec in state_obj.tool_executions[-3:]) if state_obj.tool_executions else False
+            )
+            
+            # 進歩状況をチェック（成功したツール実行があるか）
+            is_progress = (
+                any(not exec.error for exec in state_obj.tool_executions[-3:]) if state_obj.tool_executions 
+                else True  # デフォルトは進歩ありと判定
+            )
+            
+            # 自信度スコア（簡単な実装、実際はより詳細な評価が必要）
+            confidence_score = 0.9 if not had_error else 0.6
+            
+            # バイタルサインを更新
+            state_obj.update_duck_vitals(
+                confidence_score=confidence_score,
+                had_error=had_error,
+                is_progress=is_progress,
+                context_size=context_size
+            )
+            
+            # バイタル状態をUIに表示
+            status_display = state_obj.get_duck_status_display()
+            rich_ui.show_duck_status(status_display)
+            
+        except Exception as e:
+            rich_ui.print_warning(f"Duck Pacemaker更新エラー: {e}")
+    
+    def _handle_duck_intervention(self, state_obj: AgentState, intervention: Dict[str, Any]) -> str:
+        """Duck Pacemakerの介入を処理
+        
+        Args:
+            state_obj: AgentState オブジェクト
+            intervention: 介入情報
+            
+        Returns:
+            次のノード指示
+        """
+        try:
+            action = intervention.get("action", "")
+            priority = intervention.get("priority", "MEDIUM")
+            reason = intervention.get("reason", "不明な理由")
+            
+            if action == "HALT_AND_CONSULT":
+                # 体力切れ - 強制停止してユーザーに相談
+                rich_ui.print_error("🦆💀 Duck Pacemaker: 体力が限界に達しました")
+                rich_ui.print_message(f"理由: {reason}", "warning")
+                rich_ui.print_message("獣医さん（ユーザー）に相談が必要です。現在の状況:", "info")
+                
+                # 健康診断レポート表示
+                self._show_duck_health_report(state_obj, intervention)
+                
+                # ユーザーに選択肢を提示
+                user_decision = self._request_user_intervention(priority="CRITICAL")
+                if user_decision == "halt":
+                    return "complete"
+                else:
+                    # 体力を少し回復させて継続
+                    state_obj.vitals.stamina = max(0.3, state_obj.vitals.stamina + 0.2)
+                    return "continue"
+            
+            elif action == "REPLAN":
+                # 集中力低下 - 再計画
+                rich_ui.print_warning("🦆😵 Duck Pacemaker: 集中力が低下しています")
+                rich_ui.print_message(f"理由: {reason}", "warning")
+                rich_ui.print_message("計画を根本から見直します", "info")
+                
+                # フォーカスを少し回復させる
+                state_obj.vitals.focus = max(0.5, state_obj.vitals.focus + 0.2)
+                return "continue"  # 理解・計画ノードに戻る
+            
+            elif action == "CONSULT_USER":
+                # 自信不足 - ユーザーに相談
+                rich_ui.print_warning("🦆😔 Duck Pacemaker: 自信がなくなっています")
+                rich_ui.print_message(f"理由: {reason}", "warning")
+                
+                # ユーザーに相談
+                user_decision = self._request_user_intervention(priority="MEDIUM")
+                if user_decision == "continue":
+                    # ムードを少し回復させる
+                    state_obj.vitals.mood = max(0.8, state_obj.vitals.mood + 0.1)
+                    return "continue"
+                else:
+                    return "complete"
+            
+            else:
+                # 不明な介入タイプ
+                rich_ui.print_warning(f"🦆❓ Duck Pacemaker: 不明な介入タイプ: {action}")
+                return "complete"
+                
+        except Exception as e:
+            rich_ui.print_error(f"Duck Pacemaker介入処理エラー: {e}")
+            return "complete"
+    
+    def _show_duck_health_report(self, state_obj: AgentState, intervention: Dict[str, Any]) -> None:
+        """Duck健康診断レポートを表示"""
+        try:
+            emojis = state_obj.vitals.get_emoji_status()
+            health_status = state_obj.vitals.get_health_status()
+            vitals_status = intervention.get("vitals_status", health_status)
+            
+            rich_ui.print_message("=" * 50, "info")
+            rich_ui.print_message("🦆 【アヒル健康診断レポート】", "info")
+            rich_ui.print_message("=" * 50, "info")
+            rich_ui.print_message(f"気分 (Mood): {emojis['mood']} {state_obj.vitals.mood:.1%} - {'自信に満ちています' if state_obj.vitals.mood > 0.8 else '少し不安です' if state_obj.vitals.mood > 0.5 else '自信を失っています'}", "info")
+            rich_ui.print_message(f"集中力 (Focus): {emojis['focus']} {state_obj.vitals.focus:.1%} - {'集中できています' if state_obj.vitals.focus > 0.8 else '注意散漫です' if state_obj.vitals.focus > 0.3 else '思考が停滞しています'}", "info")
+            rich_ui.print_message(f"体力 (Stamina): {emojis['stamina']} {state_obj.vitals.stamina:.1%} - {'元気です' if state_obj.vitals.stamina > 0.8 else '疲れ気味です' if state_obj.vitals.stamina > 0.3 else 'ヘトヘトです'}", "info")
+            rich_ui.print_message("=" * 50, "info")
+            rich_ui.print_message(f"総合診断: {vitals_status}", "info")
+            rich_ui.print_message(f"ループ回数: {state_obj.vitals.total_loops}回", "info")
+            rich_ui.print_message(f"エラー回数: {state_obj.vitals.error_count}回", "info")
+            rich_ui.print_message("=" * 50, "info")
+            
+        except Exception as e:
+            rich_ui.print_error(f"健康診断レポート表示エラー: {e}")
+    
+    def _request_user_intervention(self, priority: str = "MEDIUM") -> str:
+        """ユーザーからの介入を要求"""
+        try:
+            if priority == "CRITICAL":
+                rich_ui.print_message("🚨 緊急事態: Duck Pacemakerが危険状態を検出しました", "warning")
+                options = [
+                    "1. 治療方針の指示（詳細指示）",
+                    "2. セカンドオピニオン（代替手法）", 
+                    "3. 安静にする（中断）"
+                ]
+                
+                rich_ui.print_message("どうしますか？", "info")
+                for option in options:
+                    rich_ui.print_message(f"  {option}", "info")
+                
+                # 簡単な実装（実際はより詳細な選択肢処理が必要）
+                user_choice = rich_ui.get_confirmation("処理を継続しますか？", default=False)
+                return "continue" if user_choice else "halt"
+                
+            else:
+                # 中程度の介入
+                rich_ui.print_message("🤔 Duck Pacemaker相談: このまま進んでもよろしいですか？", "warning")
+                user_choice = rich_ui.get_confirmation("続行しますか？", default=True)
+                return "continue" if user_choice else "halt"
+                
+        except Exception as e:
+            rich_ui.print_error(f"ユーザー介入要求エラー: {e}")
+            return "halt"
     
     # ===== 実行メソッド =====
     
@@ -1108,6 +1348,7 @@ class FourNodeOrchestrator:
         except Exception as e:
             return f"ファイル内容の処理中にエラーが発生しました: {e}"
     
+    
     def _summarize_design_doc(self, content: str) -> str:
         """design-doc.mdの内容を要約"""
         try:
@@ -1150,7 +1391,28 @@ class FourNodeOrchestrator:
         return {"summary": result.requirement_analysis}
     
     def _serialize_gathered_info(self, info: GatheredInfo) -> Dict[str, Any]:
-        return {"file_count": len(info.collected_files)}
+        """収集した情報を継続フェーズで使用可能な形でシリアライズ"""
+        serialized_files = {}
+        
+        # FileContentオブジェクトを辞書形式に変換
+        for file_path, file_content in info.collected_files.items():
+            if hasattr(file_content, 'content'):
+                serialized_files[file_path] = {
+                    'content': file_content.content,
+                    'path': file_path,
+                    'encoding': getattr(file_content, 'encoding', 'utf-8'),
+                    'size': getattr(file_content, 'size', len(file_content.content))
+                }
+            else:
+                # 既に辞書形式の場合
+                serialized_files[file_path] = file_content
+        
+        return {
+            "file_count": len(info.collected_files),
+            "collected_files": serialized_files,
+            "rag_results": info.rag_results or [],
+            "project_context": info.project_context.__dict__ if info.project_context else {}
+        }
     
     def _serialize_execution_result(self, result: ExecutionResult) -> Dict[str, Any]:
         return {"success": len(result.execution_errors) == 0}
@@ -1308,6 +1570,16 @@ class FourNodeOrchestrator:
             continuation_context
         )
         
+        # デバッグ: 継続実行でのファイル設定状況を確認
+        rich_ui.print_message(f"[DEBUG継続] improved_files生成: {len(improved_files)}件", "info")
+        
+        # improved_filesが空の場合、既読ファイルから初回対象ファイルを復元
+        if not improved_files and self.four_node_context.gathered_info:
+            original_files = list(self.four_node_context.gathered_info.collected_files.keys())
+            if original_files:
+                improved_files = original_files[:1]  # 最初のファイルを再利用
+                rich_ui.print_message(f"[DEBUG継続] 初回ファイル復元: {improved_files}", "info")
+        
         rich_ui.print_message(f"継続戦略: {execution_plan.get('strategy', '改良実行')}", "info")
         rich_ui.print_message(f"回避戦略: {len(continuation_context.failed_approaches)}件", "info")
         rich_ui.print_message(f"新しい探索ファイル: {len(improved_files)}件", "info")
@@ -1411,59 +1683,59 @@ class FourNodeOrchestrator:
     def _execute_investigation_planning(self, state_obj: AgentState) -> UnderstandingResult:
         """調査計画の立案と実行"""
         
-        # 1. 全ファイルリストを取得
+        # 1. レベル1段階的ファイル探索（制限付き高速スキャン）
         try:
-            # globを使った直接的なファイル取得
-            import glob
-            import os
-            from pathlib import Path
+            rich_ui.print_message("[調査計画] 段階的ファイル探索を開始", "info")
             
-            # 相対パスでglob実行
-            all_files = []
-            search_patterns = [
-                "**/*.py", "**/*.md", "**/*.yaml", "**/*.yml", "**/*.json", 
-                "**/*.txt", "**/*.cfg", "**/*.ini", "**/README*", "**/PROGRESS*"
-            ]
+            # レベル1探索実行
+            discovery_result = file_discovery_tools.level1_shallow_discovery(
+                base_path=".",
+            )
             
-            # デバッグ：現在のディレクトリを確認
-            cwd = os.getcwd()
-            rich_ui.print_message(f"[調査計画] 作業ディレクトリ: {cwd}", "debug")
+            all_files = discovery_result.files
+            rich_ui.print_message(f"[調査計画] レベル1探索完了: {len(all_files)}ファイル発見", "info")
             
-            for pattern in search_patterns:
-                matches = glob.glob(pattern, recursive=True)
-                rich_ui.print_message(f"[調査計画] パターン {pattern}: {len(matches)} マッチ", "debug")
-                for match in matches:
-                    # 絶対パスに変換せずに相対パスのまま保持
-                    relative_path = str(Path(match).as_posix())
-                    if relative_path not in all_files:
-                        all_files.append(relative_path)
+            # 探索結果の状態を保存（後続の段階的探索で使用）
+            state_obj.investigation_plan = all_files[:10]  # 初期調査リストに上位10ファイル
             
-            rich_ui.print_message(f"[調査計画] プロジェクトファイル数: {len(all_files)}", "info")
+            if discovery_result.truncated:
+                rich_ui.print_message(
+                    f"[調査計画] ⚠️  ファイル数制限により切り詰め (実際: {discovery_result.total_found})", 
+                    "warning"
+                )
             
             # デバッグ：最初の数ファイルを表示
             if all_files:
                 rich_ui.print_message(f"[調査計画] サンプルファイル: {all_files[:3]}", "debug")
             
         except Exception as e:
-            rich_ui.print_error(f"[調査計画] ファイルリスト取得エラー: {e}")
+            rich_ui.print_error(f"[調査計画] 段階的探索エラー: {e}")
             import traceback
             rich_ui.print_error(f"[調査計画] エラー詳細: {traceback.format_exc()}")
             
-            # さらなるフォールバック: os.walkを使用
+            # フォールバック: 制限付きの従来方式
             try:
                 import os
+                from pathlib import Path
                 all_files = []
                 for root, dirs, files in os.walk("."):
                     # 除外ディレクトリ
                     dirs[:] = [d for d in dirs if not d.startswith('.') and d not in ['__pycache__', 'node_modules']]
+                    
+                    # 2階層まで制限
+                    depth = len(Path(root).relative_to(Path(".")).parts) 
+                    if depth >= 2:
+                        dirs.clear()  # これ以上深く行かない
                     
                     for file in files:
                         if file.endswith(('.py', '.md', '.yaml', '.yml', '.json', '.txt')):
                             # 相対パスで保持
                             rel_path = os.path.relpath(os.path.join(root, file))
                             all_files.append(rel_path)
-                            
-                rich_ui.print_message(f"[調査計画] フォールバック取得: {len(all_files)}ファイル", "info")
+                
+                # 制限適用
+                all_files = all_files[:30]  # 最大30ファイルに制限
+                rich_ui.print_message(f"[調査計画] フォールバック取得: {len(all_files)}ファイル（制限適用）", "info")
             except Exception as e2:
                 rich_ui.print_error(f"[調査計画] フォールバックもエラー: {e2}")
                 all_files = []
@@ -1571,8 +1843,10 @@ class FourNodeOrchestrator:
     def _generate_alternative_files_for_continuation(self, user_query: str, continuation_context) -> List[str]:
         """継続実行時の代替ファイル探索戦略"""
         
-        # 読み取り済みファイルを抽出
+        # 読み取り済みファイルを抽出（複数ソースから）
         already_read_files = set()
+        
+        # 1. previous_attemptsから抽出
         for attempt in continuation_context.previous_attempts:
             if hasattr(attempt, 'results') and attempt.results:
                 gathered_info = attempt.results.get('gathered_info', {})
@@ -1581,6 +1855,18 @@ class FourNodeOrchestrator:
                     if isinstance(collected_files, dict):
                         already_read_files.update(collected_files.keys())
         
+        # 2. four_node_contextから抽出
+        if self.four_node_context.gathered_info and self.four_node_context.gathered_info.collected_files:
+            already_read_files.update(self.four_node_context.gathered_info.collected_files.keys())
+        
+        # 3. state_obj.collected_contextから抽出
+        if hasattr(self.state, 'collected_context') and self.state.collected_context:
+            gathered_info = self.state.collected_context.get('gathered_info', {})
+            if isinstance(gathered_info, dict) and 'collected_files' in gathered_info:
+                collected_files = gathered_info['collected_files']
+                if isinstance(collected_files, dict):
+                    already_read_files.update(collected_files.keys())
+        
         rich_ui.print_message(f"[継続探索] 読み取り済みファイル: {len(already_read_files)}件", "info")
         
         # 汎用的な代替ファイル探索
@@ -1588,6 +1874,96 @@ class FourNodeOrchestrator:
         
         rich_ui.print_message(f"[継続探索] 新しい候補ファイル: {len(alternative_files)}件", "info")
         return alternative_files[:10]  # 最大10ファイルに制限
+    
+    def _execute_file_discovery_tool(self, tool_name: str, **kwargs) -> Dict[str, Any]:
+        """
+        ファイル探索ツールの実行
+        
+        Args:
+            tool_name: ツール名（explore_directory, find_files_by_name, ripgrep_search）
+            **kwargs: ツール固有の引数
+            
+        Returns:
+            実行結果
+        """
+        try:
+            if tool_name == "explore_directory":
+                path = kwargs.get("path", ".")
+                patterns = kwargs.get("patterns", ["*.py", "*.md", "*.json", "*.yaml"])
+                iteration = kwargs.get("iteration", 1)  # 段階的探索のサポート
+                batch_size = kwargs.get("batch_size", 20)
+                
+                if iteration > 1:
+                    # 段階的探索（2回目以降）
+                    result = file_discovery_tools.level2_iterative_discovery(
+                        target_directory=path,
+                        file_patterns=patterns,
+                        iteration=iteration,
+                        batch_size=batch_size
+                    )
+                else:
+                    # 通常の探索（1回目）
+                    result = file_discovery_tools.level2_targeted_discovery(
+                        target_directory=path,
+                        file_patterns=patterns,
+                        max_files=batch_size,
+                        skip_files=0
+                    )
+                
+                # さらなるファイルがあるかチェック
+                has_more = file_discovery_tools.has_more_files_available(
+                    target_directory=path,
+                    file_patterns=patterns,
+                    current_iteration=iteration,
+                    batch_size=batch_size
+                ) if iteration == 1 else result.truncated
+                
+                return {
+                    "success": True,
+                    "files": result.files,
+                    "total_found": result.total_found,
+                    "search_method": result.search_method,
+                    "truncated": result.truncated,
+                    "has_more": has_more,
+                    "next_iteration": iteration + 1 if has_more else None
+                }
+                
+            elif tool_name == "find_files_by_name":
+                filename = kwargs.get("filename", "")
+                
+                result = file_discovery_tools.find_specific_file(filename)
+                
+                return {
+                    "success": True,
+                    "files": result.files,
+                    "total_found": result.total_found,
+                    "search_method": result.search_method
+                }
+                
+            elif tool_name == "ripgrep_search":
+                query = kwargs.get("query", "")
+                file_pattern = kwargs.get("file_pattern")
+                max_files = kwargs.get("max_files", 10)
+                
+                result = file_discovery_tools.level3_ripgrep_discovery(
+                    search_query=query,
+                    file_pattern=file_pattern,
+                    max_files=max_files
+                )
+                
+                return {
+                    "success": True,
+                    "files": result.files,
+                    "total_found": result.total_found,
+                    "search_method": result.search_method,
+                    "truncated": result.truncated
+                }
+            else:
+                return {"success": False, "error": f"Unknown discovery tool: {tool_name}"}
+                
+        except Exception as e:
+            rich_ui.print_error(f"[ファイル探索] {tool_name}エラー: {e}")
+            return {"success": False, "error": str(e)}
     
     
     def _find_general_alternative_files(self, user_query: str, already_read_files: set) -> List[str]:
@@ -1598,10 +1974,10 @@ class FourNodeOrchestrator:
                 user_query + " [継続実行での代替ファイル探索]"
             )
             
-            # 推定ファイルから読み取り済みを除外
+            # 推定ファイルから読み取り済みを除外し、存在チェックも実行
             alternative_files = []
             for file_path in routing_decision.target_files:
-                if file_path not in already_read_files:
+                if file_path not in already_read_files and os.path.exists(file_path):
                     alternative_files.append(file_path)
             
             return alternative_files
@@ -1852,6 +2228,14 @@ class FourNodeOrchestrator:
             state_obj.collected_context = state_obj.collected_context or {}
             state_obj.collected_context['gathered_info'] = self._serialize_gathered_info(gathered_info)
             
+            # 重要: collected_contextにgathered_info詳細を保存（応答生成ノードで使用）
+            state_obj.collected_context['gathered_info_detailed'] = {
+                'collected_files': {path: {'content': fc.content, 'size': fc.size, 'path': path} 
+                                   for path, fc in gathered_info.collected_files.items()},
+                'file_count': len(gathered_info.collected_files)
+            }
+            print(f"[GATHERED_INFO_DEBUG] collected_contextにgathered_info設定: {len(gathered_info.collected_files)}個のファイル")
+            
             return state_obj
             
         except Exception as e:
@@ -2046,3 +2430,121 @@ class FourNodeOrchestrator:
         except Exception:
             pass
         return None
+    
+    # ===== The Pecking Order 関連メソッド =====
+    
+    def _build_or_update_pecking_order(self, state_obj: AgentState, understanding_result, is_continuation: bool) -> None:
+        """The Pecking Order（階層的タスク管理）を構築または更新する
+        
+        Args:
+            state_obj: AgentState
+            understanding_result: UnderstandingResult
+            is_continuation: 継続実行かどうか
+        """
+        try:
+            # 最新のユーザーメッセージを取得
+            latest_user_message = self._get_latest_user_message()
+            if not latest_user_message:
+                return
+                
+            # LLMService呼び出しでタスク構造を分析
+            task_structure = self.llm_service.analyze_task_hierarchy(
+                user_request=latest_user_message,
+                context=understanding_result.requirement_analysis if understanding_result else "",
+                is_continuation=is_continuation
+            )
+            
+            if not task_structure:
+                rich_ui.print_warning("タスク構造の分析に失敗しました")
+                return
+            
+            # 新規または既存タスクツリーの処理
+            if not state_obj.task_tree or not is_continuation:
+                # 新規タスクツリーの作成
+                main_goal = task_structure.get('main_goal', latest_user_message[:100])
+                root_description = task_structure.get('root_task', latest_user_message)
+                
+                root_task = state_obj.initialize_pecking_order(main_goal, root_description)
+                rich_ui.print_step(f"🦆 The Pecking Order 初期化: {main_goal}")
+                
+                # サブタスクの追加
+                sub_tasks = task_structure.get('sub_tasks', [])
+                for i, sub_task_desc in enumerate(sub_tasks[:5]):  # 最大5個まで
+                    sub_task = state_obj.add_sub_task(root_task.id, sub_task_desc, priority=i)
+                    if sub_task:
+                        rich_ui.print_message(f"  └─ {sub_task_desc[:50]}...", "info")
+                
+            else:
+                # 既存タスクツリーの更新
+                if state_obj.task_tree:
+                    # 現在のタスクを取得
+                    current_task = state_obj.get_current_task()
+                    if current_task:
+                        rich_ui.print_step(f"🔄 現在のタスク: {current_task.description}")
+                    
+                    # 新しいサブタスクがあれば追加
+                    new_sub_tasks = task_structure.get('additional_sub_tasks', [])
+                    if new_sub_tasks and state_obj.task_tree:
+                        for sub_task_desc in new_sub_tasks[:3]:  # 最大3個まで
+                            sub_task = state_obj.add_sub_task(state_obj.task_tree.id, sub_task_desc)
+                            if sub_task:
+                                rich_ui.print_message(f"  ➕ 追加: {sub_task_desc[:50]}...", "info")
+            
+            # The Pecking Order の状態表示
+            if state_obj.task_tree:
+                status_summary = state_obj.get_pecking_order_status()
+                completion_rate = status_summary.get('completion_rate', 0.0)
+                total_tasks = status_summary.get('total_tasks', 0)
+                
+                rich_ui.print_message(f"📋 タスク階層: {total_tasks}個のタスク（完了率: {completion_rate:.1%}）", "info")
+                
+                # デバッグモードの場合は詳細表示
+                if state_obj.debug_mode:
+                    rich_ui.print_step("🐛 The Pecking Order 詳細:")
+                    hierarchy_str = state_obj.get_pecking_order_string()
+                    rich_ui.print_message(hierarchy_str, "debug")
+            
+        except Exception as e:
+            rich_ui.print_error(f"The Pecking Order 構築エラー: {e}")
+            # エラーが発生してもプロセスは続行
+    
+    def _update_current_task_status(self, state_obj: AgentState, status: TaskStatus, result: Optional[str] = None, error: Optional[str] = None) -> None:
+        """現在のタスクの状態を更新する
+        
+        Args:
+            state_obj: AgentState
+            status: 新しいタスク状態
+            result: 実行結果（任意）
+            error: エラーメッセージ（任意）
+        """
+        try:
+            current_task = state_obj.get_current_task()
+            if not current_task:
+                return
+            
+            old_status = current_task.status
+            current_task.update_status(status, result, error)
+            
+            # 状態変更の通知
+            status_symbols = {
+                TaskStatus.PENDING: "⏳",
+                TaskStatus.IN_PROGRESS: "🔄",
+                TaskStatus.COMPLETED: "✅",
+                TaskStatus.FAILED: "❌"
+            }
+            
+            rich_ui.print_message(
+                f"タスク状態更新: {status_symbols[old_status]} → {status_symbols[status]} {current_task.description[:50]}...",
+                "info"
+            )
+            
+            # 完了時は次のタスクに移行
+            if status in [TaskStatus.COMPLETED, TaskStatus.FAILED]:
+                next_task = state_obj.start_next_task()
+                if next_task:
+                    rich_ui.print_message(f"次のタスク開始: {next_task.description[:50]}...", "info")
+                else:
+                    rich_ui.print_success("🎉 全てのタスクが完了しました！")
+            
+        except Exception as e:
+            rich_ui.print_error(f"タスク状態更新エラー: {e}")

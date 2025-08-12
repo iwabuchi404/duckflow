@@ -13,6 +13,7 @@ from ..base.llm_client import llm_manager
 from ..state.agent_state import AgentState
 from ..tools.file_tools import file_tools
 from ..tools.rag_tools import rag_tools
+from ..ui.rich_ui import rich_ui
 from ..prompts.four_node_context import (
     UnderstandingResult, GatheredInfo, ExecutionResult, EvaluationResult,
     FileContent, ProjectContext, RiskAssessment, ApprovalStatus, ToolResult,
@@ -230,37 +231,73 @@ class FourNodeHelpers:
             rich_ui.print_message(f"[DEBUG] 実行計画のファイル: {understanding_result.execution_plan.expected_files}", "info")
             
             # 実行計画で指定されたファイルを収集
-            for file_path in understanding_result.execution_plan.expected_files:
+            raw_target_files = understanding_result.execution_plan.expected_files or []
+            
+            # 重複パスの除去処理
+            target_files = self._deduplicate_file_paths(raw_target_files)
+            
+            # デバッグ情報
+            if len(raw_target_files) != len(target_files):
+                rich_ui.print_message(f"[FILE_DEDUP] 重複除去: {len(raw_target_files)} → {len(target_files)} ファイル", "info")
+                removed_duplicates = set(raw_target_files) - set(target_files)
+                rich_ui.print_message(f"[FILE_DEDUP] 除去されたファイル: {list(removed_duplicates)}", "warning")
+            
+            # 対象ファイルが含まれているかチェック（詳細デバッグ）
+            rich_ui.print_message(f"[FILE_COLLECTION_DEBUG] 収集対象ファイル: {target_files}", "info")
+            
+            # ターゲットファイル検査（test_step2d_graph.pyが含まれているかチェック）
+            test_file_pattern = "test_step2d_graph"
+            target_file_found = any(test_file_pattern in str(f) for f in target_files)
+            rich_ui.print_message(f"[FILE_COLLECTION_CRITICAL] '{test_file_pattern}' 含有確認: {target_file_found}", "warning" if not target_file_found else "info")
+            
+            if not target_file_found:
+                rich_ui.print_message(f"[FILE_COLLECTION_ERROR] ターゲットファイルが見つかりません！計画に問題があります", "error")
+            
+            for file_path in target_files:
                 try:
                     rich_ui.print_message(f"ファイル読み取り中: {file_path}", "info")
                     
+                    # パスの正規化（バックスラッシュエスケープ問題の修正）
+                    from pathlib import Path
+                    import os
+                    # バックスラッシュエスケープを修正
+                    safe_path = file_path.replace('\\\\', '\\')  # 二重バックスラッシュを単一に
+                    normalized_path = str(Path(safe_path).resolve())
+                    
                     # ファイル読み取り
-                    content = file_tools.read_file(file_path)
+                    content = file_tools.read_file(normalized_path)
                     if content:
                         # ファイル情報の取得
                         try:
-                            file_info = file_tools.get_file_info(file_path)
+                            file_info = file_tools.get_file_info(normalized_path)
                             size = file_info.get('size', len(content))
                         except:
                             size = len(content)
                         
                         collected_files[file_path] = FileContent(
-                            path=file_path,
+                            path=normalized_path,
                             content=content[:8000],  # 最大8000文字に制限（design-doc.mdは長い）
                             encoding="utf-8",  # 簡略化
                             size=size,
                             last_modified=datetime.now(),  # 簡略化
                             relevance_score=0.9  # 計画で指定されたファイルは高い関連度
                         )
-                        rich_ui.print_success(f"ファイル読み取り完了: {file_path} ({len(content)}文字)")
+                        rich_ui.print_success(f"ファイル読み取り完了: {normalized_path} ({len(content)}文字)")
                     else:
-                        rich_ui.print_warning(f"ファイル {file_path} は空です")
+                        rich_ui.print_warning(f"ファイル {normalized_path} は空です")
                         
                 except Exception as e:
                     rich_ui.print_warning(f"ファイル {file_path} の読み取りに失敗: {e}")
                     # 読み取りに失敗しても、空の内容で追加
+                    # パスの正規化を試行
+                    try:
+                        from pathlib import Path
+                        normalized_path = str(Path(file_path).resolve())
+                    except:
+                        normalized_path = file_path
+                    
                     collected_files[file_path] = FileContent(
-                        path=file_path,
+                        path=normalized_path,
                         content=f"[読み取りエラー: {str(e)}]",
                         encoding="utf-8",
                         size=0,
@@ -402,11 +439,14 @@ class FourNodeHelpers:
             risk_factors = []
             overall_risk = RiskLevel.LOW
             
+            # 読み取り専用ツールのリスト
+            read_only_tools = ['read_file', 'list_files', 'get_file_info', 'llm_analysis']
+            
             # ツールベースのリスク評価
             for tool_name in understanding_result.execution_plan.required_tools:
-                if tool_name in ['read_file', 'list_files', 'get_file_info']:
+                if tool_name in read_only_tools:
                     # 読み取り専用操作は低リスク
-                    risk_factors.append(f"ファイル読み取り: {tool_name}")
+                    risk_factors.append(f"ファイル読み取り・分析: {tool_name}")
                     # overall_riskは変更しない（LOW のまま）
                 elif tool_name in ['write_file', 'create_directory']:
                     risk_factors.append(f"ファイルシステム変更: {tool_name}")
@@ -416,7 +456,7 @@ class FourNodeHelpers:
                     overall_risk = RiskLevel.HIGH
             
             # ファイル変更のリスク評価（読み取り専用の場合はスキップ）
-            is_read_only = all(tool in ['read_file', 'list_files', 'get_file_info'] 
+            is_read_only = all(tool in read_only_tools
                               for tool in understanding_result.execution_plan.required_tools)
             
             if not is_read_only:
@@ -431,12 +471,15 @@ class FourNodeHelpers:
                 overall_risk = RiskLevel.HIGH
                 risk_factors.append("高複雑度タスク")
             
+            # 読み取り専用操作は承認不要
+            approval_required = False if is_read_only else overall_risk in [RiskLevel.MEDIUM, RiskLevel.HIGH]
+            
             return RiskAssessment(
                 overall_risk=overall_risk,
                 risk_factors=risk_factors,
                 mitigation_measures=self._suggest_mitigation_measures(risk_factors),
-                approval_required=overall_risk in [RiskLevel.MEDIUM, RiskLevel.HIGH],
-                reasoning=f"リスクレベル {overall_risk.value}: {len(risk_factors)}個の要因"
+                approval_required=approval_required,
+                reasoning=f"リスクレベル {overall_risk.value}: {len(risk_factors)}個の要因" + (" (読み取り専用)" if is_read_only else "")
             )
             
         except Exception as e:
@@ -526,24 +569,80 @@ class FourNodeHelpers:
         return None
     
     def _parse_understanding_response(self, response: str, routing_decision: Dict[str, Any], is_retry: bool) -> UnderstandingResult:
-        """理解プロンプトのレスポンスを解析"""
+        """TaskProfile分類と実行計画を作成（5ノードアーキテクチャ対応）"""
         
-        # RoutingEngineの結果に基づいて適切な計画を作成
+        # RoutingEngineの結果を基本情報として利用
         operation_type = routing_decision.get("operation_type", "chat")
         needs_file_read = routing_decision.get("needs_file_read", False)
         target_files = routing_decision.get("target_files", [])
         
-        # 実行計画の構築
+        try:
+            # ユーザーメッセージを取得
+            user_message = response
+            
+            # TaskProfile分類を実行
+            from ..services.task_classifier import task_classifier
+            classification_result = task_classifier.classify(user_message)
+            
+            rich_ui.print_message(f"[TaskProfile分類] {classification_result.profile_type.value} (信頼度: {classification_result.confidence:.2f})", "info")
+            rich_ui.print_message(f"[分類理由] {classification_result.reasoning}", "info")
+            
+            # LLMで詳細なコンテンツ計画を生成
+            from ..services import llm_service
+            
+            # TaskProfile特化プロンプトでコンテンツ事前生成
+            content_planning_request = {
+                "user_request": user_message,
+                "task_profile_type": classification_result.profile_type.value,
+                "detected_targets": classification_result.extracted_targets,
+                "detected_files": target_files,
+                "operation_type": operation_type,
+                "needs_file_access": needs_file_read,
+                "context": {
+                    "is_retry": is_retry,
+                    "routing_confidence": routing_decision.get("confidence", 0.5),
+                    "classification_confidence": classification_result.confidence
+                }
+            }
+            
+            rich_ui.print_message("[コンテンツ計画] TaskProfile特化の詳細分析を実行中...", "info")
+            content_plan = llm_service.generate_content_plan(content_planning_request)
+            
+            if content_plan:
+                return UnderstandingResult(
+                    requirement_analysis=content_plan.get("requirement_analysis", response[:500]),
+                    execution_plan=ExecutionPlan(
+                        summary=content_plan.get("summary", f"{classification_result.profile_type.value}の実行計画"),
+                        steps=content_plan.get("steps", ["情報収集", "データ分析", "応答生成"]),
+                        required_tools=content_plan.get("required_tools", ["read_file"] if needs_file_read else []),
+                        expected_files=content_plan.get("expected_files", target_files),
+                        estimated_complexity=content_plan.get("complexity", "medium"),
+                        success_criteria=content_plan.get("success_criteria", "TaskProfileに基づく適切な応答生成")
+                    ),
+                    identified_risks=content_plan.get("risks", []),
+                    information_needs=content_plan.get("information_needs", []),
+                    confidence=min(classification_result.confidence, content_plan.get("confidence", 0.8)),
+                    complexity_assessment=content_plan.get("complexity", "medium"),
+                    # 5ノードアーキテクチャ用の新フィールド
+                    task_profile_type=classification_result.profile_type,
+                    content_structure_plan=content_plan.get("content_structure", {}),
+                    extracted_targets=classification_result.extracted_targets
+                )
+            
+        except Exception as e:
+            rich_ui.print_warning(f"LLMService実行計画生成でエラー: {e} - フォールバックを使用")
+        
+        # フォールバック: 従来の簡単な処理
         if needs_file_read and target_files:
-            # ファイル読み取りが必要な場合（読み取り専用）
-            summary = f"ファイル '{', '.join(target_files)}' の内容を確認し、理解・分析を行う（読み取り専用）"
+            summary = f"ファイル '{', '.join(target_files)}' の内容を読み取り、分析・説明する"
             steps = [
                 f"ファイル読み取り: {', '.join(target_files)}",
-                "ファイル内容の分析・理解", 
-                "ユーザーへの回答生成"
+                "ファイル内容の分析", 
+                "処理内容の説明生成",
+                "ユーザーへの回答"
             ]
-            required_tools = ["read_file"]  # 読み取り専用ツール
-            complexity = "low"  # ファイル読み取りは低複雑度
+            required_tools = ["read_file", "llm_analysis"]  # 分析処理を含む
+            complexity = "medium"
             
         elif operation_type == "file_list":
             # ファイル一覧が必要な場合
@@ -620,3 +719,66 @@ class FourNodeHelpers:
 リスク要因: {', '.join(risk_assessment.risk_factors)}
 軽減策: {', '.join(risk_assessment.mitigation_measures)}
 """
+    
+    def _deduplicate_file_paths(self, file_paths: List[str]) -> List[str]:
+        """重複するファイルパスを除去する
+        
+        Args:
+            file_paths: ファイルパスのリスト（重複あり）
+            
+        Returns:
+            重複を除去したファイルパスのリスト（フルパス優先）
+        """
+        if not file_paths:
+            return []
+        
+        from pathlib import Path
+        import os
+        
+        # パス正規化と重複検出のためのマップ
+        path_map = {}  # 正規化パス -> 元のパス
+        resolved_paths = {}  # ファイル名 -> (フルパス, 元パス)
+        
+        for original_path in file_paths:
+            try:
+                # パスの安全化
+                safe_path = original_path.replace('\\\\', '\\')
+                
+                # ファイル名を取得
+                filename = Path(safe_path).name
+                
+                # パスが存在するか確認
+                try:
+                    resolved_path = str(Path(safe_path).resolve())
+                    path_exists = Path(resolved_path).exists()
+                except:
+                    resolved_path = safe_path
+                    path_exists = False
+                
+                # 既に同じファイル名が登録されているか確認
+                if filename in resolved_paths:
+                    existing_full_path, existing_original = resolved_paths[filename]
+                    
+                    # 現在のパスの方が良い条件か確認
+                    current_is_better = (
+                        path_exists and not Path(existing_full_path).exists() or  # 現在のパスが存在し、既存が存在しない
+                        len(safe_path) > len(existing_original) and path_exists or  # 現在のパスがより詳細で存在する
+                        os.path.isabs(safe_path) and not os.path.isabs(existing_original)  # 現在のパスが絶対パス
+                    )
+                    
+                    if current_is_better:
+                        resolved_paths[filename] = (resolved_path, original_path)
+                        rich_ui.print_message(f"[FILE_DEDUP] {filename}: {existing_original} → {original_path} (より良いパス)", "info")
+                else:
+                    resolved_paths[filename] = (resolved_path, original_path)
+                    
+            except Exception as e:
+                # エラーが発生した場合はそのまま保持
+                rich_ui.print_message(f"[FILE_DEDUP] パス処理エラー {original_path}: {e}", "warning")
+                filename = original_path
+                resolved_paths[filename] = (original_path, original_path)
+        
+        # 重複除去されたパスリストを作成
+        deduplicated = [original_path for _, original_path in resolved_paths.values()]
+        
+        return deduplicated

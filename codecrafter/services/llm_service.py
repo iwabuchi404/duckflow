@@ -10,8 +10,12 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 
+from langchain.output_parsers import PydanticOutputParser
+from langchain.prompts import PromptTemplate
+
 from ..base.llm_client import llm_manager
 from ..base.config import config_manager
+from ..schemas import ContentPlan, ComplexityLevel
 
 
 @dataclass
@@ -140,6 +144,460 @@ class LLMService:
         except Exception as e:
             return self._create_fallback_plan(user_request, str(e))
     
+    def generate_content_plan(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        TaskProfile特化のコンテンツ計画生成（PydanticOutputParser使用）
+        
+        Args:
+            request: コンテンツ計画要求（user_request, task_profile_type, detected_targets等）
+            
+        Returns:
+            コンテンツ計画の辞書 or None
+        """
+        try:
+            user_request = request.get("user_request", "")
+            task_profile_type = request.get("task_profile_type", "information_request")
+            detected_targets = request.get("detected_targets", [])
+            detected_files = request.get("detected_files", [])
+            context_info = request.get("context", {})
+            
+            # PydanticOutputParserの設定
+            parser = PydanticOutputParser(pydantic_object=ContentPlan)
+            
+            # 動的プロンプトテンプレートの構築
+            template = """TaskProfile「{task_profile_type}」に基づいて、詳細なコンテンツ分析計画を立案してください。
+
+**ユーザー要求:** {user_request}
+
+**TaskProfile種別:** {task_profile_type}
+**検出された対象:** {detected_targets}
+**対象ファイル:** {detected_files}
+
+**TaskProfile別の分析重点:**
+{task_analysis_focus}
+
+**分析すべき項目:**
+1. **要求の詳細分析**: ユーザーが真に求めている情報の特定
+2. **コンテンツ構造計画**: 最終応答で提供すべき情報の構造
+3. **実行ステップ**: 情報収集から応答生成までの具体的手順
+4. **必要ツール**: 使用すべきツール群（読み取り専用推奨）
+5. **データ優先度**: 収集すべきデータの重要度順位
+
+{format_instructions}
+"""
+            
+            prompt = PromptTemplate(
+                template=template,
+                input_variables=[
+                    "user_request", 
+                    "task_profile_type", 
+                    "detected_targets", 
+                    "detected_files",
+                    "task_analysis_focus"
+                ],
+                partial_variables={"format_instructions": parser.get_format_instructions()}
+            )
+            
+            # プロンプトデータの準備
+            prompt_input = {
+                "user_request": user_request,
+                "task_profile_type": task_profile_type,
+                "detected_targets": str(detected_targets) if detected_targets else "なし",
+                "detected_files": str(detected_files) if detected_files else "なし", 
+                "task_analysis_focus": self._get_taskprofile_analysis_focus(task_profile_type)
+            }
+            
+            # プロンプト生成
+            formatted_prompt = prompt.format(**prompt_input)
+            
+            # LLM実行
+            response = self.fast_llm.chat(
+                formatted_prompt,
+                system_prompt=f"あなたは{task_profile_type}タスクの専門家です。ユーザー要求を深く分析し、指定された構造化形式で最適なコンテンツ計画を立案してください。"
+            )
+            
+            print(f"[PYDANTIC] LLMレスポンス受信: {len(response)}文字")
+            
+            # PydanticOutputParserで解析
+            try:
+                parsed_plan: ContentPlan = parser.parse(response)
+                print(f"[PYDANTIC] 構造化出力成功: {parsed_plan.summary}")
+                
+                # 検出ファイルを優先して設定（必須）- デバッグログ付き
+                primary_files = detected_files or detected_targets or []
+                print(f"[PYDANTIC_DEBUG] detected_files: {detected_files}")
+                print(f"[PYDANTIC_DEBUG] detected_targets: {detected_targets}")
+                print(f"[PYDANTIC_DEBUG] primary_files: {primary_files}")
+                print(f"[PYDANTIC_DEBUG] parsed_plan.expected_files (LLM出力): {parsed_plan.expected_files}")
+                
+                # LLMが設定したexpected_filesをチェック
+                if parsed_plan.expected_files:
+                    # 有効なファイル（実在するファイル）のみを保持
+                    valid_files = []
+                    for file_path in parsed_plan.expected_files:
+                        print(f"[PYDANTIC_DEBUG] LLMファイル検証: '{file_path}' -> {isinstance(file_path, str)} / {file_path.strip() if isinstance(file_path, str) else 'N/A'}")
+                        if (isinstance(file_path, str) and 
+                            file_path.strip() and
+                            ('/' in file_path or '\\' in file_path or '.' in file_path)):
+                            valid_files.append(file_path)
+                            print(f"[PYDANTIC_DEBUG] 有効ファイル追加: '{file_path}'")
+                    
+                    print(f"[PYDANTIC_DEBUG] 有効ファイル一覧: {valid_files}")
+                    
+                    # 有効なファイルがある場合は検出ファイルと結合
+                    if valid_files:
+                        # 重複を除去しつつ検出ファイルを優先
+                        combined_files = list(dict.fromkeys(primary_files + valid_files))
+                        print(f"[PYDANTIC_DEBUG] 結合ファイル: primary({primary_files}) + valid({valid_files}) = {combined_files}")
+                        parsed_plan.expected_files = combined_files
+                    else:
+                        print(f"[PYDANTIC_DEBUG] 有効ファイル無し、primary_filesを使用: {primary_files}")
+                        parsed_plan.expected_files = primary_files
+                else:
+                    # expected_filesが空の場合は検出ファイルを設定
+                    print(f"[PYDANTIC_DEBUG] LLMがexpected_files未設定、primary_filesを使用: {primary_files}")
+                    parsed_plan.expected_files = primary_files
+                
+                print(f"[PYDANTIC] 最終ファイルリスト: {parsed_plan.expected_files}")
+                
+                # 重要：ターゲットファイルが含まれているか最終確認
+                if primary_files:
+                    target_found = any(target in str(parsed_plan.expected_files) for target in primary_files)
+                    print(f"[PYDANTIC_CRITICAL] ターゲットファイル含有確認: {target_found} (primary: {primary_files})")
+                
+                # Pydanticモデルを辞書に変換
+                return parsed_plan.dict()
+                
+            except Exception as parse_error:
+                print(f"[PYDANTIC] 構造化パースエラー: {parse_error}")
+                print(f"[PYDANTIC] レスポンス内容: {response[:500]}...")
+                
+                # フォールバック: 従来のJSON解析を試行
+                return self._fallback_json_parse(response, user_request, task_profile_type, detected_files or detected_targets or [])
+                
+        except Exception as e:
+            print(f"[PYDANTIC] コンテンツ計画生成エラー: {e}")
+            return self._create_direct_fallback_plan(user_request, task_profile_type, detected_files or detected_targets or [])
+    
+    def _fallback_json_parse(self, response: str, user_request: str, task_profile_type: str, detected_files: List[str]) -> Dict[str, Any]:
+        """従来のJSON解析フォールバック（PydanticParser失敗時）"""
+        try:
+            import re
+            import json
+            
+            # 複数のJSON抽出パターンを試行
+            json_patterns = [
+                r'```json\s*(\{.*?\})\s*```',
+                r'```\s*(\{.*?\})\s*```',
+                r'(\{.*?\})'
+            ]
+            
+            json_str = None
+            for pattern in json_patterns:
+                match = re.search(pattern, response, re.DOTALL)
+                if match:
+                    json_str = match.group(1)
+                    break
+            
+            if not json_str:
+                raise json.JSONDecodeError("JSON形式が見つかりません", response, 0)
+            
+            # JSON文字列のクリーニング
+            json_str = json_str.strip()
+            json_str = re.sub(r'//.*?(?=\n|$)', '', json_str, flags=re.MULTILINE)
+            json_str = re.sub(r'\s*\n\s*', '\n', json_str)
+            json_str = json_str.strip()
+            
+            parsed_plan = json.loads(json_str)
+            
+            # 必須フィールドの検証
+            required_fields = {
+                "requirement_analysis": "ユーザー要求の分析",
+                "summary": "タスクの概要",
+                "steps": ["情報収集", "分析", "応答生成"],
+                "required_tools": ["read_file"],
+                "expected_files": detected_files,
+                "complexity": "medium",
+                "success_criteria": "タスク完了"
+            }
+            
+            for field, default in required_fields.items():
+                if field not in parsed_plan or not parsed_plan[field]:
+                    parsed_plan[field] = default
+            
+            print(f"[FALLBACK] JSON解析成功: {parsed_plan.get('summary', 'N/A')}")
+            return parsed_plan
+            
+        except Exception as e:
+            print(f"[FALLBACK] JSON解析も失敗: {e}")
+            return self._create_direct_fallback_plan(user_request, task_profile_type, detected_files)
+    
+    def _create_direct_fallback_plan(self, user_request: str, task_profile_type: str, detected_files: List[str]) -> Dict[str, Any]:
+        """TaskProfile特化の直接フォールバック計画"""
+        
+        if task_profile_type == "search_request":
+            return {
+                "requirement_analysis": f"ユーザーは「{user_request}」で特定のファイルまたは要素の検索・説明を求めています",
+                "summary": "対象ファイルの位置特定と詳細な内容説明",
+                "steps": [
+                    "対象ファイルの読み取り",
+                    "コード構造の分析",
+                    "機能と使用方法の整理",
+                    "分かりやすい説明文の作成"
+                ],
+                "required_tools": ["read_file", "llm_analysis"],
+                "expected_files": detected_files,
+                "complexity": "medium",
+                "success_criteria": "対象の位置・機能・使用方法を明確に説明",
+                "risks": ["ファイル読み取りエラー"],
+                "information_needs": ["ファイル内容", "依存関係"],
+                "content_structure": {
+                    "primary_sections": ["ファイル概要", "詳細分析", "使用方法"],
+                    "data_priorities": ["コード内容", "機能説明"],
+                    "presentation_style": "user_friendly"
+                },
+                "confidence": 0.85
+            }
+        else:
+            # 他のTaskProfile用のフォールバック
+            return {
+                "requirement_analysis": f"ユーザーは「{user_request}」の{task_profile_type}を求めています",
+                "summary": f"{task_profile_type}タスクの実行",
+                "steps": ["要求分析", "データ収集", "処理実行", "結果提供"],
+                "required_tools": ["read_file"],
+                "expected_files": detected_files,
+                "complexity": "medium",
+                "success_criteria": f"{task_profile_type}の適切な実行",
+                "risks": ["処理エラーの可能性"],
+                "information_needs": ["基本データ"],
+                "content_structure": {
+                    "primary_sections": ["概要", "詳細"],
+                    "data_priorities": ["主要データ"],
+                    "presentation_style": "user_friendly"
+                },
+                "confidence": 0.7
+            }
+    
+    def _get_taskprofile_analysis_focus(self, task_profile_type: str) -> str:
+        """TaskProfile別の分析重点を取得"""
+        focus_map = {
+            "information_request": """
+- 対象の基本情報（メタデータ、構造、目的）
+- 詳細内容（実装、設定、データ）
+- 関連要素（依存関係、使用箇所）
+- 使用例・実行方法""",
+            
+            "analysis_request": """
+- 現状評価（品質、パフォーマンス、設計）
+- 問題・課題の特定（バグ、ボトルネック、リスク）
+- 改善提案（最適化、リファクタリング、セキュリティ）
+- 優先度・影響度の評価""",
+            
+            "creation_request": """
+- 作成方針・アプローチの決定
+- 実装詳細・技術選択
+- リスク・制約の考慮
+- テスト・検証計画""",
+            
+            "modification_request": """
+- 変更対象・影響範囲の特定
+- 変更詳細・実装方法
+- 互換性・副作用の分析
+- バックアップ・安全対策""",
+            
+            "search_request": """
+- 検索対象・条件の明確化
+- 発見ファイル・コードの整理
+- 関連性・重要度の評価
+- 検索結果の統計・サマリー""",
+            
+            "guidance_request": """
+- 前提条件・環境要件
+- 段階的手順・操作方法
+- トラブルシューティング情報
+- ベストプラクティス・注意点"""
+        }
+        
+        return focus_map.get(task_profile_type, "一般的な分析項目")
+    
+    def _create_fallback_content_plan(self, user_request: str, task_profile_type: str, detected_targets: List[str]) -> Dict[str, Any]:
+        """コンテンツ計画生成失敗時のフォールバック"""
+        
+        # TaskProfile別のフォールバック計画
+        if task_profile_type == "information_request":
+            return {
+                "requirement_analysis": f"'{user_request}'の情報要求を分析中",
+                "summary": f"対象の詳細情報を収集・整理して提供",
+                "steps": ["対象ファイル読み取り", "メタデータ分析", "内容要約", "関連情報収集"],
+                "required_tools": ["read_file"],
+                "expected_files": detected_targets or [],
+                "complexity": "medium",
+                "success_criteria": "対象の詳細情報を正確に提供",
+                "risks": ["ファイル読み取りエラーの可能性"],
+                "information_needs": ["ファイル内容", "メタデータ"],
+                "content_structure": {
+                    "primary_sections": ["基本情報", "詳細内容", "関連要素"],
+                    "data_priorities": ["ファイル内容", "メタデータ"],
+                    "presentation_style": "user_friendly"
+                },
+                "confidence": 0.7
+            }
+        else:
+            return {
+                "requirement_analysis": f"'{user_request}'の{task_profile_type}要求を分析中",
+                "summary": f"{task_profile_type}タスクの実行計画",
+                "steps": ["要求分析", "データ収集", "処理実行", "結果整理"],
+                "required_tools": ["read_file"],
+                "expected_files": detected_targets or [],
+                "complexity": "medium", 
+                "success_criteria": f"{task_profile_type}要求の適切な処理",
+                "risks": ["処理中のエラーの可能性"],
+                "information_needs": ["基本データ"],
+                "content_structure": {
+                    "primary_sections": ["分析結果", "詳細情報"],
+                    "data_priorities": ["主要データ"],
+                    "presentation_style": "technical"
+                },
+                "confidence": 0.6
+            }
+    
+    def plan_task_execution(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        タスク実行計画の立案（理解・計画ノード用）
+        
+        Args:
+            request: 実行計画要求（user_request, detected_files, operation_type等）
+            
+        Returns:
+            実行計画の辞書 or None
+        """
+        try:
+            user_request = request.get("user_request", "")
+            detected_files = request.get("detected_files", [])
+            operation_type = request.get("operation_type", "chat")
+            needs_file_access = request.get("needs_file_access", False)
+            context_info = request.get("context", {})
+            
+            # 読み取り専用操作かどうかを判定
+            is_read_only_request = any(keyword in user_request.lower() for keyword in [
+                '説明', '確認', '内容', '分析', '調べ', '見て', '読み', 'について', 'とは', 'どんな'
+            ])
+            
+            # 専用プロンプトを構築
+            read_only_instruction = """
+**重要: この要求は読み取り専用操作です**
+- ファイルの変更・作成・削除は行いません
+- 既存ファイルの内容を読み取り、分析・説明のみを行います
+- required_toolsには読み取り専用ツール（read_file, list_files, get_file_info, llm_analysis）のみを含めてください
+""" if is_read_only_request else ""
+            
+            planning_prompt = f"""
+ユーザーの要求を分析し、実行計画を立案してください。
+
+**ユーザー要求:** {user_request}
+{read_only_instruction}
+**検出された情報:**
+- 対象ファイル: {detected_files if detected_files else "なし"}  
+- 操作種別: {operation_type}
+- ファイルアクセス: {"必要" if needs_file_access else "不要"}
+
+**分析すべき項目:**
+1. **要求の本質**: ユーザーが真に求めていること
+2. **実行ステップ**: 具体的な処理手順
+3. **必要ツール**: 使用すべきツール群（読み取り専用の場合: read_file, llm_analysis等のみ）
+4. **複雑度**: low/medium/high
+5. **成功基準**: 何をもって成功とするか
+
+**利用可能ツール:**
+- 読み取り専用: read_file, list_files, get_file_info, llm_analysis
+- 書き込み系: write_file, create_directory（ファイル変更が必要な場合のみ）
+
+以下のJSON形式で応答してください：
+```json
+{{
+    "requirement_analysis": "要求分析結果",
+    "summary": "実行計画の概要",  
+    "steps": ["ステップ1", "ステップ2", ...],
+    "required_tools": ["tool1", "tool2", ...],
+    "expected_files": ["file1", "file2", ...],
+    "complexity": "medium",
+    "success_criteria": "成功基準",
+    "risks": ["リスク1", "リスク2"],
+    "information_needs": ["必要情報1", "必要情報2"],
+    "confidence": 0.8
+}}
+```
+"""
+            
+            response = self.fast_llm.chat(
+                planning_prompt,
+                system_prompt="あなたはタスク分析・実行計画の専門家です。ユーザー要求を正確に理解し、適切な実行計画を立案してください。JSON形式で回答する必要があります。"
+            )
+            
+            # JSONパースを試行
+            try:
+                import re
+                # JSON部分を抽出
+                json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1)
+                else:
+                    # JSON形式が見つからない場合、全体をJSONとして試行
+                    json_str = response.strip()
+                
+                execution_plan = json.loads(json_str)
+                return execution_plan
+                
+            except (json.JSONDecodeError, AttributeError) as e:
+                # JSONパースに失敗した場合、基本的な計画を作成
+                return self._create_basic_plan_from_request(request, response)
+            
+        except Exception as e:
+            print(f"plan_task_execution error: {e}")
+            return None
+    
+    def _create_basic_plan_from_request(self, request: Dict[str, Any], llm_response: str) -> Dict[str, Any]:
+        """リクエストから基本的な実行計画を作成"""
+        user_request = request.get("user_request", "")
+        detected_files = request.get("detected_files", [])
+        needs_file_access = request.get("needs_file_access", False)
+        
+        # 説明・分析系のキーワードを検出
+        requires_analysis = any(keyword in user_request.lower() for keyword in 
+            ['説明', 'explain', 'describe', '分析', 'analyze', '処理内容', 'summary'])
+        
+        if requires_analysis and detected_files:
+            return {
+                "requirement_analysis": f"ファイル {detected_files[0]} の処理内容を分析・説明する",
+                "summary": f"ファイル内容の読み取りと詳細分析",
+                "steps": [
+                    f"ファイル読み取り: {detected_files[0]}",
+                    "ファイル内容の分析",
+                    "処理内容の説明生成",
+                    "ユーザーへの回答"
+                ],
+                "required_tools": ["read_file", "llm_analysis"],
+                "expected_files": detected_files,
+                "complexity": "medium",
+                "success_criteria": "ファイルの処理内容が明確に説明されている",
+                "risks": ["ファイル読み取りエラー"],
+                "information_needs": ["ファイル内容"],
+                "confidence": 0.8
+            }
+        else:
+            return {
+                "requirement_analysis": llm_response[:200] if llm_response else "基本的なタスク処理",
+                "summary": "ユーザー要求への対応",
+                "steps": ["要求の処理", "結果の提供"],
+                "required_tools": ["read_file"] if needs_file_access else [],
+                "expected_files": detected_files,
+                "complexity": "low",
+                "success_criteria": "ユーザー要求の満足",
+                "risks": [],
+                "information_needs": [],
+                "confidence": 0.6
+            }
+    
     def plan_continuation_execution(self, user_request: str, 
                                    previous_attempts: List[Dict[str, Any]],
                                    missing_info: MissingInfoAnalysis) -> Dict[str, Any]:
@@ -188,6 +646,91 @@ class LLMService:
             満足度評価結果
         """
         try:
+            print(f"[SATISFACTION_DEBUG] 評価開始")
+            print(f"[SATISFACTION_DEBUG] 元要求: {original_request}")
+            print(f"[SATISFACTION_DEBUG] 蓄積結果キー: {list(accumulated_results.keys())}")
+            
+            # 蓄積結果の詳細確認（ファイル読み取り結果があるか？）- エラーハンドリング強化版
+            try:
+                if 'gathered_info' in accumulated_results:
+                    gathered = accumulated_results['gathered_info']
+                    print(f"[SATISFACTION_DEBUG] gathered_info type: {type(gathered)}")
+                    print(f"[SATISFACTION_DEBUG] gathered_info keys: {list(gathered.keys()) if isinstance(gathered, dict) else 'N/A'}")
+                    
+                    # 新形式: 直接collected_files をまずチェック
+                    if isinstance(gathered, dict) and 'collected_files' in gathered:
+                        collected_files = gathered['collected_files']
+                        print(f"[SATISFACTION_DEBUG] 直接collected_files発見")
+                        print(f"[SATISFACTION_DEBUG] 収集ファイル数: {len(collected_files)}")
+                        print(f"[SATISFACTION_DEBUG] 収集ファイル: {list(collected_files.keys())}")
+                        
+                        # ターゲットファイルの内容チェック
+                        target_found = any('test_step2d_graph' in str(path) for path in collected_files.keys())
+                        print(f"[SATISFACTION_CRITICAL] ターゲットファイル収集確認: {target_found}")
+                        
+                        if target_found:
+                            target_file = next((path for path in collected_files.keys() if 'test_step2d_graph' in str(path)), None)
+                            print(f"[SATISFACTION_DEBUG] ターゲットファイル特定: {target_file}")
+                            
+                            if target_file and isinstance(collected_files[target_file], dict):
+                                file_info = collected_files[target_file]
+                                print(f"[SATISFACTION_DEBUG] ターゲットファイル情報keys: {list(file_info.keys())}")
+                                
+                                if 'content' in file_info:
+                                    content_length = len(file_info['content'])
+                                    print(f"[SATISFACTION_DEBUG] ターゲットファイル内容長: {content_length}文字")
+                                    print(f"[SATISFACTION_DEBUG] ターゲットファイル内容サンプル: {file_info['content'][:100]}...")
+                                else:
+                                    print(f"[SATISFACTION_DEBUG] ターゲットファイルにcontentなし")
+                            else:
+                                print(f"[SATISFACTION_DEBUG] ターゲットファイル情報type: {type(collected_files[target_file]) if target_file else 'None'}")
+                                
+                    # gathered_info_detailed形式
+                    elif isinstance(gathered, dict) and 'gathered_info_detailed' in gathered:
+                        detailed = gathered['gathered_info_detailed']
+                        print(f"[SATISFACTION_DEBUG] gathered_info_detailed keys: {list(detailed.keys())}")
+                        
+                        if 'collected_files' in detailed:
+                            collected_files = detailed['collected_files']
+                            print(f"[SATISFACTION_DEBUG] 収集ファイル数: {len(collected_files)}")
+                            print(f"[SATISFACTION_DEBUG] 収集ファイル: {list(collected_files.keys())}")
+                            
+                            # ターゲットファイルの内容チェック
+                            target_found = any('test_step2d_graph' in str(path) for path in collected_files.keys())
+                            print(f"[SATISFACTION_CRITICAL] ターゲットファイル収集確認: {target_found}")
+                            
+                            if target_found:
+                                target_file = next((path for path in collected_files.keys() if 'test_step2d_graph' in str(path)), None)
+                                if target_file and isinstance(collected_files[target_file], dict) and 'content' in collected_files[target_file]:
+                                    content_length = len(collected_files[target_file]['content'])
+                                    print(f"[SATISFACTION_DEBUG] ターゲットファイル内容長: {content_length}文字")
+                                else:
+                                    print(f"[SATISFACTION_DEBUG] ターゲットファイル情報: {collected_files[target_file] if target_file else 'None'}")
+                        else:
+                            print(f"[SATISFACTION_DEBUG] gathered_info_detailedにcollected_filesなし")
+                    # 旧形式: 直接collected_files
+                    elif hasattr(gathered, 'collected_files'):
+                        print(f"[SATISFACTION_DEBUG] 旧形式collected_files検出")
+                        print(f"[SATISFACTION_DEBUG] 収集ファイル数: {len(gathered.collected_files)}")
+                        print(f"[SATISFACTION_DEBUG] 収集ファイル: {list(gathered.collected_files.keys())}")
+                        
+                        # ターゲットファイルの内容チェック
+                        target_found = any('test_step2d_graph' in str(path) for path in gathered.collected_files.keys())
+                        print(f"[SATISFACTION_CRITICAL] ターゲットファイル収集確認: {target_found}")
+                        
+                        if target_found:
+                            target_file = next((path for path in gathered.collected_files.keys() if 'test_step2d_graph' in str(path)), None)
+                            if target_file:
+                                content_length = len(gathered.collected_files[target_file].content) if hasattr(gathered.collected_files[target_file], 'content') else 0
+                                print(f"[SATISFACTION_DEBUG] ターゲットファイル内容長: {content_length}文字")
+                    else:
+                        print(f"[SATISFACTION_DEBUG] 認識できる形式のcollected_filesなし")
+                else:
+                    print(f"[SATISFACTION_DEBUG] accumulated_resultsにgathered_infoなし")
+            except Exception as debug_error:
+                print(f"[SATISFACTION_DEBUG_ERROR] 詳細確認エラー: {debug_error}")
+                print(f"[SATISFACTION_DEBUG_ERROR] accumulated_results: {accumulated_results}")
+            
             evaluation_prompt = self._build_satisfaction_evaluation_prompt(
                 original_request, accumulated_results, operation_type
             )
@@ -195,9 +738,16 @@ class LLMService:
             response = self.evaluator_llm.chat(evaluation_prompt, 
                                              system_prompt=self._get_evaluation_system_prompt())
             
-            return self._parse_satisfaction_evaluation(response)
+            print(f"[SATISFACTION_DEBUG] LLM評価レスポンス長: {len(response)}文字")
+            
+            result = self._parse_satisfaction_evaluation(response)
+            print(f"[SATISFACTION_DEBUG] 評価結果 - スコア: {result.overall_score:.2f}, 完了推奨: {result.completion_recommendation}")
+            print(f"[SATISFACTION_DEBUG] 不足要素: {result.missing_aspects}")
+            
+            return result
             
         except Exception as e:
+            print(f"[SATISFACTION_ERROR] 評価エラー: {e}")
             return SatisfactionEvaluation(
                 overall_score=0.3,
                 requirement_scores={},
@@ -492,17 +1042,60 @@ JSON形式で構造化して評価してください。
     # === ユーティリティメソッド ===
     
     def _summarize_results(self, results: Dict[str, Any]) -> str:
-        """結果の要約生成"""
+        """結果の要約生成（ファイル内容を重視）"""
         if not results:
             return "結果なし"
         
         summary_parts = []
+        
+        # ファイル情報を優先的に抽出・表示
+        if 'gathered_info' in results:
+            gathered = results['gathered_info']
+            
+            # 直接collected_files形式（修正版）
+            if isinstance(gathered, dict) and 'collected_files' in gathered:
+                collected_files = gathered['collected_files']
+                summary_parts.append(f"**収集されたファイル情報** ({len(collected_files)}件):")
+                
+                for file_path, file_info in collected_files.items():
+                    if isinstance(file_info, dict) and 'content' in file_info:
+                        content = file_info['content']
+                        # ターゲットファイルは詳細表示、その他は概要のみ
+                        if 'test_step2d_graph' in file_path:
+                            summary_parts.append(f"  ● **{file_path}** ({len(content)}文字):")
+                            summary_parts.append(f"```python\n{content[:5000]}{'...[残り' + str(len(content) - 5000) + '文字省略]' if len(content) > 5000 else ''}\n```")
+                        else:
+                            summary_parts.append(f"  ● {file_path}: {len(content)}文字")
+                    else:
+                        summary_parts.append(f"  ● {file_path}: {file_info}")
+            
+            # 旧形式: gathered_info_detailed
+            elif isinstance(gathered, dict) and 'gathered_info_detailed' in gathered:
+                detailed = gathered['gathered_info_detailed']
+                if 'collected_files' in detailed:
+                    collected_files = detailed['collected_files']
+                    summary_parts.append(f"**収集されたファイル情報** ({len(collected_files)}件):")
+                    
+                    for file_path, file_info in collected_files.items():
+                        if isinstance(file_info, dict) and 'content' in file_info:
+                            content = file_info['content']
+                            # ターゲットファイルは詳細表示、その他は概要のみ
+                            if 'test_step2d_graph' in file_path:
+                                summary_parts.append(f"  ● **{file_path}** ({len(content)}文字):")
+                                summary_parts.append(f"```python\n{content[:5000]}{'...[残り' + str(len(content) - 5000) + '文字省略]' if len(content) > 5000 else ''}\n```")
+                            else:
+                                summary_parts.append(f"  ● {file_path}: {len(content)}文字")
+                        else:
+                            summary_parts.append(f"  ● {file_path}: {file_info}")
+        
+        # その他の結果情報
         for key, value in results.items():
-            if isinstance(value, str):
-                preview = value[:100] + "..." if len(value) > 100 else value
-            else:
-                preview = str(value)
-            summary_parts.append(f"- {key}: {preview}")
+            if key != 'gathered_info':  # ファイル情報は既に処理済み
+                if isinstance(value, str):
+                    preview = value[:200] + "..." if len(value) > 200 else value
+                else:
+                    preview = str(value)[:200]
+                summary_parts.append(f"- {key}: {preview}")
         
         return "\n".join(summary_parts)
     
@@ -569,8 +1162,25 @@ JSON形式で構造化して評価してください。
             優先順位付けされたファイルパスのリスト（最大10ファイル）
         """
         try:
+            # 特定ファイル名が明示的に指定されている場合の検出
+            explicit_files = self._extract_explicit_filenames(task_description, file_list)
+            
             # ファイルリストが多すぎる場合は重要そうなものを事前フィルタリング
             filtered_files = self._pre_filter_important_files(file_list)
+            
+            # 明示的に指定されたファイルを最優先に設定
+            if explicit_files:
+                # 明示ファイルを最上位に配置し、残りを一般的な優先順位付けで追加
+                remaining_files = [f for f in filtered_files if f not in explicit_files]
+                prioritized_files = explicit_files + remaining_files[:10 - len(explicit_files)]
+                return prioritized_files[:10]
+            else:
+                # 明示ファイルが見つからない場合の拡張探索
+                extended_files = self._extended_file_search(task_description, file_list)
+                if extended_files:
+                    remaining_files = [f for f in filtered_files if f not in extended_files]
+                    prioritized_files = extended_files + remaining_files[:10 - len(extended_files)]
+                    return prioritized_files[:10]
             
             # ファイル優先順位付けプロンプトの構築
             prioritization_prompt = self._build_file_prioritization_prompt(
@@ -993,6 +1603,135 @@ JSON形式で構造化して評価してください。
     
     # === ヘルパーメソッド ===
     
+    def _extract_explicit_filenames(self, task_description: str, file_list: List[str]) -> List[str]:
+        """タスク説明から明示的に指定されたファイル名を抽出する
+        
+        Args:
+            task_description: タスク説明文
+            file_list: 利用可能なファイルリスト
+            
+        Returns:
+            明示的に指定されたファイルのリスト
+        """
+        import re
+        
+        explicit_files = []
+        task_lower = task_description.lower()
+        
+        # ファイル拡張子パターンでファイル名を検索
+        file_patterns = [
+            r'([a-zA-Z0-9_\-]+\.md)',      # .md ファイル
+            r'([a-zA-Z0-9_\-]+\.py)',      # .py ファイル
+            r'([a-zA-Z0-9_\-]+\.yaml)',    # .yaml ファイル
+            r'([a-zA-Z0-9_\-]+\.yml)',     # .yml ファイル
+            r'([a-zA-Z0-9_\-]+\.json)',    # .json ファイル
+            r'([a-zA-Z0-9_\-]+\.txt)',     # .txt ファイル
+            r'([a-zA-Z0-9_\-]+\.cfg)',     # .cfg ファイル
+            r'([a-zA-Z0-9_\-]+\.ini)',     # .ini ファイル
+        ]
+        
+        # パターンマッチングでファイル名を抽出
+        for pattern in file_patterns:
+            matches = re.findall(pattern, task_description, re.IGNORECASE)
+            for match in matches:
+                # 実際のファイルリストから完全一致または部分一致を探す
+                for file_path in file_list:
+                    file_name = file_path.split('/')[-1].split('\\')[-1]  # ファイル名のみ抽出
+                    if match.lower() == file_name.lower() or match.lower() in file_path.lower():
+                        if file_path not in explicit_files:
+                            explicit_files.append(file_path)
+        
+        # 特定の重要ファイル名パターンもチェック
+        important_patterns = [
+            ('design-doc', 'design'),
+            ('readme', 'readme'),
+            ('progress', 'progress'),
+            ('config', 'config'),
+            ('claude', 'claude')
+        ]
+        
+        for pattern, keyword in important_patterns:
+            if pattern in task_lower or keyword in task_lower:
+                for file_path in file_list:
+                    if pattern in file_path.lower():
+                        if file_path not in explicit_files:
+                            explicit_files.append(file_path)
+        
+        return explicit_files
+    
+    def _extended_file_search(self, task_description: str, file_list: List[str]) -> List[str]:
+        """明示的ファイルが見つからない場合の拡張探索
+        
+        Args:
+            task_description: タスク説明文
+            file_list: 利用可能なファイルリスト
+            
+        Returns:
+            拡張検索で発見されたファイルのリスト
+        """
+        import os
+        import glob
+        from pathlib import Path
+        
+        task_lower = task_description.lower()
+        found_files = []
+        
+        # タスクからキーワードを抽出
+        keywords_to_search = []
+        
+        # 1. ファイル名キーワードの抽出
+        if 'design' in task_lower:
+            keywords_to_search.extend(['design', 'architecture', 'spec'])
+        if 'config' in task_lower:
+            keywords_to_search.extend(['config', 'settings', 'setup'])
+        if 'readme' in task_lower:
+            keywords_to_search.extend(['readme', 'getting-started', 'guide'])
+        if 'progress' in task_lower or '進捗' in task_lower:
+            keywords_to_search.extend(['progress', 'changelog', 'history'])
+        if 'claude' in task_lower:
+            keywords_to_search.extend(['claude', 'ai', 'prompt'])
+        
+        # 2. 直接的なファイル探索（現在のディレクトリから）
+        if keywords_to_search:
+            try:
+                cwd = os.getcwd()
+                for keyword in keywords_to_search:
+                    # 複数のパターンで探索
+                    search_patterns = [
+                        f"*{keyword}*",
+                        f"**/*{keyword}*",
+                        f"{keyword}*",
+                        f"*{keyword}*.md",
+                        f"*{keyword}*.txt",
+                        f"docs/*{keyword}*",
+                    ]
+                    
+                    for pattern in search_patterns:
+                        try:
+                            matches = glob.glob(pattern, recursive=True)
+                            for match in matches:
+                                # ファイルが存在し、リストに含まれているかチェック
+                                if os.path.isfile(match):
+                                    relative_path = str(Path(match).as_posix())
+                                    if relative_path in file_list and relative_path not in found_files:
+                                        found_files.append(relative_path)
+                        except Exception:
+                            continue  # パターンエラーは無視
+                            
+            except Exception as e:
+                print(f"拡張ファイル検索エラー: {e}")
+        
+        # 3. ファイル名類似度による検索
+        if not found_files and 'design-doc' in task_lower:
+            # design-docに類似するファイルを探索
+            for file_path in file_list:
+                file_name_lower = file_path.lower()
+                if any(keyword in file_name_lower for keyword in ['design', 'doc', 'spec', 'architecture']):
+                    if file_path not in found_files:
+                        found_files.append(file_path)
+        
+        return found_files[:5]  # 最大5ファイル
+    
     def _summarize_documentation(self, filepath: str, content: str) -> str:
         """ドキュメントファイルの要約"""
         lines = content.split('\n')
@@ -1086,6 +1825,139 @@ JSON形式で構造化して評価してください。
             "scenarios": [],
             "recommendations": []
         }
+    
+    # ===== The Pecking Order 関連メソッド =====
+    
+    def analyze_task_hierarchy(self, user_request: str, context: str = "", is_continuation: bool = False) -> Optional[Dict[str, Any]]:
+        """ユーザー要求を階層的タスク構造に分析する
+        
+        Args:
+            user_request: ユーザーの要求
+            context: 追加コンテキスト
+            is_continuation: 継続実行かどうか
+            
+        Returns:
+            タスク構造の辞書、失敗時はNone
+        """
+        try:
+            # LLMプロンプトの構築
+            prompt = self._build_task_hierarchy_prompt(user_request, context, is_continuation)
+            
+            # Fast LLM で高速分析
+            response = self.fast_llm.chat(prompt)
+            
+            if not response:
+                return None
+                
+            # レスポンスをパースしてタスク構造に変換
+            task_structure = self._parse_task_hierarchy_response(response)
+            
+            return task_structure
+            
+        except Exception as e:
+            print(f"タスク階層分析エラー: {e}")
+            return None
+    
+    def _build_task_hierarchy_prompt(self, user_request: str, context: str, is_continuation: bool) -> str:
+        """タスク階層分析のプロンプトを構築"""
+        
+        if is_continuation:
+            prompt_type = "継続実行のためのタスク分析"
+            instruction = """
+既存のタスクに追加するサブタスクや修正点を分析してください。
+"""
+        else:
+            prompt_type = "新規タスクの階層分析"
+            instruction = """
+ユーザーの要求を階層的なタスクに分解してください。
+メインゴールと、それを達成するための3-5個のサブタスクを定義してください。
+"""
+        
+        return f"""# {prompt_type}
+
+## ユーザー要求:
+{user_request}
+
+## コンテキスト:
+{context if context else '(なし)'}
+
+## 指示:
+{instruction}
+
+以下の形式でJSON構造を返してください:
+
+```json
+{{
+    "main_goal": "メインゴールの簡潔な説明",
+    "root_task": "ルートタスクの説明",
+    "sub_tasks": [
+        "サブタスク1の説明",
+        "サブタスク2の説明", 
+        "サブタスク3の説明"
+    ],
+    "additional_sub_tasks": [
+        "追加のサブタスク1",
+        "追加のサブタスク2"
+    ]
+}}
+```
+
+注意:
+- main_goalは50文字以内
+- 各タスクは具体的で実行可能な内容にしてください
+- is_continuationが true の場合は additional_sub_tasks を重視してください
+- 複雑すぎるタスクは適切に分割してください
+"""
+
+    def _parse_task_hierarchy_response(self, response: str) -> Dict[str, Any]:
+        """LLMレスポンスからタスク構造をパース"""
+        try:
+            # JSON部分を抽出
+            import re
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            
+            if json_match:
+                json_str = json_match.group(1)
+                task_structure = json.loads(json_str)
+            else:
+                # JSONブロックがない場合は直接パース試行
+                task_structure = json.loads(response)
+            
+            # 必須フィールドの検証と補完
+            if 'main_goal' not in task_structure:
+                task_structure['main_goal'] = "ユーザー要求の実現"
+            
+            if 'root_task' not in task_structure:
+                task_structure['root_task'] = task_structure['main_goal']
+                
+            if 'sub_tasks' not in task_structure:
+                task_structure['sub_tasks'] = []
+                
+            if 'additional_sub_tasks' not in task_structure:
+                task_structure['additional_sub_tasks'] = []
+            
+            # リスト型の保証
+            for key in ['sub_tasks', 'additional_sub_tasks']:
+                if not isinstance(task_structure[key], list):
+                    task_structure[key] = []
+                    
+            return task_structure
+            
+        except (json.JSONDecodeError, KeyError, AttributeError) as e:
+            print(f"タスク構造パースエラー: {e}")
+            
+            # フォールバック: シンプルな構造を生成
+            return {
+                "main_goal": "ユーザー要求の実現",
+                "root_task": "ユーザー要求を処理する",
+                "sub_tasks": [
+                    "要求を分析する",
+                    "必要な情報を収集する", 
+                    "実行計画を立てる",
+                    "計画を実行する"
+                ],
+                "additional_sub_tasks": []
+            }
 
 
 # グローバルLLMサービスインスタンス

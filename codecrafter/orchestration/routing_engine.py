@@ -287,10 +287,7 @@ class RoutingEngine:
                     validated_files.append(ws_file)
                     break
         
-        # 검증되지 않은 파일도 포함 (존재하지 않는 파일에 대한 명시적 처리 위해)
-        for candidate in candidates:
-            if candidate not in validated_files:
-                validated_files.append(candidate)
+        # Note: 検証されていないファイルは除外（存在しないファイルによる読み取りエラーを防止）
         
         return list(dict.fromkeys(validated_files))  # 순서 유지하면서 중복 제거
     

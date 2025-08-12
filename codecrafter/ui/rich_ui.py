@@ -51,6 +51,19 @@ class RichUI:
         self.console.print(panel)
         self.console.print()
     
+    def show_duck_status(self, vitals_display: str) -> None:
+        """Duck Pacemakerのステータスを特別な形式で表示"""
+        try:
+            panel = Panel(
+                vitals_display,
+                title="🦆 Duck Pacemaker Status",
+                border_style="cyan",
+                padding=(0, 1)
+            )
+            self.console.print(panel)
+        except Exception as e:
+            self.console.print(f"[red]Duck status表示エラー: {e}[/]")
+    
     def print_message(self, message: str, style: str = "info") -> None:
         """メッセージを表示"""
         color = self.colors.get(style, self.colors['info'])

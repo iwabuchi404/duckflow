@@ -24,9 +24,9 @@ try:
         main()
         
 except ImportError as e:
-    print(f"❌ Import error: {e}")
+    print(f"[ERROR] Import error: {e}")
     print("Please ensure all dependencies are installed with: uv sync")
     sys.exit(1)
 except Exception as e:
-    print(f"❌ Startup error: {e}")
+    print(f"[ERROR] Startup error: {e}")
     sys.exit(1)
