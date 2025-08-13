@@ -47,6 +47,67 @@ summary_llm:
     model: "claude-3-haiku-20240307"  # 高速・安価
     temperature: 0.0
     max_tokens: 1000
+
+# シンプル動的Duck Pacemaker設定
+duck_pacemaker:
+  # 動的制限機能（シンプル版）
+  dynamic_limits:
+    enabled: true
+    min_loops: 3
+    max_loops: 20
+    
+  # タスクプロファイル別ベース設定（改善版）
+  task_profiles:
+    simple_question:
+      base_loops: 5
+    code_analysis:
+      base_loops: 12
+    file_operation:
+      base_loops: 8
+    complex_reasoning:
+      base_loops: 18
+    multi_step_task:
+      base_loops: 15
+    general_chat:
+      base_loops: 6
+    creative_writing:
+      base_loops: 10
+    debugging:
+      base_loops: 14
+    research:
+      base_loops: 16
+      
+  # バイタル閾値設定（シンプル版）
+  vitals_thresholds:
+    # D.U.C.K. Vitalsの正しい解釈:
+    # mood = AIのプランに関する自信
+    # focus = AIの思考の一貫性  
+    # stamina = 1タスクの試行回数（消耗度）
+    mood:
+      low: 0.4
+      good: 0.8
+    focus:
+      low: 0.4
+      good: 0.8
+    stamina:
+      low: 0.3
+      good: 0.8
+    mood:
+      critical: 0.4
+      low: 0.6
+      good: 0.8
+      
+  # ティア別制限
+  tiers:
+    conservative:
+      min: 2
+      max: 8
+    balanced:
+      min: 3
+      max: 15
+    aggressive:
+      min: 5
+      max: 25
   
   groq:
     model: "llama-3.1-8b-instant"  # 高速

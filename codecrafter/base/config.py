@@ -138,6 +138,43 @@ class DuckKeeperConfig(BaseModel):
     scan_settings: DuckKeeperScanSettings = Field(default_factory=DuckKeeperScanSettings, description="Duck Scan設定")
 
 
+class DuckPacemakerDynamicLimits(BaseModel):
+    """Duck Pacemaker動的制限設定クラス"""
+    
+    enabled: bool = Field(default=True, description="動的制限機能の有効化")
+    min_loops: int = Field(default=3, description="最小ループ数")
+    max_loops: int = Field(default=20, description="最大ループ数")
+
+
+class DuckPacemakerTaskProfile(BaseModel):
+    """Duck Pacemakerタスクプロファイル設定クラス"""
+    
+    base_loops: int = Field(description="ベースループ数")
+
+
+class DuckPacemakerVitalsThreshold(BaseModel):
+    """Duck Pacemakerバイタル閾値設定クラス"""
+    
+    low: float = Field(description="低下閾値")
+    good: float = Field(description="良好閾値")
+
+
+class DuckPacemakerVitalsThresholds(BaseModel):
+    """Duck Pacemakerバイタル閾値設定クラス"""
+    
+    mood: DuckPacemakerVitalsThreshold = Field(description="プラン自信度閾値")
+    focus: DuckPacemakerVitalsThreshold = Field(description="思考一貫性閾値")
+    stamina: DuckPacemakerVitalsThreshold = Field(description="試行消耗度閾値")
+
+
+class DuckPacemakerConfig(BaseModel):
+    """Duck Pacemaker設定クラス"""
+    
+    dynamic_limits: DuckPacemakerDynamicLimits = Field(default_factory=DuckPacemakerDynamicLimits, description="動的制限設定")
+    task_profiles: Dict[str, DuckPacemakerTaskProfile] = Field(default_factory=dict, description="タスクプロファイル別設定")
+    vitals_thresholds: DuckPacemakerVitalsThresholds = Field(description="バイタル閾値設定")
+
+
 class Config(BaseModel):
     """メイン設定クラス"""
     
@@ -151,6 +188,7 @@ class Config(BaseModel):
     summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig, description="要約用LLM設定")
     promptsmith: Optional[PromptSmithConfig] = Field(default=None, description="PromptSmith設定")
     duck_keeper: DuckKeeperConfig = Field(default_factory=DuckKeeperConfig, description="Duck Keeper設定")
+    duck_pacemaker: Optional[DuckPacemakerConfig] = Field(default=None, description="Duck Pacemaker設定")
 
 
 class ConfigManager:
@@ -428,6 +466,83 @@ class ConfigManager:
         
         ai_config = ai_config_mapping.get(ai_role)
         return ai_config.provider if ai_config else None
+    
+    def get_duck_pacemaker_config(self) -> Optional[DuckPacemakerConfig]:
+        """Duck Pacemaker設定を取得
+        
+        Returns:
+            Duck Pacemaker設定またはNone
+        """
+        config = self.load_config()
+        return config.duck_pacemaker
+    
+    def get_duck_pacemaker_dynamic_limits(self) -> Dict[str, Any]:
+        """Duck Pacemaker動的制限設定を取得
+        
+        Returns:
+            動的制限設定辞書
+        """
+        duck_config = self.get_duck_pacemaker_config()
+        if duck_config and duck_config.dynamic_limits:
+            return {
+                "enabled": duck_config.dynamic_limits.enabled,
+                "min_loops": duck_config.dynamic_limits.min_loops,
+                "max_loops": duck_config.dynamic_limits.max_loops
+            }
+        
+        # デフォルト値
+        return {
+            "enabled": True,
+            "min_loops": 3,
+            "max_loops": 20
+        }
+    
+    def get_duck_pacemaker_task_profile(self, task_profile: str) -> Optional[int]:
+        """特定タスクプロファイルのベースループ数を取得
+        
+        Args:
+            task_profile: タスクプロファイル名
+            
+        Returns:
+            ベースループ数またはNone
+        """
+        duck_config = self.get_duck_pacemaker_config()
+        if duck_config and duck_config.task_profiles:
+            profile_config = duck_config.task_profiles.get(task_profile)
+            if profile_config:
+                return profile_config.base_loops
+        
+        return None
+    
+    def get_duck_pacemaker_vitals_thresholds(self) -> Dict[str, Dict[str, float]]:
+        """Duck Pacemakerバイタル閾値設定を取得
+        
+        Returns:
+            バイタル閾値設定辞書
+        """
+        duck_config = self.get_duck_pacemaker_config()
+        if duck_config and duck_config.vitals_thresholds:
+            return {
+                "mood": {
+                    "low": duck_config.vitals_thresholds.mood.low,
+                    "good": duck_config.vitals_thresholds.mood.good
+                },
+                "focus": {
+                    "low": duck_config.vitals_thresholds.focus.low,
+                    "good": duck_config.vitals_thresholds.focus.good
+                },
+                "stamina": {
+                    "low": duck_config.vitals_thresholds.stamina.low,
+                    "good": duck_config.vitals_thresholds.stamina.good
+                }
+            }
+        
+        # デフォルト値
+        return {
+            "mood": {"low": 0.4, "good": 0.8},
+            "focus": {"low": 0.4, "good": 0.8},
+            "stamina": {"low": 0.3, "good": 0.8}
+        }
 
 
 # グローバルな設定管理インスタンス

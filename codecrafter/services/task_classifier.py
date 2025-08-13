@@ -75,30 +75,33 @@ class TaskProfileClassifier:
             TaskProfileType.INFORMATION_REQUEST: {
                 "primary_keywords": [
                     "説明", "教えて", "内容", "について", "とは", "どんな", "確認",
-                    "見て", "読み", "表示", "チェック", "概要", "情報"
+                    "見て", "読み", "表示", "チェック", "概要", "情報", "参照して",
+                    "レビューして", "内容をレビュー"
                 ],
                 "secondary_keywords": [
-                    "ファイル", "クラス", "関数", "メソッド", "設定", "構造"
+                    "ファイル", "クラス", "関数", "メソッド", "設定", "構造", "ドキュメント"
                 ],
                 "negative_keywords": [
-                    "作成", "変更", "修正", "削除", "追加", "実装", "インストール"
+                    "作成", "変更", "修正", "削除", "追加", "実装", "インストール",
+                    "問題", "課題", "改善", "最適化"
                 ],
-                "base_score": 0.7
+                "base_score": 0.8  # スコアを上げて優先度向上
             },
             
             TaskProfileType.ANALYSIS_REQUEST: {
                 "primary_keywords": [
                     "分析", "調べ", "問題", "課題", "ボトルネック", "リスク", "改善",
-                    "評価", "レビュー", "診断", "検証", "監査"
+                    "評価", "診断", "検証", "監査", "品質分析", "コード分析"
                 ],
                 "secondary_keywords": [
                     "パフォーマンス", "セキュリティ", "品質", "効率", "最適化",
-                    "アーキテクチャ", "設計", "構造"
+                    "アーキテクチャ", "設計", "構造", "バグ", "エラー"
                 ],
                 "negative_keywords": [
-                    "作成", "実装", "インストール", "説明だけ"
+                    "作成", "実装", "インストール", "説明だけ", "内容を", "参照して",
+                    "見て", "読み", "表示"
                 ],
-                "base_score": 0.8
+                "base_score": 0.7  # スコアを下げて、内容確認との差別化
             },
             
             TaskProfileType.CREATION_REQUEST: {
@@ -292,7 +295,7 @@ class TaskProfileClassifier:
         if secondary_matches > 0:
             score += min(secondary_matches * 0.05, 0.15)
         
-        # Negative keywordsのペナルティ
+        # Negative keywordsのペナルティ（強化）
         negative_matches = 0
         for keyword in pattern_config["negative_keywords"]:
             if keyword in user_request:
@@ -300,7 +303,15 @@ class TaskProfileClassifier:
                 matches.append(f"negative:{keyword}")
         
         if negative_matches > 0:
-            score -= min(negative_matches * 0.3, 0.5)
+            # ネガティブキーワードのペナルティを強化
+            penalty = min(negative_matches * 0.4, 0.7)
+            score -= penalty
+        
+        # 特定パターンの優先度調整
+        if "参照して" in user_request and "内容" in user_request:
+            # 「参照して内容を」パターンはinformation_requestを優先
+            if pattern_config.get("base_score", 0) == 0.8:  # information_request
+                score += 0.2  # ボーナス
         
         return max(score, 0.0), matches
     
