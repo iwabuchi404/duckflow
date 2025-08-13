@@ -41,7 +41,7 @@ from ..prompts.four_node_context import (
 from ..ui.rich_ui import rich_ui
 from .routing_engine import RoutingEngine
 from .four_node_helpers import FourNodeHelpers
-from .response_generation_node import response_generator
+from .response_generation_node import response_generation_node
 from ..services import llm_service, task_objective_manager, TaskObjective, SatisfactionEvaluation
 
 
@@ -610,12 +610,20 @@ class FourNodeOrchestrator:
             # 5. ユーザー満足度の予測
             user_satisfaction_prediction = self._predict_user_satisfaction(understanding_result, execution_result, success_status)
             
-            # 6. 結果の構築と保存
+            # 6. 結果の構築と保存 (5ノードアーキテクチャ対応)
+            quality_assessment = self._assess_quality(understanding_result, execution_result)
             evaluation_result = EvaluationResult(
+                # 5ノードアーキテクチャ必須フィールド
+                overall_quality_score=completion_percentage / 100.0,
+                task_completion_status="completed" if next_action == NextAction.COMPLETE else "in_progress",
+                identified_issues=[] if success_status else ["処理が完了していません"],
+                recommended_next_action=next_action,
+                confidence_in_recommendation=0.8,
+                reasoning=quality_assessment,
+                # 従来互換性フィールド
                 success_status=success_status,
                 completion_percentage=completion_percentage,
-                next_action=next_action,
-                quality_assessment=self._assess_quality(understanding_result, execution_result),
+                quality_assessment=quality_assessment,
                 user_satisfaction_prediction=user_satisfaction_prediction,
                 error_analysis=error_analysis,
                 continuation_plan=continuation_plan
@@ -754,15 +762,15 @@ class FourNodeOrchestrator:
                 return "complete"
             
             # 次のアクションに基づく分岐（5ノード対応）
-            if evaluation_result.next_action == NextAction.COMPLETE:
+            if evaluation_result.recommended_next_action == NextAction.COMPLETE:
                 # タスク完了時は応答生成ノードへ
                 return "response"
-            elif evaluation_result.next_action == NextAction.CONTINUE:
+            elif evaluation_result.recommended_next_action == NextAction.CONTINUE:
                 # 継続計画で4ノードコンテキストを更新
                 if evaluation_result.continuation_plan:
                     self._prepare_continuation_context(evaluation_result.continuation_plan)
                 return "continue"
-            elif evaluation_result.next_action == NextAction.RETRY:
+            elif evaluation_result.recommended_next_action == NextAction.RETRY:
                 # リトライコンテキストを準備
                 self._prepare_retry_context(evaluation_result.error_analysis)
                 return "retry"
@@ -791,7 +799,8 @@ class FourNodeOrchestrator:
             rich_ui.print_step("[応答生成] フェーズ開始")
             
             # 応答生成ノードで最終レポートを生成
-            final_response = response_generator.generate_response(state_obj)
+            response_result = response_generation_node.generate_response(state_obj)
+            final_response = response_result.final_response
             
             # 応答をAgentStateに追加
             state_obj.add_message("assistant", final_response)
@@ -1418,7 +1427,7 @@ class FourNodeOrchestrator:
         return {"success": len(result.execution_errors) == 0}
     
     def _serialize_evaluation_result(self, result: EvaluationResult) -> Dict[str, Any]:
-        return {"status": result.success_status, "action": result.next_action.value}
+        return {"status": result.success_status, "action": result.recommended_next_action.value}
     
     def _prepare_continuation_context(self, plan: ExecutionPlan) -> None:
         """継続用のコンテキスト準備"""

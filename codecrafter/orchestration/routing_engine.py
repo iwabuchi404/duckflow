@@ -437,10 +437,9 @@ class RoutingEngine:
             classification_prompt = self._build_task_classification_prompt(user_message)
             
             # 高速LLMで分類実行
-            llm_response = llm_manager.get_default_client().chat(
+            llm_response = llm_manager.chat(
                 classification_prompt,
-                system_prompt=self._get_task_classification_system_prompt(),
-                max_tokens=100
+                system_prompt=self._get_task_classification_system_prompt()
             )
             
             # レスポンスから operation_type を抽出

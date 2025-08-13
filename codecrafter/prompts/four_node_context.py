@@ -23,11 +23,18 @@ class NodeType(Enum):
 
 
 class NextAction(Enum):
-    """次のアクション種別"""
+    """次のアクション種別 (5ノードアーキテクチャ対応)"""
     COMPLETE = "complete"      # タスク完了
     CONTINUE = "continue"      # 継続実行
     RETRY = "retry"           # 再試行
     ERROR = "error"           # エラー終了
+    # 5ノードアーキテクチャ専用アクション
+    RESPONSE_GENERATION = "response_generation"  # 応答生成へ進む
+    REPLAN = "replan"                           # 再計画が必要
+    COLLECT_MORE_INFO = "collect_more_info"     # 追加情報収集が必要
+    EXECUTE_ADDITIONAL = "execute_additional"   # 追加実行が必要
+    END = "end"                                 # 処理終了
+    DUCK_CALL = "duck_call"                     # 人間相談が必要
 
 
 class RiskLevel(Enum):
@@ -198,12 +205,30 @@ class ExecutionResult:
 
 @dataclass
 class EvaluationResult:
-    """評価・継続ノードの出力"""
-    success_status: bool                 # 成功ステータス
-    completion_percentage: float         # 完了率
-    next_action: NextAction              # 次のアクション
-    quality_assessment: str              # 品質評価
-    user_satisfaction_prediction: float  # ユーザー満足度予測
+    """評価・継続ノードの出力 (5ノードアーキテクチャ強化版)"""
+    # 基本評価情報
+    overall_quality_score: float         # 総合品質スコア (0.0-1.0)
+    task_completion_status: str          # タスク完了状況
+    identified_issues: List[str]         # 特定された問題
+    
+    # 次アクション決定
+    recommended_next_action: NextAction  # 推奨次アクション
+    confidence_in_recommendation: float # 推奨への信頼度
+    reasoning: str                       # 判定理由
+    
+    # Duck Vitals System 統合
+    duck_vitals_assessment: Dict[str, float] = field(default_factory=dict)  # バイタル評価
+    
+    # 5ノードアーキテクチャ専用
+    response_generation_readiness: bool = False   # 応答生成準備完了
+    template_data_completeness: float = 0.0       # テンプレートデータ完全性
+    quality_gate_passed: bool = False             # 品質ゲート通過
+    
+    # 従来互換性
+    success_status: bool = True                   # 成功ステータス
+    completion_percentage: float = 0.0            # 完了率
+    quality_assessment: str = ""                  # 品質評価
+    user_satisfaction_prediction: float = 0.0    # ユーザー満足度予測
     error_analysis: Optional[ErrorAnalysis] = None  # エラー分析
     continuation_plan: Optional[ExecutionPlan] = None  # 継続計画
 

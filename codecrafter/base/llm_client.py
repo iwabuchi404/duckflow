@@ -367,5 +367,27 @@ class LLMManager:
         return isinstance(self.current_client, MockClient)
 
 
+
+    def get_default_client(self) -> BaseLLMClient:
+        """デフォルトクライアントを取得 (後方互換性のため)
+        
+        Returns:
+            現在のメインクライアント
+        """
+        return self.current_client
+    
+    def get_client(self, client_type: str = "main") -> BaseLLMClient:
+        """指定されたタイプのクライアントを取得
+        
+        Args:
+            client_type: クライアントタイプ ("main" または "summary")
+            
+        Returns:
+            指定されたクライアント
+        """
+        if client_type == "summary":
+            return self.summary_client
+        return self.current_client
+
 # グローバルなLLM管理インスタンス
 llm_manager = LLMManager()

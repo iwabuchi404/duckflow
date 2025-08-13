@@ -9,11 +9,21 @@ LLM呼び出しを行わない機械的な処理のみ
 import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from dataclasses import dataclass
 
 from ..templates import TaskProfileType, get_template, validate_template_data
 from ..state.agent_state import AgentState
 from ..prompts.four_node_context import GatheredInfo, ExecutionResult
 from ..ui.rich_ui import rich_ui
+
+
+@dataclass
+class ResponseResult:
+    """応答生成結果"""
+    final_response: str
+    template_used: str
+    data_completeness: float
+    generation_method: str = "deterministic"
 
 
 class ResponseGenerationNode:
@@ -27,33 +37,49 @@ class ResponseGenerationNode:
         """ノードを初期化"""
         self.data_extractors = self._build_data_extractors()
     
-    def generate_response(self, state: AgentState) -> str:
-        """最終応答を生成
+    def generate_response(
+        self, 
+        state: AgentState, 
+        gathered_info: Optional[GatheredInfo] = None, 
+        execution_result: Optional[ExecutionResult] = None, 
+        task_profile_type: Optional[TaskProfileType] = None
+    ) -> ResponseResult:
+        """最終応答を生成 (5ノードアーキテクチャ対応)
         
         Args:
-            state: エージェント状態（全ての収集情報を含む）
+            state: エージェント状態
+            gathered_info: 情報収集結果 (オプション)
+            execution_result: 実行結果 (オプション)
+            task_profile_type: TaskProfile分類 (オプション)
             
         Returns:
-            ユーザー向けの最終レポート（Markdown形式）
+            応答生成結果オブジェクト
         """
         try:
             rich_ui.print_step("[応答生成] フェーズ開始")
             
-            # TaskProfileの取得
-            task_profile_type = self._extract_task_profile(state)
+            # TaskProfileの取得 (パラメータ優先、フォールバック処理)
             if not task_profile_type:
-                return self._generate_error_response("TaskProfileの特定に失敗しました")
+                task_profile_type = self._extract_task_profile(state)
+            if not task_profile_type:
+                error_response = self._generate_error_response("TaskProfileの特定に失敗しました")
+                return ResponseResult(
+                    final_response=error_response,
+                    template_used="error_template",
+                    data_completeness=0.0
+                )
             
             rich_ui.print_message(f"TaskProfile: {task_profile_type.value}", "info")
             
             # テンプレートの取得
             template = get_template(task_profile_type)
             
-            # データ抽出
-            extracted_data = self._extract_data_for_template(state, template)
+            # データ抽出 (渡されたパラメータを活用)
+            extracted_data = self._extract_data_for_template(state, template, gathered_info, execution_result)
             
             # データ検証
-            if not validate_template_data(task_profile_type, extracted_data):
+            data_completeness = 1.0 if validate_template_data(task_profile_type, extracted_data) else 0.6
+            if data_completeness < 1.0:
                 rich_ui.print_warning("必須データが不足しています - フォールバック値を使用")
             
             # テンプレートにデータを埋め込み
@@ -64,11 +90,21 @@ class ResponseGenerationNode:
             
             rich_ui.print_success("[応答生成] 完了")
             
-            return formatted_report
+            return ResponseResult(
+                final_response=formatted_report,
+                template_used=task_profile_type.value,
+                data_completeness=data_completeness
+            )
             
         except Exception as e:
             rich_ui.print_error(f"応答生成エラー: {e}")
-            return self._generate_error_response(f"応答生成中にエラーが発生しました: {str(e)}")
+            error_response = self._generate_error_response(f"応答生成中にエラーが発生しました: {str(e)}")
+            return ResponseResult(
+                final_response=error_response,
+                template_used="error_template",
+                data_completeness=0.0,
+                generation_method="error_fallback"
+            )
     
     def _extract_task_profile(self, state: AgentState) -> Optional[TaskProfileType]:
         """AgentStateからTaskProfileTypeを抽出
@@ -109,12 +145,20 @@ class ResponseGenerationNode:
             rich_ui.print_warning(f"TaskProfile抽出エラー: {e}")
             return None
     
-    def _extract_data_for_template(self, state: AgentState, template) -> Dict[str, str]:
-        """テンプレート用データを抽出
+    def _extract_data_for_template(
+        self, 
+        state: AgentState, 
+        template, 
+        gathered_info: Optional[GatheredInfo] = None, 
+        execution_result: Optional[ExecutionResult] = None
+    ) -> Dict[str, str]:
+        """テンプレート用データを抽出 (5ノードアーキテクチャ対応)
         
         Args:
             state: エージェント状態
             template: TaskProfileTemplate
+            gathered_info: 情報収集結果 (オプション)
+            execution_result: 実行結果 (オプション)
             
         Returns:
             テンプレート変数をキーとした辞書
@@ -122,29 +166,46 @@ class ResponseGenerationNode:
         extracted_data = {}
         
         try:
-            # gathered_info を複数のソースから取得を試行
-            gathered_info = {}
+            # gathered_info を複数のソースから取得を試行 (パラメータ優先)
+            consolidated_gathered_info = {}
             
-            # 1. collected_contextから
+            # 1. パラメータから渡されたgathered_infoを優先
+            if gathered_info and hasattr(gathered_info, 'collected_files'):
+                consolidated_gathered_info['collected_files'] = gathered_info.collected_files
+                print(f"[RESPONSE_DEBUG] パラメータからgathered_info取得: {len(gathered_info.collected_files)}ファイル")
+            
+            # 2. collected_contextからフォールバック
             if hasattr(state, 'collected_context') and state.collected_context:
-                gathered_info.update(state.collected_context)
+                context = state.collected_context
+                print(f"[RESPONSE_DEBUG] collected_context keys: {list(context.keys())}")
+                
+                # gathered_infoオブジェクトを直接取得
+                if 'gathered_info' in context:
+                    gathered_obj = context['gathered_info']
+                    if hasattr(gathered_obj, 'collected_files'):
+                        consolidated_gathered_info['collected_files'] = gathered_obj.collected_files
+                        print(f"[RESPONSE_DEBUG] collected_contextからgathered_info取得: {len(gathered_obj.collected_files)}ファイル")
+                
+                # その他のコンテキストも統合
+                consolidated_gathered_info.update(context)
             
-            # 2. gathered_info_detailed から（修正版）
-            if 'gathered_info_detailed' in gathered_info:
-                detailed = gathered_info['gathered_info_detailed']
+            # 3. gathered_info_detailed から（修正版）
+            if 'gathered_info_detailed' in consolidated_gathered_info:
+                detailed = consolidated_gathered_info['gathered_info_detailed']
                 if 'collected_files' in detailed:
-                    gathered_info['collected_files'] = detailed['collected_files']
+                    consolidated_gathered_info['collected_files'] = detailed['collected_files']
+                    print(f"[RESPONSE_DEBUG] gathered_info_detailedから取得")
             
-            # 3. conversation_historyから情報収集結果を復元
-            self._restore_gathered_info_from_history(state, gathered_info)
+            # 4. conversation_historyから情報収集結果を復元
+            self._restore_gathered_info_from_history(state, consolidated_gathered_info)
             
-            print(f"[RESPONSE_DEBUG] gathered_info keys: {list(gathered_info.keys())}")
-            if 'collected_files' in gathered_info:
-                print(f"[RESPONSE_DEBUG] collected_files count: {len(gathered_info['collected_files'])}")
+            print(f"[RESPONSE_DEBUG] consolidated_gathered_info keys: {list(consolidated_gathered_info.keys())}")
+            if 'collected_files' in consolidated_gathered_info:
+                print(f"[RESPONSE_DEBUG] collected_files count: {len(consolidated_gathered_info['collected_files'])}")
             
             # data_mappingに基づいてデータを抽出
             for template_var, data_source in template.data_mapping.items():
-                value = self._extract_specific_data(state, data_source, gathered_info)
+                value = self._extract_specific_data(state, data_source, consolidated_gathered_info)
                 extracted_data[template_var] = value or template.fallback_values.get(template_var, "情報が利用できません")
                 print(f"[RESPONSE_DEBUG] {template_var} = {len(str(value))}文字")
             
@@ -257,32 +318,72 @@ class ResponseGenerationNode:
     
     def _extract_file_content_analysis(self, state: AgentState, gathered_info: Dict) -> str:
         """ファイル内容の分析を抽出（詳細なコード内容を含む）"""
+        print(f"[FILE_ANALYSIS_DEBUG] gathered_info keys: {list(gathered_info.keys())}")
+        
         if 'collected_files' in gathered_info and gathered_info['collected_files']:
             files_info = gathered_info['collected_files']
+            print(f"[FILE_ANALYSIS_DEBUG] collected_files type: {type(files_info)}")
+            print(f"[FILE_ANALYSIS_DEBUG] collected_files count: {len(files_info)}")
             
             analysis_parts = []
             for file_path, file_content in files_info.items():
+                print(f"[FILE_ANALYSIS_DEBUG] Processing file: {file_path}, type: {type(file_content)}")
+                
+                # ファイル内容の取得（複数の形式に対応）
                 if hasattr(file_content, 'content'):
                     content = file_content.content
+                    print(f"[FILE_ANALYSIS_DEBUG] Content from .content: {len(content)}文字")
+                elif hasattr(file_content, 'file_content'):
+                    content = file_content.file_content
+                    print(f"[FILE_ANALYSIS_DEBUG] Content from .file_content: {len(content)}文字")
+                elif isinstance(file_content, str):
+                    content = file_content
+                    print(f"[FILE_ANALYSIS_DEBUG] Content as string: {len(content)}文字")
                 else:
                     content = str(file_content)
+                    print(f"[FILE_ANALYSIS_DEBUG] Content as str(): {len(content)}文字")
+                
+                # 空の内容をスキップ
+                if not content or content.strip() == "":
+                    print(f"[FILE_ANALYSIS_DEBUG] Skipping empty file: {file_path}")
+                    continue
                 
                 # 基本情報の分析
                 lines_count = len(content.split('\n'))
                 chars_count = len(content)
                 
-                # ターゲットファイル（test_step2d_graphなど）は詳細に分析
-                is_target_file = any(pattern in file_path.lower() for pattern in ['test_step2d_graph', 'target', 'main'])
+                # ファイル名から拡張子を取得
+                import os
+                _, ext = os.path.splitext(file_path)
                 
-                if is_target_file and file_path.endswith('.py'):
-                    # Python詳細分析
+                if ext == '.md':
+                    # Markdownファイルの分析
+                    header_matches = re.findall(r'^#+\s+(.+)$', content, re.MULTILINE)
+                    
+                    analysis_parts.append(f"""## {os.path.basename(file_path)}
+
+### 📊 ドキュメント概要
+- **行数**: {lines_count}行
+- **文字数**: {chars_count:,}文字
+- **見出し数**: {len(header_matches)}個
+
+### 📋 主要見出し
+{chr(10).join([f"- {header}" for header in header_matches[:10]]) if header_matches else "- なし"}
+
+### 📝 内容プレビュー
+```markdown
+{content[:2000]}{'...[残り' + str(max(0, len(content) - 2000)) + '文字]' if len(content) > 2000 else ''}
+```""")
+                
+                elif ext == '.py':
+                    # Pythonファイルの詳細分析
                     import_matches = re.findall(r'^(?:import\s+(\w+)|from\s+([\w.]+)\s+import)', content, re.MULTILINE)
                     imports = [m[0] or m[1] for m in import_matches]
                     
                     class_matches = re.findall(r'^class\s+(\w+)', content, re.MULTILINE)
                     function_matches = re.findall(r'^(?:def|async def)\s+(\w+)', content, re.MULTILINE)
                     
-                    analysis_parts.append(f"""## {file_path}
+                    analysis_parts.append(f"""## {os.path.basename(file_path)}
 
 ### 📊 ファイル概要
 - **行数**: {lines_count}行
@@ -302,32 +403,27 @@ class ResponseGenerationNode:
 
 ### 📝 コード内容
 ```python
-{content[:3000]}{'...[残り' + str(max(0, len(content) - 3000)) + '文字]' if len(content) > 3000 else ''}
+{content[:1500]}{'...[残り' + str(max(0, len(content) - 1500)) + '文字]' if len(content) > 1500 else ''}
 ```""")
                 
-                elif file_path.endswith('.py'):
-                    # 通常のPythonファイル（簡易版）
-                    import_count = len(re.findall(r'^import\s+|^from\s+', content, re.MULTILINE))
-                    class_count = len(re.findall(r'^class\s+\w+', content, re.MULTILINE))
-                    function_count = len(re.findall(r'^def\s+\w+', content, re.MULTILINE))
-                    
-                    analysis_parts.append(f"""**{file_path}**
-- 行数: {lines_count}行
-- 文字数: {chars_count}文字  
-- インポート: {import_count}個
-- クラス: {class_count}個
-- 関数: {function_count}個
-
-```python
-{content[:500]}{'...[省略]' if len(content) > 500 else ''}
-```""")
                 else:
-                    # 非Pythonファイル
-                    analysis_parts.append(f"""**{file_path}**
-- 行数: {lines_count}行
-- 文字数: {chars_count}文字""")
+                    # その他のファイル
+                    analysis_parts.append(f"""## {os.path.basename(file_path)}
+
+### 📊 ファイル概要
+- **行数**: {lines_count}行
+- **文字数**: {chars_count:,}文字
+- **ファイル種別**: {ext or 'テキストファイル'}
+
+### 📝 内容プレビュー
+```
+{content[:1000]}{'...[残り' + str(max(0, len(content) - 1000)) + '文字]' if len(content) > 1000 else ''}
+```""")
             
-            return "\n\n".join(analysis_parts)
+            if analysis_parts:
+                return "\n\n".join(analysis_parts)
+            else:
+                return "ファイル内容は取得されましたが、分析可能な内容がありませんでした"
         
         return "ファイル内容の分析データが利用できません"
     
@@ -520,4 +616,4 @@ class ResponseGenerationNode:
 
 
 # グローバルインスタンス
-response_generator = ResponseGenerationNode()
+response_generation_node = ResponseGenerationNode()

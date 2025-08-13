@@ -255,36 +255,59 @@ class FourNodeHelpers:
             
             for file_path in target_files:
                 try:
-                    rich_ui.print_message(f"ファイル読み取り中: {file_path}", "info")
+                    rich_ui.print_message(f"[FILE_READ] ファイル読み取り開始: {file_path}", "info")
                     
                     # パスの正規化（バックスラッシュエスケープ問題の修正）
                     from pathlib import Path
                     import os
+                    
                     # バックスラッシュエスケープを修正
                     safe_path = file_path.replace('\\\\', '\\')  # 二重バックスラッシュを単一に
                     normalized_path = str(Path(safe_path).resolve())
                     
+                    rich_ui.print_message(f"[FILE_READ] 正規化パス: {normalized_path}", "info")
+                    
+                    # ファイル存在確認
+                    if not Path(normalized_path).exists():
+                        rich_ui.print_warning(f"[FILE_READ] ファイルが存在しません: {normalized_path}")
+                        # 相対パスで再試行
+                        relative_path = Path(safe_path)
+                        if relative_path.exists():
+                            normalized_path = str(relative_path.resolve())
+                            rich_ui.print_message(f"[FILE_READ] 相対パスで発見: {normalized_path}", "info")
+                        else:
+                            rich_ui.print_error(f"[FILE_READ] ファイルが見つかりません: {file_path}")
+                            continue
+                    
                     # ファイル読み取り
+                    rich_ui.print_message(f"[FILE_READ] 読み取り実行中...", "info")
                     content = file_tools.read_file(normalized_path)
+                    
+                    rich_ui.print_message(f"[FILE_READ] 読み取り結果: {len(content) if content else 0}文字", "info")
+                    
                     if content:
                         # ファイル情報の取得
                         try:
                             file_info = file_tools.get_file_info(normalized_path)
                             size = file_info.get('size', len(content))
-                        except:
+                        except Exception as info_error:
+                            rich_ui.print_warning(f"[FILE_READ] ファイル情報取得失敗: {info_error}")
                             size = len(content)
                         
-                        collected_files[file_path] = FileContent(
+                        # FileContentオブジェクト作成
+                        file_content = FileContent(
                             path=normalized_path,
-                            content=content[:8000],  # 最大8000文字に制限（design-doc.mdは長い）
-                            encoding="utf-8",  # 簡略化
+                            content=content[:8000],  # 最大8000文字に制限
+                            encoding="utf-8",
                             size=size,
-                            last_modified=datetime.now(),  # 簡略化
-                            relevance_score=0.9  # 計画で指定されたファイルは高い関連度
+                            last_modified=datetime.now(),
+                            relevance_score=0.9
                         )
-                        rich_ui.print_success(f"ファイル読み取り完了: {normalized_path} ({len(content)}文字)")
+                        
+                        collected_files[file_path] = file_content
+                        rich_ui.print_success(f"[FILE_READ] 完了: {normalized_path} ({len(content)}文字 → {len(file_content.content)}文字)")
                     else:
-                        rich_ui.print_warning(f"ファイル {normalized_path} は空です")
+                        rich_ui.print_warning(f"[FILE_READ] ファイルが空: {normalized_path}")
                         
                 except Exception as e:
                     rich_ui.print_warning(f"ファイル {file_path} の読み取りに失敗: {e}")

@@ -1,6 +1,7 @@
 """
-Duckflow ステップ2a実装版
-LangGraphベースのオーケストレーション対応
+Duckflow v0.3.2-alpha - 5ノードアーキテクチャ実装版
+LangGraphベースの評価ノード中心品質保証ループ
+Duck Pacemaker統合AI安全システム搭載
 """
 import os
 import sys
@@ -11,14 +12,18 @@ from typing import Optional
 from .base.config import config_manager
 from .base.llm_client import llm_manager, LLMClientError
 from .state.agent_state import AgentState, WorkspaceInfo
-from .orchestration.four_node_orchestrator import FourNodeOrchestrator
+from .orchestration.five_node_orchestrator import FiveNodeOrchestrator
 from .tools.file_tools import file_tools, FileOperationError
 from .tools.rag_tools import rag_tools, RAGToolError
 from .ui.rich_ui import rich_ui
 
 
 class DuckflowAgentV2:
-    """Duckflow エージェント - ステップ2a実装（LangGraphベース）"""
+    """Duckflow エージェント - 5ノードアーキテクチャ実装（LangGraphベース）
+    
+    評価ノード中心の品質保証ループと決定論的応答生成を実現
+    Duck Pacemaker統合による AI安全システム搭載
+    """
     
     def __init__(self):
         """初期化"""
@@ -37,7 +42,7 @@ class DuckflowAgentV2:
             debug_mode=config_manager.is_debug_mode()
         )
         
-        self.orchestrator = FourNodeOrchestrator(self.state)
+        self.orchestrator = FiveNodeOrchestrator(self.state)
         self.running = True
     
     def start(self) -> None:
@@ -45,14 +50,14 @@ class DuckflowAgentV2:
         try:
             # ヘッダー表示
             rich_ui.print_header(
-                "Duckflow v0.3.0-alpha (4-Node Architecture)",
-                "AI-powered coding agent with 4-node integrated orchestration"
+                "Duckflow v0.3.2-alpha (5-Node Architecture)",
+                "AI-powered coding agent with 5-node LangGraph orchestration"
             )
             
             if self.state.debug_mode:
                 rich_ui.print_warning("デバッグモードで実行中")
             
-            rich_ui.print_message("[STEP2] LangGraphベースの新しいオーケストレーション", "info")
+            rich_ui.print_message("[5-NODE] LangGraphベースの5ノードアーキテクチャ", "info")
             
             # メインループ
             self._main_loop()
@@ -249,15 +254,16 @@ class DuckflowAgentV2:
 [yellow]AI対話 (LangGraph):[/]
   上記以外の入力  - LangGraphオーケストレーションでAI対話を実行
 
-[bold green]ステップ2a新機能:[/]
-  ✨ LangGraphベースのステートフル処理
-  ✨ 自動的なツール実行とエラーリトライ
-  ✨ 実行パスの可視化
+[bold green]5ノードアーキテクチャ新機能:[/]
+  ✨ 評価ノード中心の品質保証ループ
+  ✨ 決定論的応答生成（TaskProfileテンプレート）
+  ✨ Duck Pacemaker統合（AI安全システム）
+  ✨ 高度な探索・分析エンジン
 
 [dim]例: "example.pyファイルを作成して、Hello Worldを出力する関数を書いて"[/]
         """
         
-        rich_ui.print_panel(help_text.strip(), "Help - Step 2a", "info")
+        rich_ui.print_panel(help_text.strip(), "Help - 5-Node Architecture", "info")
     
     def _show_status(self) -> None:
         """エージェントの状態を表示"""
@@ -271,7 +277,8 @@ class DuckflowAgentV2:
   メッセージ数: {len(self.state.conversation_history)}
   現在のタスク: {self.state.current_task or 'なし'}
 
-[bold]LangGraph状態:[/]
+[bold]5ノードLangGraph状態:[/]
+  アーキテクチャ: 5ノード統合 (理解・計画 → 情報収集 → 安全実行 → 評価・継続 → 応答生成)
   現在のノード: {self.state.graph_state.current_node or 'なし'}
   実行パス: {' → '.join(self.state.graph_state.execution_path[-5:]) if self.state.graph_state.execution_path else 'なし'}
   ループ回数: {self.state.graph_state.loop_count}/{self.state.graph_state.max_loops}
@@ -286,7 +293,7 @@ class DuckflowAgentV2:
   LLMプロバイダー: {self.config.llm.provider}
         """
         
-        rich_ui.print_panel(status_info.strip(), "Status - Step 2a", "info")
+        rich_ui.print_panel(status_info.strip(), "Status - 5-Node Architecture", "info")
     
     def _show_config(self) -> None:
         """設定情報を表示"""
@@ -304,12 +311,14 @@ class DuckflowAgentV2:
 [bold]セキュリティ設定:[/]
   ファイル書き込み承認: {'必要' if self.config.security.require_approval.get('file_write', True) else '不要'}
 
-[bold]LangGraph設定:[/]
+[bold]5ノードLangGraph設定:[/]
+  アーキテクチャ: 評価ノード中心品質保証ループ
   最大ループ回数: {self.state.graph_state.max_loops}
   最大リトライ回数: {self.state.max_retries}
+  Duck Pacemaker: 有効 (AI安全システム)
         """
         
-        rich_ui.print_panel(config_info.strip(), "Configuration - Step 2a", "info")
+        rich_ui.print_panel(config_info.strip(), "Configuration - 5-Node Architecture", "info")
     
     def _show_graph_status(self) -> None:
         """グラフ実行状態を表示"""

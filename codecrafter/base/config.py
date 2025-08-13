@@ -118,6 +118,15 @@ class PromptSmithConfig(BaseModel):
     target_ai: PromptSmithTargetAIConfig = Field(default_factory=PromptSmithTargetAIConfig, description="被評価AI設定")
 
 
+class DuckKeeperScanSettings(BaseModel):
+    """Duck Scan設定クラス"""
+    
+    use_ripgrep: bool = Field(default=True, description="ripgrep使用の有効化")
+    max_search_results: int = Field(default=100, description="検索結果の最大数")
+    max_scan_depth: int = Field(default=10, description="ディレクトリスキャンの最大深度")
+    search_timeout: int = Field(default=30, description="キーワード検索のタイムアウト（秒）")
+
+
 class DuckKeeperConfig(BaseModel):
     """Duck Keeper設定クラス"""
     
@@ -126,6 +135,7 @@ class DuckKeeperConfig(BaseModel):
     enforce_workspace_boundary: bool = Field(default=True, description="ワークスペース境界の強制")
     respect_gitignore: bool = Field(default=True, description=".gitignoreの尊重")
     max_file_read_tokens: int = Field(default=8000, description="ファイル読み取り最大トークン数")
+    scan_settings: DuckKeeperScanSettings = Field(default_factory=DuckKeeperScanSettings, description="Duck Scan設定")
 
 
 class Config(BaseModel):

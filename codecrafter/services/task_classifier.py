@@ -69,8 +69,9 @@ class TaskProfileClassifier:
         )
     
     def _build_classification_patterns(self) -> Dict[TaskProfileType, Dict]:
-        """分類用パターン辞書を構築"""
+        """分類用パターン辞書を構築 (5ノードアーキテクチャ統合版)"""
         return {
+            # === 新しいユーザー要求ベース分類 ===
             TaskProfileType.INFORMATION_REQUEST: {
                 "primary_keywords": [
                     "説明", "教えて", "内容", "について", "とは", "どんな", "確認",
@@ -156,6 +157,104 @@ class TaskProfileClassifier:
                     "作成", "修正", "分析"
                 ],
                 "base_score": 0.7
+            },
+            
+            # === 従来のサービス指向分類 (自動マッピング) ===
+            TaskProfileType.FILE_ANALYSIS: {
+                "primary_keywords": [
+                    "分析", "説明", "ファイル", "コード", "構造", "内容",
+                    "詳細", "見て", "確認"
+                ],
+                "secondary_keywords": [
+                    "python", ".py", "クラス", "関数", "メソッド", "インポート"
+                ],
+                "negative_keywords": [
+                    "作成", "修正", "削除", "変更", "実装"
+                ],
+                "base_score": 0.8
+            },
+            
+            TaskProfileType.CODE_EXPLANATION: {
+                "primary_keywords": [
+                    "解説", "説明", "どう動く", "仕組み", "動作", "処理",
+                    "理解", "わから", "教えて"
+                ],
+                "secondary_keywords": [
+                    "コード", "アルゴリズム", "ロジック", "フロー", "流れ"
+                ],
+                "negative_keywords": [
+                    "作成", "修正", "実装", "テスト"
+                ],
+                "base_score": 0.8
+            },
+            
+            TaskProfileType.PROJECT_EXPLORATION: {
+                "primary_keywords": [
+                    "探索", "調査", "全体", "プロジェクト", "構成", "概観",
+                    "マップ", "把握"
+                ],
+                "secondary_keywords": [
+                    "ディレクトリ", "フォルダ", "ファイル一覧", "構造"
+                ],
+                "negative_keywords": [
+                    "個別", "特定", "一つ"
+                ],
+                "base_score": 0.7
+            },
+            
+            TaskProfileType.DEBUGGING_SUPPORT: {
+                "primary_keywords": [
+                    "デバッグ", "エラー", "バグ", "問題", "不具合", "動かない",
+                    "修正", "直し"
+                ],
+                "secondary_keywords": [
+                    "例外", "トレース", "ログ", "検証", "テスト"
+                ],
+                "negative_keywords": [
+                    "新規", "作成", "説明だけ"
+                ],
+                "base_score": 0.9
+            },
+            
+            TaskProfileType.IMPLEMENTATION_TASK: {
+                "primary_keywords": [
+                    "実装", "作成", "開発", "構築", "作って", "書いて",
+                    "追加", "機能"
+                ],
+                "secondary_keywords": [
+                    "新規", "新しい", "設計", "計画", "仕様"
+                ],
+                "negative_keywords": [
+                    "修正", "分析", "説明だけ"
+                ],
+                "base_score": 0.9
+            },
+            
+            TaskProfileType.CONSULTATION: {
+                "primary_keywords": [
+                    "相談", "アドバイス", "どうすべき", "推奨", "ベストプラクティス",
+                    "意見", "判断", "悩み"
+                ],
+                "secondary_keywords": [
+                    "設計", "アーキテクチャ", "方針", "戦略", "選択"
+                ],
+                "negative_keywords": [
+                    "具体的", "実装", "コード"
+                ],
+                "base_score": 0.8
+            },
+            
+            TaskProfileType.GENERAL_CHAT: {
+                "primary_keywords": [
+                    "雑談", "質問", "話", "教え", "知り", "聞き"
+                ],
+                "secondary_keywords": [
+                    "プログラミング", "技術", "コンピューター", "開発"
+                ],
+                "negative_keywords": [
+                    "具体的", "詳細", "実装", "作成"
+                ],
+                "base_score": 0.5  # 最低スコア（他がマッチしない場合のフォールバック）
             }
         }
     

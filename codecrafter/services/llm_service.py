@@ -16,6 +16,7 @@ from langchain.prompts import PromptTemplate
 from ..base.llm_client import llm_manager
 from ..base.config import config_manager
 from ..schemas import ContentPlan, ComplexityLevel
+from ..services.task_classifier import TaskProfileType
 
 
 @dataclass
@@ -1958,6 +1959,418 @@ JSON形式で構造化して評価してください。
                 ],
                 "additional_sub_tasks": []
             }
+
+
+    # === 5ノードアーキテクチャ専用サービス ===
+    
+    def generate_planning_judgment(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Planning Role: TaskProfile特化計画生成 (5ノード対応)
+        
+        Args:
+            request: TaskProfile分類結果を含む計画要求
+            
+        Returns:
+            5ノード特化実行計画
+        """
+        try:
+            task_profile_type = request.get("task_profile_type", TaskProfileType.GENERAL_CHAT)
+            user_request = request.get("user_request", "")
+            detected_targets = request.get("detected_targets", [])
+            
+            # TaskProfile特化プロンプト構築
+            planning_prompt = self._build_five_node_planning_prompt(
+                task_profile_type, user_request, detected_targets
+            )
+            
+            response = self.creative_llm.chat(
+                planning_prompt,
+                system_prompt=self._get_five_node_planning_system_prompt()
+            )
+            
+            return self._parse_five_node_planning_response(response, task_profile_type)
+            
+        except Exception as e:
+            return self._create_five_node_fallback_plan(user_request, str(e))
+    
+    def perform_quality_judgment(self, evaluation_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Judgement Role: 品質評価と次アクション決定 (5ノード対応)
+        
+        Args:
+            evaluation_context: 評価コンテキスト
+            
+        Returns:
+            品質評価結果と推奨アクション
+        """
+        try:
+            judgment_prompt = self._build_quality_judgment_prompt(evaluation_context)
+            
+            response = self.evaluator_llm.chat(
+                judgment_prompt,
+                system_prompt=self._get_quality_judgment_system_prompt()
+            )
+            
+            return self._parse_quality_judgment_response(response)
+            
+        except Exception as e:
+            return {
+                "quality_score": 0.5,
+                "next_action": "response_generation",
+                "reasoning": f"評価エラー: {str(e)}",
+                "confidence": 0.3
+            }
+    
+    def generate_deterministic_content(
+        self, 
+        task_profile_type: TaskProfileType,
+        content_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """ContentGeneration Role: 決定論的コンテンツ生成支援 (5ノード対応)
+        
+        Args:
+            task_profile_type: TaskProfile分類
+            content_data: 生成用データ
+            
+        Returns:
+            構造化コンテンツデータ
+        """
+        try:
+            # TaskProfile別テンプレートデータ構築
+            template_data = self._build_template_data(task_profile_type, content_data)
+            
+            return {
+                "template_data": template_data,
+                "content_sections": self._extract_content_sections(task_profile_type, content_data),
+                "metadata": {
+                    "task_profile": task_profile_type.value,
+                    "generation_method": "deterministic",
+                    "data_completeness": self._assess_data_completeness(template_data)
+                }
+            }
+            
+        except Exception as e:
+            return {
+                "template_data": {},
+                "content_sections": {"error": f"コンテンツ生成エラー: {str(e)}"},
+                "metadata": {"generation_method": "error_fallback"}
+            }
+    
+    # === 5ノード専用プロンプト構築 ===
+    
+    def _build_five_node_planning_prompt(
+        self, 
+        task_profile_type: TaskProfileType,
+        user_request: str, 
+        detected_targets: List[str]
+    ) -> str:
+        """5ノード対応計画プロンプト構築"""
+        
+        profile_guidance = self._get_task_profile_guidance(task_profile_type)
+        
+        return f"""# TaskProfile特化実行計画
+
+## TaskProfile分類
+{task_profile_type.value}
+
+## ユーザー要求
+{user_request}
+
+## 検出対象
+{detected_targets}
+
+## 5ノードアーキテクチャ特化指針
+{profile_guidance}
+
+## 出力要求
+以下JSON形式で回答:
+```json
+{{
+    "understanding_plan": {{
+        "focus_points": ["重点ポイント1", "重点ポイント2"],
+        "complexity_estimate": "low/medium/high",
+        "required_context": ["必要コンテキスト"]
+    }},
+    "collection_plan": {{
+        "target_files": ["ファイル1", "ファイル2"],
+        "collection_strategy": "focused/comprehensive",
+        "priority_order": ["優先度順リスト"]
+    }},
+    "execution_plan": {{
+        "operations": ["操作1", "操作2"],
+        "safety_level": "low/medium/high",
+        "approval_needed": true/false
+    }},
+    "quality_criteria": {{
+        "success_metrics": ["成功指標"],
+        "completion_threshold": 0.8
+    }}
+}}
+```"""
+    
+    def _build_quality_judgment_prompt(self, evaluation_context: Dict[str, Any]) -> str:
+        """品質評価プロンプト構築"""
+        
+        understanding_status = "完了" if evaluation_context.get("understanding_result") else "未完了"
+        collection_status = "完了" if evaluation_context.get("gathered_info") else "未完了"
+        execution_status = "完了" if evaluation_context.get("execution_result") else "未完了"
+        
+        return f"""# 品質評価・継続判定
+
+## 実行状況
+- 理解・計画: {understanding_status}
+- 情報収集: {collection_status}
+- 安全実行: {execution_status}
+
+## 品質指標
+- 完全性: {evaluation_context.get('completeness_score', '未評価')}
+- 正確性: {evaluation_context.get('accuracy_score', '未評価')}
+- 関連性: {evaluation_context.get('relevance_score', '未評価')}
+
+## Duck Vitals
+- Mood: {evaluation_context.get('duck_mood', '未取得')}
+- Focus: {evaluation_context.get('duck_focus', '未取得')}
+- Stamina: {evaluation_context.get('duck_stamina', '未取得')}
+
+## 評価要求
+次のアクションを決定してください:
+
+```json
+{{
+    "overall_quality": 0.0,
+    "next_action": "response_generation/replan/collect_more_info/execute_additional/end/duck_call",
+    "reasoning": "判定理由",
+    "confidence": 0.0,
+    "quality_gate_pass": true/false
+}}
+```"""
+    
+    def _get_task_profile_guidance(self, task_profile_type: TaskProfileType) -> str:
+        """TaskProfile別ガイダンス取得"""
+        guidance_map = {
+            TaskProfileType.FILE_ANALYSIS: """
+**FILE_ANALYSIS特化指針:**
+- 対象ファイルの内容を詳細に分析
+- ファイル構造、関数、クラスの理解
+- コードの処理フローを追跡
+- 実行例やテストケースの特定""",
+            
+            TaskProfileType.CODE_EXPLANATION: """
+**CODE_EXPLANATION特化指針:**
+- コード動作の詳細説明
+- アルゴリズムとロジックの解説
+- 入出力パラメータの説明
+- エラーハンドリングの確認""",
+            
+            TaskProfileType.PROJECT_EXPLORATION: """
+**PROJECT_EXPLORATION特化指針:**
+- プロジェクト全体構造の把握
+- 主要コンポーネントの特定
+- 依存関係とアーキテクチャ分析
+- ディレクトリ構造の理解""",
+            
+            TaskProfileType.DEBUGGING_SUPPORT: """
+**DEBUGGING_SUPPORT特化指針:**
+- エラーログとスタックトレース解析
+- 問題箇所の特定と修正提案
+- テストケースの確認と実行
+- デバッグ手法の適用""",
+            
+            TaskProfileType.IMPLEMENTATION_TASK: """
+**IMPLEMENTATION_TASK特化指針:**
+- 要求仕様の詳細分析
+- 実装戦略とアプローチ決定
+- 必要なツールとリソース特定
+- 段階的実装計画の策定""",
+            
+            TaskProfileType.CONSULTATION: """
+**CONSULTATION特化指針:**
+- 相談内容の深い理解
+- 関連情報の包括的収集
+- 複数の選択肢と推奨事項
+- リスクと利益の分析""",
+            
+            TaskProfileType.GENERAL_CHAT: """
+**GENERAL_CHAT特化指針:**
+- 対話的な情報提供
+- ユーザーの潜在ニーズ把握
+- 関連トピックの提案
+- 継続的な支援体制"""
+        }
+        
+        return guidance_map.get(task_profile_type, "標準的なタスク処理指針")
+    
+    def _get_five_node_planning_system_prompt(self) -> str:
+        """5ノード計画用システムプロンプト"""
+        return """あなたは5ノードアーキテクチャ専用の計画AI (The Architect) です。
+
+重要な設計原則:
+1. **TaskProfile特化**: 各TaskProfileに最適化された処理計画
+2. **5ノード連携**: Understanding → Collection → Execution → Evaluation → Response の流れ
+3. **品質重視**: 各段階での品質基準と成功指標の設定
+4. **効率性**: 必要最小限の処理で最大の価値提供
+
+計画時の考慮事項:
+- Duck Vitals Systemとの連携
+- 品質ゲート通過基準
+- 決定論的応答生成への適応
+- エラー回復とフォールバック戦略
+
+JSON形式での構造化出力を必ず守ってください。"""
+    
+    def _get_quality_judgment_system_prompt(self) -> str:
+        """品質評価用システムプロンプト"""
+        return """あなたは5ノードアーキテクチャの品質ゲート & 司令塔 AI です。
+
+評価責任:
+1. **品質評価**: 各段階の実行品質を客観的に評価
+2. **継続判定**: 次のアクションを論理的に決定  
+3. **バイタル監視**: Duck Vitals Systemと連携した健康管理
+4. **品質保証**: 最終出力の品質基準達成確認
+
+判定基準:
+- 完全性: 必要な情報が適切に収集・処理されているか
+- 正確性: 処理結果にエラーや矛盾がないか
+- 関連性: ユーザー要求に対する適切な対応か
+- 効率性: 処理時間とリソース使用が適切か
+
+客観的で論理的な評価を行い、JSON形式で回答してください。"""
+    
+    # === 5ノード専用パーサー ===
+    
+    def _parse_five_node_planning_response(
+        self, 
+        response: str, 
+        task_profile_type: TaskProfileType
+    ) -> Dict[str, Any]:
+        """5ノード計画レスポンスのパース"""
+        try:
+            import re
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            
+            if json_match:
+                plan_data = json.loads(json_match.group(1))
+            else:
+                plan_data = json.loads(response)
+            
+            return {
+                "task_profile_type": task_profile_type,
+                "understanding_plan": plan_data.get("understanding_plan", {}),
+                "collection_plan": plan_data.get("collection_plan", {}),
+                "execution_plan": plan_data.get("execution_plan", {}),
+                "quality_criteria": plan_data.get("quality_criteria", {}),
+                "generation_method": "five_node_llm"
+            }
+            
+        except Exception as e:
+            return self._create_five_node_fallback_plan(f"TaskProfile: {task_profile_type.value}", str(e))
+    
+    def _parse_quality_judgment_response(self, response: str) -> Dict[str, Any]:
+        """品質評価レスポンスのパース"""
+        try:
+            import re
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
+            
+            if json_match:
+                judgment_data = json.loads(json_match.group(1))
+            else:
+                judgment_data = json.loads(response)
+            
+            return {
+                "quality_score": judgment_data.get("overall_quality", 0.5),
+                "next_action": judgment_data.get("next_action", "response_generation"),
+                "reasoning": judgment_data.get("reasoning", "品質評価完了"),
+                "confidence": judgment_data.get("confidence", 0.7),
+                "quality_gate_pass": judgment_data.get("quality_gate_pass", False)
+            }
+            
+        except Exception as e:
+            return {
+                "quality_score": 0.3,
+                "next_action": "response_generation",
+                "reasoning": f"評価パースエラー: {str(e)}",
+                "confidence": 0.3,
+                "quality_gate_pass": False
+            }
+    
+    def _build_template_data(
+        self, 
+        task_profile_type: TaskProfileType, 
+        content_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """TaskProfile別テンプレートデータ構築"""
+        base_data = {
+            "task_profile": task_profile_type.value,
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        if task_profile_type == TaskProfileType.FILE_ANALYSIS:
+            base_data.update({
+                "target_files": content_data.get("file_paths", []),
+                "analysis_depth": "detailed",
+                "include_code_structure": True
+            })
+        elif task_profile_type == TaskProfileType.CODE_EXPLANATION:
+            base_data.update({
+                "explanation_level": "comprehensive", 
+                "include_examples": True,
+                "focus_on_logic": True
+            })
+        
+        return base_data
+    
+    def _extract_content_sections(
+        self, 
+        task_profile_type: TaskProfileType, 
+        content_data: Dict[str, Any]
+    ) -> Dict[str, str]:
+        """TaskProfile別コンテンツセクション抽出"""
+        sections = {}
+        
+        # gathered_info から情報抽出
+        if "gathered_info" in content_data:
+            gathered = content_data["gathered_info"]
+            if hasattr(gathered, "collected_files") and gathered.collected_files:
+                sections["files_info"] = f"収集ファイル数: {len(gathered.collected_files)}"
+                
+                # 最初のファイルの詳細情報
+                first_file_path = list(gathered.collected_files.keys())[0]
+                first_file = gathered.collected_files[first_file_path]
+                if hasattr(first_file, "content"):
+                    sections["first_file_content"] = first_file.content[:500]
+        
+        return sections
+    
+    def _assess_data_completeness(self, template_data: Dict[str, Any]) -> float:
+        """テンプレートデータ完全性評価"""
+        required_fields = ["task_profile", "timestamp"]
+        present_fields = sum(1 for field in required_fields if field in template_data)
+        
+        return present_fields / len(required_fields)
+    
+    def _create_five_node_fallback_plan(self, user_request: str, error: str) -> Dict[str, Any]:
+        """5ノード用フォールバック計画"""
+        return {
+            "task_profile_type": TaskProfileType.GENERAL_CHAT,
+            "understanding_plan": {
+                "focus_points": ["基本的な要求理解"],
+                "complexity_estimate": "low",
+                "required_context": ["ユーザー入力"]
+            },
+            "collection_plan": {
+                "target_files": [],
+                "collection_strategy": "minimal",
+                "priority_order": []
+            },
+            "execution_plan": {
+                "operations": ["基本処理"],
+                "safety_level": "low",
+                "approval_needed": False
+            },
+            "quality_criteria": {
+                "success_metrics": ["基本応答生成"],
+                "completion_threshold": 0.5
+            },
+            "fallback_reason": error
+        }
 
 
 # グローバルLLMサービスインスタンス
