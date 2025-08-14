@@ -384,11 +384,25 @@ class FiveNodeOrchestrator:
                 agent_state, four_node_context, routing_decision, is_retry
             )
             
-            # 【追加】The Pecking Order の構築・更新 (同期版)
+            # 【修正】The Pecking Order の構築・更新 (同期版)
             try:
-                asyncio.create_task(self._build_or_update_pecking_order(
-                    agent_state, understanding_result, is_retry, task_profile_type
-                ))
+                # 非同期関数を同期的に実行
+                import asyncio
+                loop = None
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 既にイベントループが動作中の場合は、タスクを作成せずに警告のみ
+                        rich_ui.print_warning("The Pecking Order: イベントループ動作中のためスキップ")
+                    else:
+                        loop.run_until_complete(self._build_or_update_pecking_order(
+                            agent_state, understanding_result, is_retry, task_profile_type
+                        ))
+                except RuntimeError:
+                    # イベントループが存在しない場合は新しく作成
+                    asyncio.run(self._build_or_update_pecking_order(
+                        agent_state, understanding_result, is_retry, task_profile_type
+                    ))
             except Exception as pecking_error:
                 rich_ui.print_warning(f"The Pecking Order 構築エラー: {pecking_error}")
             
@@ -665,9 +679,20 @@ class FiveNodeOrchestrator:
                         "current_node": "evaluation_continuation"
                     }
             
-            # 【追加】The Pecking Order 進捗更新 (同期版)
+            # 【修正】The Pecking Order 進捗更新 (同期版)
             try:
-                asyncio.create_task(self._update_pecking_order_progress(agent_state, execution_result))
+                # 非同期関数を同期的に実行
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 既にイベントループが動作中の場合はスキップ
+                        rich_ui.print_warning("The Pecking Order 進捗: イベントループ動作中のためスキップ")
+                    else:
+                        loop.run_until_complete(self._update_pecking_order_progress(agent_state, execution_result))
+                except RuntimeError:
+                    # イベントループが存在しない場合は新しく作成
+                    asyncio.run(self._update_pecking_order_progress(agent_state, execution_result))
             except Exception as pecking_error:
                 rich_ui.print_warning(f"The Pecking Order 進捗更新エラー: {pecking_error}")
             

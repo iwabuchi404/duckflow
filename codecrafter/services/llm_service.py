@@ -1491,6 +1491,250 @@ JSON形式で構造化して評価してください。
 - 不明な点は推測せず「不明」と明記
 - Markdown形式で構造化された読みやすい回答を作成"""
     
+    # === Duck Scriptwriter - 応答生成AI ===
+    
+    def generate_script(self, 
+                       user_original_request: str,
+                       task_type: TaskProfileType,
+                       extracted_data: Dict[str, Any],
+                       raw_file_contents: Dict[str, str],
+                       template_structure: str) -> str:
+        """
+        Duck Scriptwriter - 構造化データを論理的なレポート（脚本）に変換
+        
+        Args:
+            user_original_request: ユーザーの元の要求
+            task_type: TaskProfile分類
+            extracted_data: 構造化されたデータ
+            raw_file_contents: 生のファイル内容
+            template_structure: 出力テンプレート構造
+            
+        Returns:
+            客観的でプロフェッショナルなMarkdown脚本
+        """
+        try:
+            # Duck Scriptwriter専用プロンプトの構築
+            script_prompt = self._build_duck_scriptwriter_prompt(
+                user_original_request=user_original_request,
+                task_type=task_type,
+                extracted_data=extracted_data,
+                raw_file_contents=raw_file_contents,
+                template_structure=template_structure
+            )
+            
+            # Developer/Librarian LLMを使用（創造性より論理性重視）
+            response = self.fast_llm.chat(
+                script_prompt, 
+                system_prompt=self._get_duck_scriptwriter_system_prompt(),
+                max_tokens=8000  # 詳細なレポート生成のため
+            )
+            
+            # 生成された脚本の後処理
+            formatted_script = self._format_duck_script(response)
+            
+            return formatted_script
+            
+        except Exception as e:
+            # フォールバック: 基本的な構造化レポート
+            return self._generate_fallback_script(
+                user_original_request, task_type, extracted_data, str(e)
+            )
+    
+    def _build_duck_scriptwriter_prompt(self,
+                                      user_original_request: str,
+                                      task_type: TaskProfileType,
+                                      extracted_data: Dict[str, Any],
+                                      raw_file_contents: Dict[str, str],
+                                      template_structure: str) -> str:
+        """Duck Scriptwriter専用プロンプトの構築"""
+        
+        # 構造化データをJSON形式で整理
+        extracted_data_json = json.dumps(extracted_data, ensure_ascii=False, indent=2)
+        
+        # 生ファイル内容を整理（長すぎる場合は切り詰め）
+        formatted_file_contents = self._format_raw_file_contents(raw_file_contents)
+        
+        # TaskType別の特別指示
+        task_specific_guidance = self._get_task_specific_scriptwriter_guidance(task_type)
+        
+        return f"""【ユーザーの最終的な要求】
+{user_original_request}
+
+【TaskProfile種別】
+{task_type.value}
+
+{task_specific_guidance}
+
+【あなたが利用できる、構造化されたデータ】
+```json
+{extracted_data_json}
+```
+
+【参考資料：生のファイル内容】
+{formatted_file_contents}
+
+【出力テンプレート】
+以下の構造に厳密に従い、各セクションを自然な文章として埋めてください：
+
+{template_structure}
+
+【重要な指示】
+1. テンプレートの構造（見出し、セクション）は変更せず、内容のみを埋めてください
+2. 構造化データと生ファイル内容に完全に基づいて記述してください
+3. 推測や憶測は避け、事実のみを記述してください
+4. 各セクションは読みやすい自然な文章として構成してください
+5. 技術的な内容は正確性を最優先してください"""
+
+    def _get_duck_scriptwriter_system_prompt(self) -> str:
+        """Duck Scriptwriter専用システムプロンプト"""
+        return """あなたは、AIエージェント「Duckflow」の技術文書を作成する、専門の「Duck Scriptwriter」です。
+
+あなたの仕事は、与えられた構造化データと生の情報を基に、ユーザーの要求に完璧に応える、**客観的で、プロフェッショナルで、論理的なレポート（脚本）**を生成することです。
+
+【厳守事項】
+- キャラクター性やユーモア、感情的な表現は**一切含めないでください**
+- 提供された「出力テンプレート」の構造に厳密に従い、各セクションを自然な文章として埋めてください
+- 単にデータを貼り付けるだけではなく、読みやすい文章として構成してください
+- 全ての記述は、提供された「構造化データ」と「生のファイル内容」に完全に基づかなければなりません
+- 推測や憶測は避け、事実のみを記述してください
+- 技術的な正確性を最優先してください
+
+【あなたの専門性】
+- ソフトウェア開発の深い知識
+- 技術文書作成の豊富な経験
+- 論理的で構造化された思考
+- 客観的で公平な分析能力
+
+最高品質の技術レポートを作成してください。"""
+
+    def _get_task_specific_scriptwriter_guidance(self, task_type: TaskProfileType) -> str:
+        """TaskProfile別のDuck Scriptwriter特別指示"""
+        
+        guidance_map = {
+            TaskProfileType.INFORMATION_REQUEST: """
+【INFORMATION_REQUEST特別指示】
+- ファイルの内容を正確に説明し、構造や重要な要素を明確に示してください
+- 技術的な詳細は適切なレベルで説明し、理解しやすくしてください
+- メタデータや関連情報も含めて包括的に説明してください""",
+            
+            TaskProfileType.ANALYSIS_REQUEST: """
+【ANALYSIS_REQUEST特別指示】
+- 客観的な分析結果を論理的に整理してください
+- 発見された問題や課題は具体的に記述してください
+- 改善提案は実行可能で具体的なものにしてください
+- リスク評価は根拠を明確にして記述してください""",
+            
+            TaskProfileType.CREATION_REQUEST: """
+【CREATION_REQUEST特別指示】
+- 作成計画は段階的で実行可能なものにしてください
+- 技術的な実装詳細は正確性を重視してください
+- リスクや注意事項は具体的に記述してください
+- 次のステップは明確で行動可能なものにしてください""",
+            
+            TaskProfileType.MODIFICATION_REQUEST: """
+【MODIFICATION_REQUEST特別指示】
+- 変更対象と影響範囲を明確に特定してください
+- 変更内容は具体的で実装可能なものにしてください
+- 互換性や副作用について詳細に分析してください
+- 安全対策は実践的で効果的なものにしてください""",
+            
+            TaskProfileType.SEARCH_REQUEST: """
+【SEARCH_REQUEST特別指示】
+- 検索結果は整理して分かりやすく提示してください
+- 発見されたファイルやコードの関連性を明確にしてください
+- 検索統計は正確で有用な情報を提供してください
+- 追加の発見事項があれば価値のあるものを記述してください""",
+            
+            TaskProfileType.GUIDANCE_REQUEST: """
+【GUIDANCE_REQUEST特別指示】
+- 手順は段階的で実行しやすいものにしてください
+- 前提条件は明確で確認可能なものにしてください
+- トラブルシューティング情報は実践的なものにしてください
+- ベストプラクティスは経験に基づいた価値のあるものにしてください"""
+        }
+        
+        return guidance_map.get(task_type, """
+【一般的な指示】
+- 提供された情報を論理的に整理してください
+- 読み手にとって価値のある内容にしてください
+- 技術的な正確性を保ってください""")
+
+    def _format_raw_file_contents(self, raw_file_contents: Dict[str, str]) -> str:
+        """生ファイル内容の整形（長すぎる場合は切り詰め）"""
+        if not raw_file_contents:
+            return "（参考ファイルなし）"
+        
+        formatted_parts = []
+        for file_path, content in raw_file_contents.items():
+            # ファイル内容を適切な長さに切り詰め
+            truncated_content = self._smart_truncate_file_content(file_path, content)
+            
+            formatted_parts.append(f"""
+**ファイル: {file_path}**
+```
+{truncated_content}
+```""")
+        
+        return "\n".join(formatted_parts)
+
+    def _format_duck_script(self, raw_script: str) -> str:
+        """Duck Scriptの後処理・整形"""
+        # 基本的な整形
+        formatted = raw_script.strip()
+        
+        # 余分な空行を削除
+        import re
+        formatted = re.sub(r'\n{3,}', '\n\n', formatted)
+        
+        # 生成日時を追加（Duck Scriptwriterの署名）
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        footer = f"\n\n---\n*Generated by Duck Scriptwriter at {timestamp}*"
+        
+        return formatted + footer
+
+    def _generate_fallback_script(self, 
+                                user_request: str, 
+                                task_type: TaskProfileType, 
+                                extracted_data: Dict[str, Any], 
+                                error: str) -> str:
+        """Duck Scriptwriter失敗時のフォールバック脚本"""
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        return f"""## 📋 処理結果レポート
+
+### 🎯 要求内容
+{user_request}
+
+### 📊 処理概要
+TaskProfile: {task_type.value}
+
+### 📄 収集データ
+{len(extracted_data)}項目のデータを収集しました。
+
+### ⚠️ 注意事項
+レポート生成中に技術的な問題が発生しました: {error}
+
+### 📝 利用可能な情報
+{self._format_extracted_data_summary(extracted_data)}
+
+---
+*Generated by Duck Scriptwriter (Fallback Mode) at {timestamp}*"""
+
+    def _format_extracted_data_summary(self, extracted_data: Dict[str, Any]) -> str:
+        """抽出データの要約を生成"""
+        if not extracted_data:
+            return "データが利用できません"
+        
+        summary_parts = []
+        for key, value in extracted_data.items():
+            if isinstance(value, str) and len(value) > 100:
+                summary_parts.append(f"- **{key}**: {value[:100]}...")
+            else:
+                summary_parts.append(f"- **{key}**: {str(value)}")
+        
+        return "\n".join(summary_parts[:10])  # 最大10項目
+
     # === 統合理解サービス（既存のメソッドを統合） ===
     
     def synthesize_system_understanding(self, user_query: str, 
@@ -2370,6 +2614,265 @@ JSON形式での構造化出力を必ず守ってください。"""
                 "completion_threshold": 0.5
             },
             "fallback_reason": error
+        }
+    
+    # === LLMベース TaskProfile分類サービス ===
+    
+    def classify_task_profile(
+        self, 
+        user_request: str, 
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        LLMを使用したTaskProfile分類
+        
+        Args:
+            user_request: ユーザーの要求文
+            context: 追加コンテキスト（ファイル情報、履歴等）
+            
+        Returns:
+            {
+                "profile_type": TaskProfileType,
+                "confidence": float,  # 0.0-1.0
+                "reasoning": str,     # 分類理由
+                "detected_intent": str,  # 詳細な意図
+                "complexity_assessment": str,
+                "suggested_approach": str
+            }
+        """
+        try:
+            # プロンプト設定の読み込み
+            prompt_config = self._load_classification_prompt_config()
+            
+            # コンテキストの有無でプロンプトを選択
+            if context and any(context.get(key) for key in ["detected_files", "recent_messages", "workspace_manifest"]):
+                classification_prompt = self._build_contextual_classification_prompt(
+                    user_request, context, prompt_config
+                )
+            else:
+                classification_prompt = self._build_basic_classification_prompt(
+                    user_request, prompt_config
+                )
+            
+            # LLM実行（高速LLMを使用）
+            response = self.fast_llm.chat(
+                classification_prompt, 
+                system_prompt="あなたは正確なタスク分類を行うAIアシスタントです。",
+                max_tokens=500,
+                temperature=0.1  # 低温度で安定した分類を実現
+            )
+            
+            # JSON解析
+            parsed_result = self._parse_classification_response(response)
+            
+            # 結果検証
+            if self._validate_classification_result(parsed_result):
+                return parsed_result
+            else:
+                raise ValueError("Invalid classification result format")
+                
+        except Exception as e:
+            from ..ui.rich_ui import rich_ui
+            rich_ui.print_warning(f"LLM分類エラー: {e}")
+            
+            # フォールバック: 基本的なキーワード分類
+            return self._fallback_keyword_classification(user_request)
+    
+    def _load_classification_prompt_config(self) -> Dict[str, Any]:
+        """分類プロンプト設定を読み込み"""
+        try:
+            import yaml
+            from pathlib import Path
+            
+            config_path = Path(__file__).parent.parent.parent / "config" / "task_classification_prompts.yaml"
+            
+            if config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return yaml.safe_load(f)
+            else:
+                # 設定ファイルがない場合の最小構成
+                return self._get_default_classification_config()
+                
+        except Exception as e:
+            from ..ui.rich_ui import rich_ui
+            rich_ui.print_warning(f"プロンプト設定読み込みエラー: {e}")
+            return self._get_default_classification_config()
+    
+    def _build_basic_classification_prompt(self, user_request: str, config: Dict[str, Any]) -> str:
+        """基本分類プロンプトを構築"""
+        base_template = config.get("task_classification", {}).get("base_template", "")
+        few_shot_examples = config.get("task_classification", {}).get("few_shot_examples", [])
+        format_instructions = config.get("task_classification", {}).get("format_instructions", "")
+        
+        # Few-Shot例を文字列化
+        examples_text = ""
+        for i, example in enumerate(few_shot_examples[:8], 1):  # 最大8例
+            examples_text += f"\n例{i}:\n"
+            examples_text += f"入力: \"{example['input']}\"\n"
+            examples_text += f"出力: {example['output']}\n"
+        
+        prompt = f"""{base_template}
+
+【分類例】{examples_text}
+
+【ユーザーの要求】
+{user_request}
+
+{format_instructions}"""
+        
+        return prompt
+    
+    def _build_contextual_classification_prompt(
+        self, 
+        user_request: str, 
+        context: Dict[str, Any], 
+        config: Dict[str, Any]
+    ) -> str:
+        """コンテキスト付き分類プロンプトを構築"""
+        base_prompt = self._build_basic_classification_prompt(user_request, config)
+        
+        # コンテキスト情報を構築
+        context_parts = []
+        
+        if context.get("detected_files"):
+            files_list = context["detected_files"][:5]  # 最大5ファイル
+            context_parts.append(f"検出されたファイル: {', '.join(files_list)}")
+        
+        if context.get("recent_messages"):
+            recent = context["recent_messages"][-2:]  # 直近2件
+            history_text = [f"{msg.get('role', 'unknown')}: {msg.get('content', '')[:50]}..." for msg in recent]
+            context_parts.append(f"直前の対話: {' | '.join(history_text)}")
+        
+        if context.get("workspace_manifest"):
+            manifest = context["workspace_manifest"]
+            project_type = manifest.get("project_type", "Unknown")
+            context_parts.append(f"プロジェクト種別: {project_type}")
+        
+        if context_parts:
+            context_section = "\n【追加コンテキスト情報】\n" + "\n".join(f"- {part}" for part in context_parts)
+            context_section += "\n\nこの文脈情報を考慮して、より正確な分類を行ってください。\n"
+            
+            # ユーザー要求の直前に挿入
+            base_prompt = base_prompt.replace(
+                "【ユーザーの要求】",
+                context_section + "【ユーザーの要求】"
+            )
+        
+        return base_prompt
+    
+    def _parse_classification_response(self, response: str) -> Dict[str, Any]:
+        """LLM応答をパース"""
+        try:
+            import json
+            import re
+            
+            # JSON部分を抽出（```json ブロックがある場合）
+            json_match = re.search(r'```json\s*(.*?)\s*```', response, re.DOTALL)
+            if json_match:
+                json_text = json_match.group(1)
+            else:
+                # JSONブロックがない場合、{}で囲まれた部分を探す
+                json_match = re.search(r'\{.*\}', response, re.DOTALL)
+                if json_match:
+                    json_text = json_match.group(0)
+                else:
+                    raise ValueError("JSON形式の応答が見つかりません")
+            
+            # JSONパース
+            parsed = json.loads(json_text)
+            
+            # 必須フィールドの検証
+            required_fields = ["profile_type", "confidence", "reasoning"]
+            for field in required_fields:
+                if field not in parsed:
+                    raise ValueError(f"必須フィールド '{field}' が見つかりません")
+            
+            return parsed
+            
+        except json.JSONDecodeError as e:
+            raise ValueError(f"JSON解析エラー: {e}")
+        except Exception as e:
+            raise ValueError(f"応答解析エラー: {e}")
+    
+    def _validate_classification_result(self, result: Dict[str, Any]) -> bool:
+        """分類結果の検証"""
+        try:
+            # TaskProfile種別の検証
+            valid_profiles = [
+                "INFORMATION_REQUEST", "ANALYSIS_REQUEST", "CREATION_REQUEST",
+                "MODIFICATION_REQUEST", "SEARCH_REQUEST", "GUIDANCE_REQUEST"
+            ]
+            
+            if result.get("profile_type") not in valid_profiles:
+                return False
+            
+            # 信頼度の検証
+            confidence = result.get("confidence", 0)
+            if not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1:
+                return False
+            
+            # 基本的な文字列フィールドの検証
+            string_fields = ["reasoning", "detected_intent", "suggested_approach"]
+            for field in string_fields:
+                if field in result and not isinstance(result[field], str):
+                    return False
+            
+            return True
+            
+        except Exception:
+            return False
+    
+    def _fallback_keyword_classification(self, user_request: str) -> Dict[str, Any]:
+        """フォールバック用キーワード分類"""
+        request_lower = user_request.lower()
+        
+        # シンプルなキーワードベース分類
+        if any(kw in request_lower for kw in ["見て", "教えて", "内容", "確認", "表示"]):
+            return {
+                "profile_type": "INFORMATION_REQUEST",
+                "confidence": 0.7,
+                "reasoning": "フォールバック分類: 情報確認キーワードを検出",
+                "detected_intent": "情報参照",
+                "complexity_assessment": "SIMPLE",
+                "suggested_approach": "ファイル読み取り"
+            }
+        elif any(kw in request_lower for kw in ["作成", "実装", "書いて", "構築"]):
+            return {
+                "profile_type": "CREATION_REQUEST",
+                "confidence": 0.7,
+                "reasoning": "フォールバック分類: 作成キーワードを検出",
+                "detected_intent": "新規作成",
+                "complexity_assessment": "MODERATE",
+                "suggested_approach": "新規実装"
+            }
+        elif any(kw in request_lower for kw in ["修正", "変更", "改善", "直して"]):
+            return {
+                "profile_type": "MODIFICATION_REQUEST",
+                "confidence": 0.7,
+                "reasoning": "フォールバック分類: 修正キーワードを検出",
+                "detected_intent": "既存修正",
+                "complexity_assessment": "MODERATE",
+                "suggested_approach": "ファイル編集"
+            }
+        else:
+            # デフォルト
+            return {
+                "profile_type": "INFORMATION_REQUEST",
+                "confidence": 0.5,
+                "reasoning": "フォールバック分類: デフォルト（情報要求）",
+                "detected_intent": "一般的な質問",
+                "complexity_assessment": "SIMPLE",
+                "suggested_approach": "基本処理"
+            }
+    
+    def _get_default_classification_config(self) -> Dict[str, Any]:
+        """デフォルト分類設定"""
+        return {
+            "task_classification": {
+                "base_template": "ユーザーの要求をTaskProfileに分類してください。",
+                "few_shot_examples": [],
+                "format_instructions": "JSON形式で結果を返してください。"
+            }
         }
 
 

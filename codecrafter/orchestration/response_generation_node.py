@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from ..templates import TaskProfileType, get_template, validate_template_data
 from ..state.agent_state import AgentState
 from ..prompts.four_node_context import GatheredInfo, ExecutionResult
+from ..services.llm_service import LLMService
 from ..ui.rich_ui import rich_ui
 
 
@@ -23,7 +24,7 @@ class ResponseResult:
     final_response: str
     template_used: str
     data_completeness: float
-    generation_method: str = "deterministic"
+    generation_method: str = "deterministic"  # "deterministic" or "duck_scriptwriter"
 
 
 class ResponseGenerationNode:
@@ -36,6 +37,7 @@ class ResponseGenerationNode:
     def __init__(self):
         """ノードを初期化"""
         self.data_extractors = self._build_data_extractors()
+        self.llm_service = LLMService()  # Duck Scriptwriter用
     
     def generate_response(
         self, 
@@ -82,8 +84,20 @@ class ResponseGenerationNode:
             if data_completeness < 1.0:
                 rich_ui.print_warning("必須データが不足しています - フォールバック値を使用")
             
-            # テンプレートにデータを埋め込み
-            final_report = self._fill_template(template, extracted_data)
+            # 応答生成方法の選択
+            use_duck_scriptwriter = self._should_use_duck_scriptwriter(task_profile_type, data_completeness)
+            
+            if use_duck_scriptwriter:
+                # Duck Scriptwriter による高品質脚本生成
+                rich_ui.print_message("Duck Scriptwriter による脚本生成を実行中...", "info")
+                final_report = self._generate_with_duck_scriptwriter(
+                    state, task_profile_type, template, extracted_data, gathered_info
+                )
+                generation_method = "duck_scriptwriter"
+            else:
+                # 従来の決定論的テンプレート埋め込み
+                final_report = self._fill_template(template, extracted_data)
+                generation_method = "deterministic"
             
             # Markdown整形
             formatted_report = self._format_markdown(final_report)
@@ -93,7 +107,8 @@ class ResponseGenerationNode:
             return ResponseResult(
                 final_response=formatted_report,
                 template_used=task_profile_type.value,
-                data_completeness=data_completeness
+                data_completeness=data_completeness,
+                generation_method=generation_method
             )
             
         except Exception as e:
@@ -105,6 +120,123 @@ class ResponseGenerationNode:
                 data_completeness=0.0,
                 generation_method="error_fallback"
             )
+    
+    def _should_use_duck_scriptwriter(self, task_profile_type: TaskProfileType, data_completeness: float) -> bool:
+        """Duck Scriptwriterを使用すべきかを判定
+        
+        Args:
+            task_profile_type: TaskProfile種別
+            data_completeness: データ完全性スコア
+            
+        Returns:
+            Duck Scriptwriterを使用する場合True
+        """
+        # データが十分に揃っている場合のみDuck Scriptwriterを使用
+        if data_completeness < 0.8:
+            return False
+        
+        # 複雑な分析や説明が必要なTaskProfileでDuck Scriptwriterを優先
+        high_quality_tasks = {
+            TaskProfileType.INFORMATION_REQUEST,
+            TaskProfileType.ANALYSIS_REQUEST,
+            TaskProfileType.FILE_ANALYSIS,
+            TaskProfileType.CODE_EXPLANATION
+        }
+        
+        return task_profile_type in high_quality_tasks
+    
+    def _generate_with_duck_scriptwriter(self,
+                                       state: AgentState,
+                                       task_profile_type: TaskProfileType,
+                                       template,
+                                       extracted_data: Dict[str, Any],
+                                       gathered_info: Optional[GatheredInfo]) -> str:
+        """Duck Scriptwriterを使用した高品質脚本生成
+        
+        Args:
+            state: エージェント状態
+            task_profile_type: TaskProfile種別
+            template: テンプレート
+            extracted_data: 抽出データ
+            gathered_info: 収集情報
+            
+        Returns:
+            Duck Scriptwriterが生成した脚本
+        """
+        try:
+            # ユーザーの元要求を取得
+            user_original_request = self._extract_user_original_request(state)
+            
+            # 生ファイル内容を取得
+            raw_file_contents = self._extract_raw_file_contents(gathered_info)
+            
+            # テンプレート構造を取得
+            template_structure = template.structure
+            
+            # Duck Scriptwriterを呼び出し
+            script = self.llm_service.generate_script(
+                user_original_request=user_original_request,
+                task_type=task_profile_type,
+                extracted_data=extracted_data,
+                raw_file_contents=raw_file_contents,
+                template_structure=template_structure
+            )
+            
+            return script
+            
+        except Exception as e:
+            rich_ui.print_warning(f"Duck Scriptwriter生成エラー: {e} - 決定論的生成にフォールバック")
+            # フォールバック: 決定論的テンプレート埋め込み
+            return self._fill_template(template, extracted_data)
+    
+    def _extract_user_original_request(self, state: AgentState) -> str:
+        """ユーザーの元要求を抽出"""
+        try:
+            if hasattr(state, 'conversation_history') and state.conversation_history:
+                # 最新のユーザーメッセージを取得
+                for msg in reversed(state.conversation_history):
+                    if msg.role == 'user':
+                        return msg.content
+            
+            return "ユーザー要求の取得に失敗しました"
+            
+        except Exception:
+            return "ユーザー要求の取得に失敗しました"
+    
+    def _extract_raw_file_contents(self, gathered_info: Optional[GatheredInfo]) -> Dict[str, str]:
+        """生ファイル内容を抽出"""
+        raw_contents = {}
+        
+        try:
+            if gathered_info and hasattr(gathered_info, 'collected_files'):
+                for file_path, file_data in gathered_info.collected_files.items():
+                    # ファイル内容を取得
+                    content = self._get_file_content(file_data)
+                    if content:
+                        raw_contents[file_path] = content
+            
+            return raw_contents
+            
+        except Exception as e:
+            rich_ui.print_warning(f"生ファイル内容抽出エラー: {e}")
+            return {}
+    
+    def _generate_error_response(self, error_message: str) -> str:
+        """エラー応答を生成"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return f"""## ⚠️ 処理エラー
+
+申し訳ございませんが、応答生成中に問題が発生しました。
+
+**エラー詳細:** {error_message}
+
+**対処方法:**
+- 要求を簡潔に再表現してみてください
+- 対象ファイルが存在することを確認してください
+- システム管理者にお問い合わせください
+
+---
+*Error generated at {timestamp}*"""
     
     def _extract_task_profile(self, state: AgentState) -> Optional[TaskProfileType]:
         """AgentStateからTaskProfileTypeを抽出
