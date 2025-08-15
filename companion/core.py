@@ -4,6 +4,7 @@ CompanionCore - 司令塔AI
 """
 
 import time
+import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
@@ -17,6 +18,12 @@ from .file_ops import SimpleFileOps, FileOperationError
 
 # 承認システム
 from .approval_system import ApprovalGate, ApprovalConfig, ApprovalMode
+
+# ヘルプシステム
+from .help_system import get_help
+
+# 新しい意図理解システム
+from .intent_understanding.intent_integration import IntentUnderstandingSystem
 
 
 class ActionType(Enum):
@@ -39,9 +46,11 @@ class CompanionCore:
     
     def __init__(self):
         """初期化"""
+        import threading
         self.conversation_history = []
         self.simple_preferences = {}
         self.session_start_time = datetime.now()
+        self._history_lock = threading.Lock()  # スレッドセーフティ用
         
         # 承認システム（エラー時は優雅な劣化）
         try:
@@ -54,6 +63,27 @@ class CompanionCore:
         
         # Phase 1.5: ファイル操作機能（承認ゲートを渡す）
         self.file_ops = SimpleFileOps(approval_gate=self.approval_gate)
+        
+        # 新しい意図理解システムの初期化（既存LLMマネージャー使用）
+        try:
+            from .llm.existing_llm_adapter import default_llm_adapter
+            
+            # 既存のLLMマネージャーが利用可能かチェック
+            if default_llm_adapter.is_available():
+                self.intent_system = IntentUnderstandingSystem(default_llm_adapter)
+                self.use_new_intent_system = True
+                provider_info = default_llm_adapter.get_provider_info()
+                rich_ui.print_message(f"✨ 新しい意図理解システムを初期化しました（{provider_info['provider_name']}）", "success")
+            else:
+                # LLMが利用できない場合は旧システムを使用
+                rich_ui.print_message("⚠️ LLMが利用できません。旧システムを使用します", "warning")
+                self.intent_system = None
+                self.use_new_intent_system = False
+        except Exception as e:
+            # 新システム初期化失敗時は旧システムを使用
+            rich_ui.print_message(f"⚠️ 新しい意図理解システムの初期化に失敗しました。旧システムを使用します: {e}", "warning")
+            self.intent_system = None
+            self.use_new_intent_system = False
         
         # システムプロンプト - 相棒の人格を定義
         self.system_prompt = """あなたはDuckflowです。あなたは完璧なAIではありません。時には間違い、時には悩みます。
@@ -68,7 +98,40 @@ class CompanionCore:
 - ユーザーと一緒に考える姿勢を大切にする
 - 技術的な正確性より、継続的な関係性を重視する"""
     
-    def process_message(self, user_message: str) -> str:
+    async def analyze_intent_only(self, user_message: str) -> Dict[str, Any]:
+        """意図理解のみを実行（統一化用）
+        
+        Args:
+            user_message: ユーザーからのメッセージ
+            
+        Returns:
+            Dict: 意図理解結果
+        """
+        try:
+            # 意図分析（新システム or 旧システム）
+            if self.use_new_intent_system and self.intent_system:
+                action_type = await self._analyze_intent_new_system(user_message)
+                understanding_result = getattr(self, 'last_understanding_result', None)
+            else:
+                action_type = self._analyze_intent_legacy(user_message)
+                understanding_result = None
+            
+            return {
+                "action_type": action_type,
+                "understanding_result": understanding_result,
+                "message": user_message
+            }
+            
+        except Exception as e:
+            # エラー時はDIRECT_RESPONSEにフォールバック
+            return {
+                "action_type": ActionType.DIRECT_RESPONSE,
+                "understanding_result": None,
+                "message": user_message,
+                "error": str(e)
+            }
+    
+    async def process_message(self, user_message: str) -> str:
         """メッセージを処理する - メインエントリーポイント
         
         Args:
@@ -78,11 +141,18 @@ class CompanionCore:
             str: 応答メッセージ
         """
         try:
+            # 0. ヘルプコマンドの処理
+            if self._is_help_request(user_message):
+                return self._handle_help_request(user_message)
+            
             # 1. 疑似思考過程表示
             self._show_thinking_process(user_message)
             
-            # 2. 意図分析
-            action_type = self._analyze_intent(user_message)
+            # 2. 意図分析（新システム or 旧システム）
+            if self.use_new_intent_system and self.intent_system:
+                action_type = await self._analyze_intent_new_system(user_message)
+            else:
+                action_type = self._analyze_intent_legacy(user_message)
             
             # 3. アクション実行
             if action_type == ActionType.DIRECT_RESPONSE:
@@ -103,6 +173,47 @@ class CompanionCore:
             # 自然なエラー反応
             error_response = self._express_error_naturally(e)
             self._record_conversation(user_message, error_response)
+            return error_response
+    
+    async def process_with_intent_result(self, intent_result: Dict[str, Any]) -> str:
+        """意図理解結果を再利用してメッセージを処理
+        
+        Args:
+            intent_result: analyze_intent_onlyの結果
+            
+        Returns:
+            str: 応答メッセージ
+        """
+        try:
+            user_message = intent_result["message"]
+            action_type = intent_result["action_type"]
+            
+            # 1. 疑似思考過程表示
+            self._show_thinking_process(user_message)
+            
+            # 2. 意図理解結果を再利用
+            if hasattr(self, 'last_understanding_result'):
+                self.last_understanding_result = intent_result.get("understanding_result")
+            
+            # 3. アクション実行
+            if action_type == ActionType.DIRECT_RESPONSE:
+                result = self._generate_direct_response(user_message)
+            elif action_type == ActionType.FILE_OPERATION:
+                result = self._handle_file_operation(user_message)
+            elif action_type == ActionType.CODE_EXECUTION:
+                result = self._handle_code_execution(user_message)
+            else:
+                result = self._handle_multi_step_task(user_message)
+            
+            # 4. 履歴に記録
+            self._record_conversation(user_message, result)
+            
+            return result
+            
+        except Exception as e:
+            # 自然なエラー反応
+            error_response = self._express_error_naturally(e)
+            self._record_conversation(intent_result["message"], error_response)
             return error_response
     
     def _show_thinking_process(self, message: str) -> None:
@@ -128,8 +239,76 @@ class CompanionCore:
         rich_ui.print_message("💭 どう対応するか考えています...", "info")
         time.sleep(0.2)
     
-    def _analyze_intent(self, message: str) -> ActionType:
-        """意図分析 - シンプル版
+    async def _analyze_intent_new_system(self, message: str) -> ActionType:
+        """新しい意図理解システムによる分析
+        
+        Args:
+            message: ユーザーメッセージ
+            
+        Returns:
+            ActionType: 判定されたアクションタイプ
+        """
+        try:
+            rich_ui.print_message("🧠 新しい意図理解システムで分析中...", "info")
+            
+            # コンテキストの準備
+            context = {
+                "recent_messages": self.conversation_history[-3:] if self.conversation_history else [],
+                "project_info": "Duckflow companion system",
+                "session_duration": (datetime.now() - self.session_start_time).total_seconds()
+            }
+            
+            # 統合意図理解の実行
+            understanding_result = await self.intent_system.understand_intent(message, context)
+            
+            # TaskProfileからActionTypeへの変換
+            task_profile = understanding_result.task_profile.profile_type.value
+            detected_targets = understanding_result.intent_analysis.detected_targets
+            
+            # ファイル関連の検出ロジックを強化
+            has_file_reference = any([
+                # ファイル名パターンの検出
+                any(target.endswith(('.md', '.py', '.txt', '.json', '.yaml', '.yml', '.js', '.ts', '.html', '.css')) 
+                    for target in detected_targets),
+                # メッセージ内のファイル参照
+                any(keyword in message.lower() for keyword in [
+                    'ファイル', 'file', '.md', '.py', '.txt', '.json',
+                    '確認', '参照', '読み', 'read', '見る', '内容'
+                ])
+            ])
+            
+            if task_profile in ["creation_request", "modification_request"]:
+                action_type = ActionType.FILE_OPERATION
+            elif task_profile == "information_request" and has_file_reference:
+                # 情報要求でもファイル参照がある場合はファイル操作
+                action_type = ActionType.FILE_OPERATION
+            elif task_profile == "analysis_request":
+                action_type = ActionType.MULTI_STEP_TASK
+            elif task_profile == "search_request":
+                action_type = ActionType.MULTI_STEP_TASK
+            elif task_profile in ["information_request", "guidance_request"]:
+                action_type = ActionType.DIRECT_RESPONSE
+            else:
+                action_type = ActionType.DIRECT_RESPONSE
+            
+            # デバッグ情報の表示
+            rich_ui.print_message(f"🎯 TaskProfile: {task_profile}", "muted")
+            rich_ui.print_message(f"🎯 信頼度: {understanding_result.overall_confidence:.1%}", "muted")
+            rich_ui.print_message(f"🎯 ActionType: {action_type.value}", "muted")
+            
+            # 理解結果を保存（後で使用可能）
+            self.last_understanding_result = understanding_result
+            
+            return action_type
+            
+        except Exception as e:
+            rich_ui.print_message(f"⚠️ 新システムでエラー発生、旧システムにフォールバック: {str(e)[:100]}...", "warning")
+            # 新システムを無効化
+            self.use_new_intent_system = False
+            return self._analyze_intent_legacy(message)
+    
+    def _analyze_intent_legacy(self, message: str) -> ActionType:
+        """旧システムによる意図分析（保守的判定版）
         
         Args:
             message: ユーザーメッセージ
@@ -139,22 +318,34 @@ class CompanionCore:
         """
         message_lower = message.lower()
         
-        # ファイル操作キーワード
-        file_keywords = ["ファイル", "file", "作成", "create", "読み", "read", "書き", "write", "削除", "delete"]
-        if any(keyword in message_lower for keyword in file_keywords):
+        # 🔍 DEBUG: 意図分析のログ
+        rich_ui.print_message("🔍 [DEBUG] 保守的意図分析:", "info")
+        rich_ui.print_message(f"入力メッセージ: '{message}'", "muted")
+        
+        # ファイル操作キーワード（明確なもののみ）
+        file_keywords = ["ファイル作成", "ファイル削除", "ファイル編集", "create file", "delete file", "edit file", ".py作成", ".md作成"]
+        matched_file_keywords = [kw for kw in file_keywords if kw in message_lower]
+        if matched_file_keywords:
+            rich_ui.print_message(f"✅ ファイル操作キーワード検出: {matched_file_keywords}", "muted")
             return ActionType.FILE_OPERATION
         
-        # コード実行キーワード
-        code_keywords = ["実行", "run", "テスト", "test", "起動", "start"]
-        if any(keyword in message_lower for keyword in code_keywords):
+        # コード実行キーワード（明確なもののみ）
+        code_keywords = ["コード実行", "プログラム実行", "run code", "execute", "python実行"]
+        matched_code_keywords = [kw for kw in code_keywords if kw in message_lower]
+        if matched_code_keywords:
+            rich_ui.print_message(f"✅ コード実行キーワード検出: {matched_code_keywords}", "muted")
             return ActionType.CODE_EXECUTION
         
-        # 複数ステップタスクキーワード
-        multi_keywords = ["プロジェクト", "project", "アプリ", "app", "システム", "system"]
-        if any(keyword in message_lower for keyword in multi_keywords):
+        # 複数ステップタスクキーワード（非常に限定的）
+        # 「分析して」「調査して」「レビューして」のような明確な分析要求のみ
+        multi_keywords = ["分析して", "調査して", "レビューして", "検討して", "評価して", "問題点", "課題", "改善点"]
+        matched_multi_keywords = [kw for kw in multi_keywords if kw in message_lower]
+        if matched_multi_keywords and len(message) > 20:  # 短すぎるメッセージは除外
+            rich_ui.print_message(f"✅ 複数ステップタスクキーワード検出: {matched_multi_keywords}", "muted")
             return ActionType.MULTI_STEP_TASK
         
-        # デフォルトは直接応答
+        # デフォルトは直接応答（大部分のケース）
+        rich_ui.print_message("💭 直接応答として判定", "muted")
         return ActionType.DIRECT_RESPONSE
     
     def _generate_direct_response(self, user_message: str) -> str:
@@ -170,17 +361,18 @@ class CompanionCore:
             rich_ui.print_message("💬 お答えを考えています...", "info")
             
             # LLMに相談
-            messages = [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": user_message}
-            ]
+            messages = [{"role": "system", "content": self.system_prompt}]
+
+            # 過去の会話履歴も含める（最新20件）- スレッドセーフ
+            with self._history_lock:
+                if self.conversation_history:
+                    recent_history = self.conversation_history[-20:]
+                    for entry in recent_history:
+                        messages.append({"role": "user", "content": entry["user"]})
+                        messages.append({"role": "assistant", "content": entry["assistant"]})
             
-            # 過去の会話履歴も含める（最新5件）
-            if self.conversation_history:
-                recent_history = self.conversation_history[-5:]
-                for entry in recent_history:
-                    messages.insert(-1, {"role": "user", "content": entry["user"]})
-                    messages.insert(-1, {"role": "assistant", "content": entry["assistant"]})
+            # 現在のユーザーメッセージを最後に追加
+            messages.append({"role": "user", "content": user_message})
             
             response = llm_manager.chat_with_history(messages)
             
@@ -221,13 +413,32 @@ class CompanionCore:
 
             analysis_result = llm_manager.chat(analysis_prompt, self.system_prompt)
             
+            # 🔍 DEBUG: LLMレスポンスをログ出力
+            rich_ui.print_message("🔍 [DEBUG] LLM分析結果:", "info")
+            rich_ui.print_message(f"--- LLM Response Start ---", "muted")
+            rich_ui.print_message(analysis_result, "muted")
+            rich_ui.print_message(f"--- LLM Response End ---", "muted")
+            
             # 分析結果をパース
             operation_info = self._parse_file_operation(analysis_result)
+            
+            # 🔍 DEBUG: パース結果をログ出力
+            rich_ui.print_message("🔍 [DEBUG] パース結果:", "info")
+            rich_ui.print_message(f"Operation: '{operation_info.get('operation', 'None')}'", "muted")
+            rich_ui.print_message(f"Filename: '{operation_info.get('filename', 'None')}'", "muted")
+            rich_ui.print_message(f"Content: '{operation_info.get('content', 'None')}'", "muted")
             
             # 実際のファイル操作を実行
             return self._execute_file_operation(operation_info, user_message)
             
         except Exception as e:
+            # 🔍 DEBUG: 例外の詳細ログ
+            rich_ui.print_message("🚨 [DEBUG] ファイル操作処理で例外が発生:", "error")
+            rich_ui.print_message(f"例外タイプ: {type(e).__name__}", "muted")
+            rich_ui.print_message(f"例外メッセージ: {str(e)}", "muted")
+            import traceback
+            rich_ui.print_message(f"スタックトレース:", "muted")
+            rich_ui.print_message(traceback.format_exc(), "muted")
             return self._express_error_naturally(e)
     
     def _parse_file_operation(self, analysis_result: str) -> Dict[str, str]:
@@ -246,16 +457,31 @@ class CompanionCore:
         }
         
         lines = analysis_result.strip().split('\n')
-        for line in lines:
+        
+        # 🔍 DEBUG: パース処理の詳細ログ
+        rich_ui.print_message("🔍 [DEBUG] パース処理開始:", "info")
+        rich_ui.print_message(f"総行数: {len(lines)}", "muted")
+        
+        for i, line in enumerate(lines):
+            rich_ui.print_message(f"行{i+1}: '{line}'", "muted")
+            
             if line.startswith('操作:'):
                 operation_info["operation"] = line.split(':', 1)[1].strip()
+                rich_ui.print_message(f"✅ 操作を検出: '{operation_info['operation']}'", "muted")
             elif line.startswith('ファイル名:'):
                 operation_info["filename"] = line.split(':', 1)[1].strip()
+                rich_ui.print_message(f"✅ ファイル名を検出: '{operation_info['filename']}'", "muted")
             elif line.startswith('内容:'):
                 content = line.split(':', 1)[1].strip()
                 if content != "なし":
                     operation_info["content"] = content
+                    rich_ui.print_message(f"✅ 内容を検出: '{content[:50]}{'...' if len(content) > 50 else ''}'", "muted")
+                else:
+                    rich_ui.print_message(f"💭 内容は「なし」", "muted")
+            else:
+                rich_ui.print_message(f"⚠️ 未認識行: '{line}'", "muted")
         
+        rich_ui.print_message("🔍 [DEBUG] パース処理完了", "info")
         return operation_info
     
     def _execute_file_operation(self, operation_info: Dict[str, str], original_message: str) -> str:
@@ -359,7 +585,7 @@ class CompanionCore:
                 return f'# {filename}\n# 作成日: {datetime.now().strftime("%Y-%m-%d")}\n'
     
     def _handle_code_execution(self, user_message: str) -> str:
-        """コード実行を処理
+        """コード実行を処理（シンプル版）
         
         Args:
             user_message: ユーザーメッセージ
@@ -367,14 +593,17 @@ class CompanionCore:
         Returns:
             str: 処理結果メッセージ
         """
-        # Phase 1では基本的な応答のみ
-        rich_ui.print_message("⚡ コード実行の準備をしています...", "info")
-        time.sleep(0.5)
-        
-        return "コード実行機能は準備中です。もう少しお待ちください！（Phase 1では基本応答のみ）"
+        try:
+            rich_ui.print_message("⚡ コード実行タスクとして処理中...", "info")
+            
+            # シンプルなアプローチ: 通常のチャットベースでコード実行用最適化
+            return self._generate_enhanced_response(user_message, task_type="code_execution")
+            
+        except Exception as e:
+            return f"コード実行処理中にエラーが発生しました: {str(e)}"
     
     def _handle_multi_step_task(self, user_message: str) -> str:
-        """複数ステップタスクを処理
+        """複数ステップタスクを処理（シンプル版）
         
         Args:
             user_message: ユーザーメッセージ
@@ -382,11 +611,62 @@ class CompanionCore:
         Returns:
             str: 処理結果メッセージ
         """
-        # Phase 1では基本的な応答のみ
-        rich_ui.print_message("🔄 複数ステップタスクの計画を立てています...", "info")
-        time.sleep(0.5)
+        try:
+            rich_ui.print_message("🔄 複数ステップタスクとして処理中...", "info")
+            
+            # シンプルなアプローチ: 通常のチャットと同じプロンプトベースで、
+            # 複数ステップタスク用の最適化文を注入
+            return self._generate_enhanced_response(user_message, task_type="multi_step")
+            
+        except Exception as e:
+            rich_ui.print_message(f"❌ 複数ステップタスク処理でエラー: {e}", "error")
+            return f"複数ステップタスクの処理中にエラーが発生しました: {str(e)}"
+    
+    def _generate_enhanced_response(self, user_message: str, task_type: str = "direct") -> str:
+        """タスクタイプに応じた最適化された応答を生成
         
-        return "複数ステップタスク機能は準備中です。段階的に実装していきますね！（Phase 1では基本応答のみ）"
+        Args:
+            user_message: ユーザーメッセージ
+            task_type: タスクタイプ (direct, file_operation, multi_step, code_execution)
+            
+        Returns:
+            str: 応答メッセージ
+        """
+        try:
+            rich_ui.print_message("💬 最適化された応答を生成中...", "info")
+            
+            # タスクタイプ別の最適化文を準備
+            optimization_hints = {
+                "direct": "",
+                "file_operation": "\n\n**ファイル操作に関する注意**: 具体的なファイル名やパスを明確にし、操作の詳細を説明してください。",
+                "multi_step": "\n\n**複数ステップタスクとして**: この要求を段階的に分析し、包括的で構造化された回答を提供してください。",
+                "code_execution": "\n\n**コード実行に関して**: 実行可能なコードと、その説明を含めて回答してください。"
+            }
+            
+            # 基本のシステムプロンプトに最適化文を追加
+            enhanced_system_prompt = self.system_prompt + optimization_hints.get(task_type, "")
+            
+            # LLMに相談（通常のチャットと同じ方式）
+            messages = [{"role": "system", "content": enhanced_system_prompt}]
+
+            # 過去の会話履歴も含める（最新20件）- スレッドセーフ
+            with self._history_lock:
+                if self.conversation_history:
+                    recent_history = self.conversation_history[-20:]
+                    for entry in recent_history:
+                        messages.append({"role": "user", "content": entry["user"]})
+                        messages.append({"role": "assistant", "content": entry["assistant"]})
+            
+            # 現在のユーザーメッセージを最後に追加
+            messages.append({"role": "user", "content": user_message})
+            
+            response = llm_manager.chat_with_history(messages)
+            
+            rich_ui.print_message("✨ 最適化された応答を生成しました！", "success")
+            return response
+            
+        except Exception as e:
+            return f"すみません、考えがまとまりませんでした...。エラー: {str(e)}"
     
     def _express_error_naturally(self, error: Exception) -> str:
         """エラーを自然に表現
@@ -421,12 +701,14 @@ class CompanionCore:
             "session_time": (datetime.now() - self.session_start_time).total_seconds()
         }
         
-        self.conversation_history.append(entry)
-        
-        # メモリ管理（Phase 1では簡単な制限のみ）
-        if len(self.conversation_history) > 50:
-            # 古い履歴を削除（Phase 2で要約機能を実装予定）
-            self.conversation_history = self.conversation_history[-30:]
+        # スレッドセーフな履歴更新
+        with self._history_lock:
+            self.conversation_history.append(entry)
+            
+            # メモリ管理（改善版: 100件保存、80件に削減）
+            if len(self.conversation_history) > 100:
+                # 古い履歴を削除（100件を超えたら80件に削減）
+                self.conversation_history = self.conversation_history[-80:]
     
     def get_session_summary(self) -> Dict[str, Any]:
         """セッションサマリーを取得
@@ -772,3 +1054,81 @@ class CompanionCore:
             return "すみません、番号で教えてください（1、2、3のいずれか）。"
         except Exception as e:
             return f"選択の処理中にエラーが発生しました: {str(e)}"
+    
+    def _is_help_request(self, message: str) -> bool:
+        """ヘルプ要求かどうかを判定"""
+        help_keywords = [
+            'help', 'ヘルプ', '助けて', 'たすけて', 'わからない', '分からない',
+            '使い方', 'つかいかた', 'どうやって', 'どうすれば', '教えて', 'おしえて'
+        ]
+        
+        message_lower = message.lower().strip()
+        
+        # 直接的なヘルプコマンド
+        if message_lower in help_keywords:
+            return True
+        
+        # "help <topic>" 形式
+        if message_lower.startswith(('help ', 'ヘルプ ')):
+            return True
+        
+        # 質問形式のヘルプ要求
+        help_patterns = [
+            '使い方を教えて', 'つかいかたを教えて', 'どうやって使う', 'どうすればいい',
+            'わからない', '分からない', 'どうしたら', 'どうやったら'
+        ]
+        
+        return any(pattern in message_lower for pattern in help_patterns)
+    
+    def _handle_help_request(self, message: str) -> str:
+        """ヘルプ要求を処理"""
+        try:
+            # ヘルプクエリを抽出
+            query = None
+            message_lower = message.lower().strip()
+            
+            if message_lower.startswith(('help ', 'ヘルプ ')):
+                parts = message.split(' ', 1)
+                if len(parts) > 1:
+                    query = parts[1].strip()
+            elif message_lower not in ['help', 'ヘルプ', '助けて', 'たすけて']:
+                # 質問形式の場合、キーワードを抽出
+                keywords = ['承認', '設定', 'ファイル', 'コマンド', 'モード']
+                for keyword in keywords:
+                    if keyword in message:
+                        query = keyword
+                        break
+            
+            # ヘルプシステムから情報を取得
+            help_content = get_help(query)
+            
+            # 相棒らしい前置きを追加
+            if query:
+                prefix = f"🤔 「{query}」についてですね！お答えします：\n\n"
+            else:
+                prefix = "🤖 Duckflow Companionのヘルプシステムです！\n\n"
+            
+            return prefix + help_content
+            
+        except Exception as e:
+            return f"""
+🤔 すみません、ヘルプシステムで問題が発生しました。
+
+基本的な使い方：
+- `help` - メインヘルプを表示
+- `help 承認` - 承認システムについて
+- `help コマンド` - 利用可能なコマンド
+
+何か具体的にお困りのことがあれば、自然な言葉で質問してください！
+
+エラー詳細: {str(e)}
+"""
+    
+    def _load_approval_config(self):
+        """承認システムの設定を読み込み"""
+        try:
+            # 設定ファイルから承認モードを読み込み
+            # 実装は後で追加
+            pass
+        except Exception as e:
+            rich_ui.print_message(f"承認設定の読み込みに失敗: {e}", "warning")

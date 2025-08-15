@@ -171,11 +171,23 @@ class GroqClient(BaseLLMClient):
     def chat(self, messages: List[Dict[str, str]]) -> str:
         """チャット形式での対話"""
         try:
+            # メッセージの検証と前処理
+            if not messages:
+                raise LLMClientError("メッセージが空です")
+            
             # メッセージをLangChain形式に変換
             langchain_messages = []
             for msg in messages:
                 role = msg.get('role', 'user')
                 content = msg.get('content', '')
+                
+                # 空のコンテンツをスキップ
+                if not content or not content.strip():
+                    continue
+                
+                # コンテンツの長さ制限（Groq APIの制限を考慮）
+                if len(content) > 32000:  # 安全マージンを設けて32K文字に制限
+                    content = content[:32000] + "...(省略)"
                 
                 if role == 'system':
                     langchain_messages.append(SystemMessage(content=content))
@@ -184,12 +196,30 @@ class GroqClient(BaseLLMClient):
                 else:  # user
                     langchain_messages.append(HumanMessage(content=content))
             
+            if not langchain_messages:
+                raise LLMClientError("有効なメッセージがありません")
+            
             # LLMに送信
             response = self.client.invoke(langchain_messages)
+            
+            if not response or not hasattr(response, 'content'):
+                raise LLMClientError("Groq APIから無効な応答を受信しました")
+            
             return response.content
             
         except Exception as e:
-            raise LLMClientError(f"Groq API呼び出しに失敗しました: {e}")
+            # より詳細なエラー情報を提供
+            error_msg = str(e)
+            if "400" in error_msg or "Bad Request" in error_msg:
+                raise LLMClientError(f"Groq API リクエストエラー (400): リクエスト内容を確認してください - {error_msg}")
+            elif "401" in error_msg or "Unauthorized" in error_msg:
+                raise LLMClientError(f"Groq API 認証エラー (401): API キーを確認してください - {error_msg}")
+            elif "429" in error_msg or "rate limit" in error_msg.lower():
+                raise LLMClientError(f"Groq API レート制限エラー (429): しばらく待ってから再試行してください - {error_msg}")
+            elif "500" in error_msg or "Internal Server Error" in error_msg:
+                raise LLMClientError(f"Groq API サーバーエラー (500): しばらく待ってから再試行してください - {error_msg}")
+            else:
+                raise LLMClientError(f"Groq API呼び出しに失敗しました: {error_msg}")
     
     def is_available(self) -> bool:
         """クライアントが利用可能かどうか"""
