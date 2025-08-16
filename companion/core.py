@@ -8,6 +8,8 @@ import asyncio
 from typing import Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
+from dataclasses import dataclass
+from typing import Optional, List
 
 # 既存コンポーネントを活用
 from codecrafter.ui.rich_ui import rich_ui
@@ -34,6 +36,67 @@ class ActionType(Enum):
     MULTI_STEP_TASK = "multi_step_task"  # 複数ステップタスク
 
 
+@dataclass
+class FailureContext:
+    """失敗コンテキストの構造化記録"""
+    operation_id: str
+    kind: str  # "parse_error", "execution_error", "validation_error"
+    inputs: Dict[str, Any]
+    reason: str
+    timestamp: datetime
+    user_message: str
+    suggested_actions: List[str]
+    
+    def to_prompt_context(self) -> str:
+        """プロンプト用の文脈文字列を生成"""
+        return f"""
+前回の操作で以下の問題が発生しました:
+- 操作種別: {self.kind}
+- 問題: {self.reason}
+- ユーザー要求: {self.user_message}
+- 時刻: {self.timestamp.strftime('%H:%M:%S')}
+
+この失敗を踏まえて、以下のような対応を検討してください:
+{', '.join(self.suggested_actions)}
+"""
+
+
+@dataclass
+class TaskPlan:
+    """タスク計画の構造化表現"""
+    plan_id: str
+    purpose: str  # 目的
+    prerequisites: List[str]  # 前提条件
+    targets: List[str]  # 変更対象（ファイル/設定/UI等）
+    impact_scope: str  # 影響範囲の簡易メモ
+    steps: List[str]  # 実行手順（2-5手順）
+    next_actions: Dict[str, str]  # A: 実行, B: 明確化, C: 代替案
+    granularity: str  # "micro", "light", "standard"
+    abstraction_level: str  # "low", "mid", "high"
+    estimated_complexity: str  # "simple", "moderate", "complex"
+    
+    def to_user_display(self) -> str:
+        """ユーザー向けの表示文字列を生成"""
+        steps_text = "\n".join(f"{i+1}. {step}" for i, step in enumerate(self.steps))
+        actions_text = "\n".join(f"{key}: {value}" for key, value in self.next_actions.items())
+        
+        return f"""
+📋 **タスク計画** ({self.granularity}プラン)
+
+🎯 **目的**: {self.purpose}
+
+📝 **実行手順**:
+{steps_text}
+
+⚡ **影響範囲**: {self.impact_scope}
+
+🔄 **次のアクション**:
+{actions_text}
+
+どのアクションを選択しますか？ (A/B/C)
+"""
+
+
 class CompanionCore:
     """司令塔AI - ユーザーの相棒として振る舞う
     
@@ -52,10 +115,26 @@ class CompanionCore:
         self.session_start_time = datetime.now()
         self._history_lock = threading.Lock()  # スレッドセーフティ用
         
+        # A-2: 失敗認知ループ用の状態管理
+        self.failure_contexts: List[FailureContext] = []
+        self.operation_counter = 0
+        
+        # B-1: 動的計画フェーズ用の状態管理
+        self.current_plan: Optional[TaskPlan] = None
+        self.plan_counter = 0
+        
         # 承認システム（エラー時は優雅な劣化）
         try:
+            from .approval_ui import UserApprovalUI
+            
             self.approval_gate = ApprovalGate()
             self._load_approval_config()
+            
+            # UserApprovalUIを承認ゲートに接続
+            self.approval_ui = UserApprovalUI(timeout_seconds=30)
+            self.approval_gate.set_approval_ui(self.approval_ui)
+            rich_ui.print_message("✅ 承認システムとUIを接続しました", "success")
+            
         except Exception as e:
             # 承認システム初期化失敗時はデフォルト設定で継続
             rich_ui.print_message(f"⚠️ 承認システムの初期化に失敗しました。デフォルト設定を使用します: {e}", "warning")
@@ -84,6 +163,10 @@ class CompanionCore:
             rich_ui.print_message(f"⚠️ 新しい意図理解システムの初期化に失敗しました。旧システムを使用します: {e}", "warning")
             self.intent_system = None
             self.use_new_intent_system = False
+        
+        # セッション管理
+        import uuid
+        self.session_id = str(uuid.uuid4())
         
         # システムプロンプト - 相棒の人格を定義
         self.system_prompt = """あなたはDuckflowです。あなたは完璧なAIではありません。時には間違い、時には悩みます。
@@ -144,6 +227,10 @@ class CompanionCore:
             # 0. ヘルプコマンドの処理
             if self._is_help_request(user_message):
                 return self._handle_help_request(user_message)
+            
+            # B-2: 既存計画への応答処理
+            if self.current_plan and self._is_plan_response(user_message):
+                return self._handle_plan_response(user_message)
             
             # 1. 疑似思考過程表示
             self._show_thinking_process(user_message)
@@ -277,8 +364,20 @@ class CompanionCore:
                 ])
             ])
             
+            # A-1: 抽象度/具体度による処理選択
+            abstraction_level, concreteness_score = self._analyze_abstraction_concreteness(message, detected_targets)
+            
+            # デバッグ情報
+            rich_ui.print_message(f"🎯 抽象度: {abstraction_level}, 具体度: {concreteness_score:.2f}", "muted")
+            
+            # ルーティング保守化: 抽象度/具体度に基づく判定
             if task_profile in ["creation_request", "modification_request"]:
-                action_type = ActionType.FILE_OPERATION
+                # 抽象的なcreation_requestは質問/計画フェーズへ
+                if concreteness_score < 0.5:
+                    rich_ui.print_message("📋 抽象的な要求のため、詳細確認が必要です", "info")
+                    action_type = ActionType.MULTI_STEP_TASK
+                else:
+                    action_type = ActionType.FILE_OPERATION
             elif task_profile == "information_request" and has_file_reference:
                 # 情報要求でもファイル参照がある場合はファイル操作
                 action_type = ActionType.FILE_OPERATION
@@ -306,6 +405,913 @@ class CompanionCore:
             # 新システムを無効化
             self.use_new_intent_system = False
             return self._analyze_intent_legacy(message)
+    
+    def _analyze_abstraction_concreteness(self, message: str, detected_targets: list) -> tuple:
+        """メッセージの抽象度と具体度を判定
+        
+        Args:
+            message: ユーザーメッセージ
+            detected_targets: 検出されたターゲット
+            
+        Returns:
+            tuple: (abstraction_level: str, concreteness_score: float)
+        """
+        message_lower = message.lower()
+        
+        # 具体度スコア計算（0.0-1.0）
+        concreteness_indicators = 0
+        total_indicators = 0
+        
+        # ファイル名の明確さ
+        total_indicators += 1
+        if detected_targets and any('.' in target for target in detected_targets):
+            concreteness_indicators += 0.8  # 拡張子のあるファイル名
+        elif detected_targets:
+            concreteness_indicators += 0.4  # ファイル名はあるが曖昧
+        
+        # 操作の明確さ
+        total_indicators += 1
+        concrete_operations = ['作成', '作って', 'create', '書き込み', 'write', '読み取り', 'read', '削除', 'delete']
+        if any(op in message_lower for op in concrete_operations):
+            concreteness_indicators += 0.7
+        
+        # 内容の具体性
+        total_indicators += 1
+        if any(keyword in message_lower for keyword in ['内容', 'content', 'コード', 'code', 'テキスト', 'text']):
+            concreteness_indicators += 0.6
+        
+        # 場所の明確さ
+        total_indicators += 1
+        if any(keyword in message_lower for keyword in ['ディレクトリ', 'directory', 'フォルダ', 'folder', 'パス', 'path']):
+            concreteness_indicators += 0.5
+        
+        # 抽象的キーワード（減点）
+        abstract_keywords = ['実装', 'implement', '始め', 'start', '開発', 'develop', '作業', 'work', 'システム', 'system']
+        abstract_penalty = sum(0.2 for keyword in abstract_keywords if keyword in message_lower)
+        
+        concreteness_score = max(0.0, min(1.0, concreteness_indicators / total_indicators - abstract_penalty))
+        
+        # 抽象度レベル決定
+        if concreteness_score >= 0.7:
+            abstraction_level = "low"
+        elif concreteness_score >= 0.4:
+            abstraction_level = "mid"
+        else:
+            abstraction_level = "high"
+        
+        return abstraction_level, concreteness_score
+    
+    def _record_failure(self, kind: str, reason: str, inputs: Dict[str, Any], 
+                       user_message: str, suggested_actions: List[str] = None) -> FailureContext:
+        """失敗を構造化記録
+        
+        Args:
+            kind: 失敗の種類
+            reason: 失敗理由
+            inputs: 入力データ
+            user_message: ユーザーメッセージ
+            suggested_actions: 提案される対応策
+            
+        Returns:
+            FailureContext: 記録された失敗コンテキスト
+        """
+        self.operation_counter += 1
+        operation_id = f"op_{self.operation_counter}_{datetime.now().strftime('%H%M%S')}"
+        
+        if suggested_actions is None:
+            suggested_actions = [
+                "より具体的な指示を提供",
+                "ファイル名や内容を明確化",
+                "別のアプローチを検討"
+            ]
+        
+        failure_context = FailureContext(
+            operation_id=operation_id,
+            kind=kind,
+            inputs=inputs,
+            reason=reason,
+            timestamp=datetime.now(),
+            user_message=user_message,
+            suggested_actions=suggested_actions
+        )
+        
+        # 最新5件のみ保持
+        self.failure_contexts.append(failure_context)
+        if len(self.failure_contexts) > 5:
+            self.failure_contexts = self.failure_contexts[-5:]
+        
+        rich_ui.print_message(f"🔍 失敗を記録しました: {operation_id} ({kind})", "muted")
+        return failure_context
+    
+    def _get_failure_context_for_prompt(self) -> str:
+        """プロンプト用の失敗コンテキストを取得"""
+        if not self.failure_contexts:
+            return ""
+        
+        # 最新の失敗コンテキストのみを使用
+        latest_failure = self.failure_contexts[-1]
+        return latest_failure.to_prompt_context()
+    
+    def _parse_file_operation_json(self, analysis_result: str, user_message: str) -> Optional[Dict[str, Any]]:
+        """JSONスキーマによる厳格なパース
+        
+        Args:
+            analysis_result: LLMの分析結果
+            user_message: ユーザーメッセージ
+            
+        Returns:
+            Optional[Dict[str, Any]]: パース結果（失敗時はNone）
+        """
+        import json
+        import re
+        
+        try:
+            # JSONブロックを抽出
+            json_match = re.search(r'\{[^{}]*\}', analysis_result)
+            if not json_match:
+                rich_ui.print_message("❌ JSON形式が見つかりません", "error")
+                return None
+            
+            json_str = json_match.group()
+            operation_data = json.loads(json_str)
+            
+            # 必須フィールドの検証
+            required_fields = ['operation', 'filename']
+            for field in required_fields:
+                if field not in operation_data or not operation_data[field]:
+                    rich_ui.print_message(f"❌ 必須フィールド '{field}' が不足", "error")
+                    return None
+            
+            # 操作タイプの検証
+            valid_operations = ['create', 'read', 'write', 'list']
+            if operation_data['operation'] not in valid_operations:
+                rich_ui.print_message(f"❌ 無効な操作: {operation_data['operation']}", "error")
+                return None
+            
+            # デフォルト値の設定
+            operation_data.setdefault('content', '')
+            operation_data.setdefault('is_directory', False)
+            operation_data.setdefault('justification', '操作の実行')
+            
+            rich_ui.print_message("✅ JSON解析に成功しました", "success")
+            return operation_data
+            
+        except json.JSONDecodeError as e:
+            rich_ui.print_message(f"❌ JSON解析エラー: {e}", "error")
+            return None
+        except Exception as e:
+            rich_ui.print_message(f"❌ 予期しないパースエラー: {e}", "error")
+            return None
+    
+    def _handle_parse_failure(self, analysis_result: str, user_message: str) -> str:
+        """パース失敗時の失敗認知ループ処理
+        
+        Args:
+            analysis_result: 失敗したLLM応答
+            user_message: ユーザーメッセージ
+            
+        Returns:
+            str: 失敗対応メッセージ
+        """
+        # 失敗を記録
+        failure_context = self._record_failure(
+            kind="parse_error",
+            reason="LLM出力がJSONスキーマに準拠していません",
+            inputs={"llm_response": analysis_result[:200], "user_message": user_message},
+            user_message=user_message,
+            suggested_actions=[
+                "より具体的なファイル名を指定",
+                "操作内容を明確化",
+                "ステップを分けて実行"
+            ]
+        )
+        
+        # 明確化質問を生成
+        clarification_questions = self._generate_clarification_questions(user_message)
+        
+        response = f"""申し訳ありません。ファイル操作の詳細を正しく理解できませんでした。
+
+🔍 **問題**: {failure_context.reason}
+
+以下の点を明確にしていただけますか？
+
+{clarification_questions}
+
+より具体的な指示をいただければ、適切にファイル操作を実行できます。"""
+        
+        return response
+    
+    def _generate_clarification_questions(self, user_message: str) -> str:
+        """明確化質問を生成（最大2問）
+        
+        Args:
+            user_message: ユーザーメッセージ
+            
+        Returns:
+            str: 質問リスト
+        """
+        questions = []
+        message_lower = user_message.lower()
+        
+        # ファイル名が不明確な場合
+        if not any(ext in message_lower for ext in ['.py', '.txt', '.md', '.json', '.js', '.html', '.css']):
+            questions.append("📁 **ファイル名**: どのようなファイル名にしますか？（拡張子も含めて）")
+        
+        # 操作が不明確な場合
+        if not any(op in message_lower for op in ['作成', '作って', '書き込み', '読み取り', '削除']):
+            questions.append("⚡ **操作内容**: 具体的に何をしたいですか？（作成/読み取り/編集/削除）")
+        
+        # 内容が不明確な場合（作成・書き込み時）
+        if any(word in message_lower for word in ['作成', '作って', '書き込み']) and 'ディレクトリ' not in message_lower:
+            if len(questions) < 2:
+                questions.append("📝 **内容**: ファイルにはどのような内容を書き込みますか？")
+        
+        # 最大2問に制限
+        questions = questions[:2]
+        
+        if not questions:
+            questions = ["📋 **詳細**: もう少し具体的に教えていただけますか？"]
+        
+        return "\n".join(f"{i+1}. {q}" for i, q in enumerate(questions))
+    
+    def _get_minimal_context(self) -> str:
+        """汎用コンテキストの最小収集（C-2: 失敗認知統合版）
+        
+        Returns:
+            str: 最小限のコンテキスト情報
+        """
+        context_parts = []
+        
+        # 直近の対話履歴（最大3件）
+        with self._history_lock:
+            if self.conversation_history:
+                recent_messages = self.conversation_history[-3:]
+                if recent_messages:
+                    context_parts.append("直近の対話:")
+                    for entry in recent_messages:
+                        context_parts.append(f"- ユーザー: {entry['user'][:50]}{'...' if len(entry['user']) > 50 else ''}")
+                        context_parts.append(f"- 応答: {entry['assistant'][:50]}{'...' if len(entry['assistant']) > 50 else ''}")
+        
+        # C-2: 失敗認知プロンプト - 最近の失敗ログを含める
+        failure_context = self._get_failure_context()
+        if failure_context:
+            context_parts.append("\n" + failure_context)
+        
+        # セッション情報
+        session_duration = (datetime.now() - self.session_start_time).total_seconds()
+        if session_duration > 60:
+            context_parts.append(f"セッション継続時間: {session_duration/60:.1f}分")
+        
+        # 失敗履歴数（学習パターン用）
+        if self.failure_contexts:
+            context_parts.append(f"今セッションでの解決済み課題: {len(self.failure_contexts)}件")
+        
+        return "\n".join(context_parts) if context_parts else "新しいセッション"
+    
+    def _get_failure_context(self) -> str:
+        """C-2: 失敗認知プロンプト用の文脈を生成
+        
+        Returns:
+            str: 失敗からの学習文脈
+        """
+        failure_parts = []
+        
+        # Phase A: FailureContext からの失敗情報
+        if self.failure_contexts:
+            recent_failures = self.failure_contexts[-2:]  # 最新2件
+            if recent_failures:
+                failure_parts.append("🔍 **前回の問題と学習**:")
+                for failure in recent_failures:
+                    failure_parts.append(f"- {failure.to_prompt_context()}")
+        
+        # C-1: 構造化操作ログからの失敗情報
+        if hasattr(self.file_ops, 'get_recent_failures'):
+            operation_failures = self.file_ops.get_recent_failures(limit=2)
+            if operation_failures:
+                failure_parts.append("🔧 **最近の操作失敗**:")
+                for op_failure in operation_failures:
+                    failure_summary = op_failure.to_failure_summary()
+                    if failure_summary:
+                        failure_parts.append(f"- {failure_summary}")
+        
+        return "\n".join(failure_parts) if failure_parts else ""
+    
+    def _generate_failure_aware_prompt(self, user_message: str, base_prompt: str) -> str:
+        """C-2: 失敗を踏まえたプロンプトを生成
+        
+        Args:
+            user_message: ユーザーメッセージ
+            base_prompt: ベースプロンプト
+            
+        Returns:
+            str: 失敗認知を含む強化プロンプト
+        """
+        failure_context = self._get_failure_context()
+        
+        if not failure_context:
+            return base_prompt
+        
+        # 失敗を踏まえた次の一手を促すプロンプト拡張
+        enhanced_prompt = f"""{base_prompt}
+
+{failure_context}
+
+**重要**: 上記の失敗・問題を踏まえて、以下を検討してください：
+1. 同じ失敗を避けるためのアプローチ
+2. 代替手段や異なる手順の提案
+3. より詳細な情報が必要な場合は質問
+4. 実行前の確認や準備が必要な場合は明示
+
+失敗から学んで、より良い解決策を提供してください。"""
+
+        return enhanced_prompt
+    
+    def _handle_operation_with_retry(self, operation_func, operation_name: str, 
+                                    max_retries: int = 1, **kwargs) -> Any:
+        """C-3: 操作をリトライ方針に従って実行
+        
+        Args:
+            operation_func: 実行する操作関数
+            operation_name: 操作名（ログ用）
+            max_retries: 最大リトライ回数（デフォルト1回）
+            **kwargs: 操作関数に渡す引数
+            
+        Returns:
+            Any: 操作結果
+            
+        Raises:
+            Exception: 最大リトライ後も失敗した場合
+        """
+        last_error = None
+        
+        for attempt in range(max_retries + 1):  # 初回 + リトライ
+            try:
+                if attempt > 0:
+                    rich_ui.print_message(f"🔄 {operation_name} をリトライ中... ({attempt}/{max_retries})", "warning")
+                    
+                    # リトライ前に失敗コンテキストを作成
+                    if last_error:
+                        failure_context = FailureContext(
+                            operation_id=f"retry_{self.operation_counter}_{attempt}",
+                            kind="retry_attempt",
+                            inputs=kwargs,
+                            reason=str(last_error),
+                            timestamp=datetime.now(),
+                            user_message=kwargs.get('user_message', ''),
+                            suggested_actions=[
+                                "パラメータを調整して再試行",
+                                "代替手段を検討",
+                                "より詳細な情報を提供"
+                            ]
+                        )
+                        self.failure_contexts.append(failure_context)
+                
+                # 操作実行
+                result = operation_func(**kwargs)
+                
+                if attempt > 0:
+                    rich_ui.print_message(f"✅ {operation_name} がリトライで成功しました！", "success")
+                
+                return result
+                
+            except Exception as e:
+                last_error = e
+                
+                if attempt < max_retries:
+                    rich_ui.print_message(f"⚠️ {operation_name} が失敗しました: {str(e)}", "warning")
+                    rich_ui.print_message(f"🔄 自動リトライします... (残り{max_retries - attempt}回)", "info")
+                else:
+                    rich_ui.print_message(f"❌ {operation_name} が最大リトライ後も失敗しました: {str(e)}", "error")
+                    
+                    # 最終失敗のコンテキストを作成
+                    failure_context = FailureContext(
+                        operation_id=f"final_failure_{self.operation_counter}",
+                        kind="max_retries_exceeded",
+                        inputs=kwargs,
+                        reason=f"最大リトライ回数({max_retries})後も失敗: {str(e)}",
+                        timestamp=datetime.now(),
+                        user_message=kwargs.get('user_message', ''),
+                        suggested_actions=[
+                            "手動で詳細を確認",
+                            "別のアプローチを検討",
+                            "システム管理者に連絡"
+                        ]
+                    )
+                    self.failure_contexts.append(failure_context)
+                    
+                    raise e
+        
+        # この行には到達しないはずだが、安全のため
+        raise Exception(f"{operation_name} の実行に失敗しました")
+    
+    def _should_retry_error(self, error: Exception) -> bool:
+        """C-3: エラーがリトライ対象かどうかを判定
+        
+        Args:
+            error: 発生したエラー
+            
+        Returns:
+            bool: リトライすべき場合True
+        """
+        # リトライ対象のエラータイプ
+        retryable_errors = [
+            "timeout",
+            "connection",
+            "network",
+            "temporary",
+            "rate_limit",
+            "429",  # Too Many Requests
+            "503",  # Service Unavailable
+            "502",  # Bad Gateway
+        ]
+        
+        error_str = str(error).lower()
+        return any(keyword in error_str for keyword in retryable_errors)
+    
+    def _wait_before_retry(self, attempt: int, base_delay: float = 1.0) -> None:
+        """C-3: リトライ前の待機（指数バックオフ）
+        
+        Args:
+            attempt: 試行回数
+            base_delay: ベース遅延時間（秒）
+        """
+        import time
+        import random
+        
+        # 指数バックオフ + ジッター
+        delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, 1)
+        max_delay = 10.0  # 最大10秒
+        
+        actual_delay = min(delay, max_delay)
+        
+        rich_ui.print_message(f"⏱️ {actual_delay:.1f}秒待機してからリトライします...", "info")
+        time.sleep(actual_delay)
+    
+    def _create_micro_plan(self, user_message: str, abstraction_level: str, concreteness_score: float) -> TaskPlan:
+        """マイクロプラン（1-2手順）を作成
+        
+        Args:
+            user_message: ユーザーメッセージ
+            abstraction_level: 抽象度
+            concreteness_score: 具体度スコア
+            
+        Returns:
+            TaskPlan: マイクロプラン
+        """
+        self.plan_counter += 1
+        plan_id = f"micro_{self.plan_counter}_{datetime.now().strftime('%H%M%S')}"
+        
+        # 簡単なルールベース計画生成
+        if "ファイル" in user_message.lower() and "作成" in user_message.lower():
+            purpose = "ファイル作成タスクの実行"
+            steps = [
+                "ファイル内容を決定",
+                "ファイルを作成"
+            ]
+            targets = ["新規ファイル"]
+            impact_scope = "ローカルファイルシステム"
+        elif "実装" in user_message.lower():
+            purpose = "実装タスクの開始"
+            steps = [
+                "実装対象を明確化",
+                "基本構造を作成"
+            ]
+            targets = ["ソースコード"]
+            impact_scope = "プロジェクト構造"
+        else:
+            purpose = "ユーザー要求の実行"
+            steps = [
+                "要求内容を分析",
+                "適切な手順で実行"
+            ]
+            targets = ["要求された対象"]
+            impact_scope = "限定的"
+        
+        return TaskPlan(
+            plan_id=plan_id,
+            purpose=purpose,
+            prerequisites=["なし"],
+            targets=targets,
+            impact_scope=impact_scope,
+            steps=steps,
+            next_actions={
+                "A": "実行 - このプランで進める",
+                "B": "明確化 - より詳しい情報を提供",
+                "C": "代替案 - 別のアプローチを検討"
+            },
+            granularity="micro",
+            abstraction_level=abstraction_level,
+            estimated_complexity="simple"
+        )
+    
+    def _create_light_plan(self, user_message: str, abstraction_level: str, concreteness_score: float) -> TaskPlan:
+        """軽量計画（2-5手順）を作成
+        
+        Args:
+            user_message: ユーザーメッセージ
+            abstraction_level: 抽象度
+            concreteness_score: 具体度スコア
+            
+        Returns:
+            TaskPlan: 軽量計画
+        """
+        self.plan_counter += 1
+        plan_id = f"light_{self.plan_counter}_{datetime.now().strftime('%H%M%S')}"
+        
+        # LLMベースの計画生成
+        try:
+            planning_prompt = f"""
+ユーザー要求を分析して、2-5手順の軽量タスク計画を作成してください。
+
+ユーザー要求: "{user_message}"
+抽象度: {abstraction_level}
+具体度スコア: {concreteness_score:.2f}
+
+以下のJSON形式で応答してください：
+{{
+    "purpose": "目的の簡潔な説明",
+    "prerequisites": ["前提条件1", "前提条件2"],
+    "targets": ["変更対象1", "変更対象2"],
+    "impact_scope": "影響範囲の説明",
+    "steps": ["手順1", "手順2", "手順3", "手順4", "手順5"],
+    "estimated_complexity": "simple|moderate|complex"
+}}
+
+要件:
+- stepsは2-5個の実行可能な手順
+- prerequisitesは実際に必要な前提条件のみ
+- targetsは具体的な変更対象
+- impact_scopeは簡潔に
+"""
+            
+            # C-3: リトライ機能を使ってLLM呼び出し
+            def llm_call_wrapper(**kwargs):
+                return llm_manager.chat(kwargs['prompt'], kwargs['system_prompt'])
+            
+            result = self._handle_operation_with_retry(
+                llm_call_wrapper,
+                "LLM計画生成",
+                max_retries=1,
+                prompt=planning_prompt,
+                system_prompt=self.system_prompt,
+                user_message=user_message
+            )
+            
+            # JSONパース
+            import json
+            import re
+            json_match = re.search(r'\{.*\}', result, re.DOTALL)
+            if json_match:
+                plan_data = json.loads(json_match.group())
+                
+                return TaskPlan(
+                    plan_id=plan_id,
+                    purpose=plan_data.get("purpose", "ユーザー要求の実行"),
+                    prerequisites=plan_data.get("prerequisites", ["なし"]),
+                    targets=plan_data.get("targets", ["要求された対象"]),
+                    impact_scope=plan_data.get("impact_scope", "プロジェクト内"),
+                    steps=plan_data.get("steps", ["要求を分析", "計画を実行"]),
+                    next_actions={
+                        "A": "実行 - この計画で進める",
+                        "B": "明確化 - より詳しい情報を提供", 
+                        "C": "代替案 - 別のアプローチを検討"
+                    },
+                    granularity="light",
+                    abstraction_level=abstraction_level,
+                    estimated_complexity=plan_data.get("estimated_complexity", "moderate")
+                )
+        
+        except Exception as e:
+            rich_ui.print_message(f"⚠️ LLMベース計画生成に失敗、フォールバック使用: {e}", "warning")
+        
+        # フォールバック: ルールベース計画
+        return self._create_micro_plan(user_message, abstraction_level, concreteness_score)
+    
+    def _handle_clarification_needed(self, user_message: str, abstraction_level: str, concreteness_score: float) -> str:
+        """B-2: 明確化が必要な場合の処理
+        
+        Args:
+            user_message: ユーザーメッセージ
+            abstraction_level: 抽象度
+            concreteness_score: 具体度スコア
+            
+        Returns:
+            str: 明確化質問
+        """
+        questions = self._generate_clarification_questions(user_message)
+        
+        return f"""🤔 **ご要求をより理解するために**
+
+あなたの要求は抽象度が高く（{abstraction_level}、具体度: {concreteness_score:.2f}）、適切な計画を作成するためにいくつかの詳細を教えていただきたいです。
+
+{questions}
+
+これらの詳細をお聞かせいただければ、より具体的で実用的な計画を作成できます。"""
+    
+    def _is_plan_response(self, user_message: str) -> bool:
+        """計画への応答かどうかを判定"""
+        message_lower = user_message.lower().strip()
+        
+        # 選択肢の応答
+        if message_lower in ['a', 'b', 'c']:
+            return True
+        
+        # 明示的な選択
+        plan_keywords = [
+            '実行', '進める', 'やって', 'お願い', 
+            '明確化', '詳細', '教えて', '質問',
+            '代替', '別の', '他の', 'やめる'
+        ]
+        
+        return any(keyword in message_lower for keyword in plan_keywords)
+    
+    def _handle_plan_response(self, user_message: str) -> str:
+        """B-2: 計画への応答を処理
+        
+        Args:
+            user_message: ユーザーメッセージ
+            
+        Returns:
+            str: 処理結果メッセージ
+        """
+        if not self.current_plan:
+            return "現在有効な計画がありません。新しい要求をお聞かせください。"
+        
+        message_lower = user_message.lower().strip()
+        
+        # A: 実行
+        if message_lower in ['a', '実行', '進める', 'やって', 'お願い', 'はい'] or \
+           any(word in message_lower for word in ['実行', '進める', 'やって']):
+            return self._execute_plan()
+        
+        # B: 明確化
+        elif message_lower in ['b', '明確化', '詳細', '教えて'] or \
+             any(word in message_lower for word in ['明確化', '詳細', '教えて', '質問']):
+            return self._request_plan_clarification()
+        
+        # C: 代替案
+        elif message_lower in ['c', '代替', '別の', '他の'] or \
+             any(word in message_lower for word in ['代替', '別の', '他の', 'やめる']):
+            return self._suggest_alternatives()
+        
+        # その他の応答（追加情報として扱う）
+        else:
+            return self._update_plan_with_additional_info(user_message)
+    
+    def _execute_plan(self) -> str:
+        """B-3: 計画の実行（承認システム統合版）"""
+        if not self.current_plan:
+            return "実行する計画がありません。"
+        
+        rich_ui.print_message(f"🚀 計画を実行中: {self.current_plan.plan_id}", "info")
+        rich_ui.print_message(f"📋 目的: {self.current_plan.purpose}", "info")
+        
+        # 実行前の最終確認（重要リスクの場合）
+        if self.current_plan.estimated_complexity in ["complex"] or \
+           any(keyword in step.lower() for step in self.current_plan.steps 
+               for keyword in ['削除', 'delete', 'システム', 'system']):
+            
+            try:
+                from .approval_system import OperationType, RiskLevel
+                
+                # 計画全体の承認要求
+                approval_response = self.approval_gate.request_approval(
+                    operation_type="execute_plan",
+                    params={
+                        'target': self.current_plan.plan_id,
+                        'plan_purpose': self.current_plan.purpose,
+                        'steps': self.current_plan.steps,
+                        'complexity': self.current_plan.estimated_complexity,
+                        'impact_scope': self.current_plan.impact_scope
+                    },
+                    session_id=self.session_id
+                )
+                
+                if not approval_response.approved:
+                    self.current_plan = None
+                    return f"🚫 計画の実行が拒否されました: {approval_response.reason}"
+                    
+            except Exception as e:
+                rich_ui.print_message(f"⚠️ 承認システムエラー: {e}", "warning")
+        
+        # ステップごとの実行
+        results = []
+        failed_steps = []
+        
+        for i, step in enumerate(self.current_plan.steps, 1):
+            rich_ui.print_message(f"📋 ステップ {i}/{len(self.current_plan.steps)}: {step}", "info")
+            
+            try:
+                # 各ステップを実際のファイル操作に変換
+                step_result = self._execute_plan_step(step, i)
+                results.append(f"ステップ {i}: {step_result}")
+                
+                # エラーが含まれている場合は記録
+                if "❌" in step_result or "🚫" in step_result:
+                    failed_steps.append(i)
+                    
+            except Exception as e:
+                error_result = f"❌ ステップ {i}: 予期しないエラー - {str(e)}"
+                results.append(error_result)
+                failed_steps.append(i)
+                rich_ui.print_message(f"⚠️ ステップ {i} でエラーが発生: {e}", "warning")
+        
+        # 実行結果のサマリー
+        total_steps = len(self.current_plan.steps)
+        successful_steps = total_steps - len(failed_steps)
+        
+        if failed_steps:
+            plan_summary = f"⚠️ 計画 '{self.current_plan.purpose}' を部分的に完了しました\n\n"
+            plan_summary += f"📊 実行結果: {successful_steps}/{total_steps} ステップ成功\n"
+            plan_summary += f"❌ 失敗ステップ: {', '.join(map(str, failed_steps))}\n\n"
+        else:
+            plan_summary = f"✅ 計画 '{self.current_plan.purpose}' を完全に完了しました！\n\n"
+            plan_summary += f"📊 実行結果: {successful_steps}/{total_steps} ステップ全て成功\n\n"
+        
+        plan_summary += "\n".join(results)
+        plan_summary += f"\n\n🎯 影響範囲: {self.current_plan.impact_scope}"
+        
+        # 失敗がある場合は次のアクションを提案
+        if failed_steps:
+            plan_summary += "\n\n💡 **次のアクション**:"
+            plan_summary += "\n- 失敗したステップを個別に再実行"
+            plan_summary += "\n- 別のアプローチを検討"
+            plan_summary += "\n- より詳細な計画を作成"
+        
+        # 計画をクリア
+        completed_plan_id = self.current_plan.plan_id
+        self.current_plan = None
+        
+        # 実行ログを記録
+        rich_ui.print_message(f"📝 計画 {completed_plan_id} の実行を完了しました", "success")
+        
+        return plan_summary
+    
+    def _execute_plan_step(self, step: str, step_number: int) -> str:
+        """計画ステップの実行（承認システム統合版）
+        
+        Args:
+            step: 実行するステップ
+            step_number: ステップ番号
+            
+        Returns:
+            str: ステップ実行結果
+        """
+        step_lower = step.lower()
+        
+        # ファイル関連のステップ - 承認システムを経由
+        if any(keyword in step_lower for keyword in ['ファイル', 'file', '作成', 'create']):
+            try:
+                # ステップをファイル操作要求として解釈
+                if "作成" in step_lower:
+                    # ファイル作成の承認要求
+                    filename = f"plan_step_{step_number}.txt" 
+                    content = f"# ステップ {step_number}: {step}\n実行時刻: {datetime.now()}\n"
+                    
+                    # 承認システムを経由したファイル操作
+                    from .approval_system import OperationType
+                    
+                    # 承認要求
+                    approval_response = self.approval_gate.request_approval(
+                        operation_type=OperationType.CREATE_FILE,
+                        params={
+                            'target': filename,
+                            'content': content,
+                            'operation_context': f'計画実行: {self.current_plan.plan_id if self.current_plan else "unknown"}'
+                        },
+                        session_id=self.session_id
+                    )
+                    
+                    if approval_response.approved:
+                        # 承認された場合のみファイル操作実行
+                        result = self.file_ops.create_file(filename, content)
+                        if result["success"]:
+                            return f"✅ {step} - ファイル {filename} を作成（承認済み）"
+                        else:
+                            return f"❌ {step} - 失敗: {result.get('message', 'unknown error')}"
+                    else:
+                        # 承認拒否の場合
+                        return f"🚫 {step} - ユーザーにより拒否されました: {approval_response.reason}"
+                        
+                elif "読み取り" in step_lower or "確認" in step_lower:
+                    # 読み取り操作（低リスク）
+                    return f"✅ {step} - 確認完了"
+                else:
+                    return f"✅ {step} - 準備完了"
+            
+            except Exception as e:
+                return f"❌ {step} - エラー: {str(e)}"
+        
+        # コード実行関連のステップ - 承認システムを経由
+        elif any(keyword in step_lower for keyword in ['実行', 'execute', 'run', 'テスト']):
+            try:
+                from .approval_system import OperationType
+                
+                # 実行の承認要求
+                approval_response = self.approval_gate.request_approval(
+                    operation_type=OperationType.EXECUTE_PYTHON,
+                    params={
+                        'target': step,
+                        'command': f'計画ステップ実行: {step}',
+                        'operation_context': f'計画実行: {self.current_plan.plan_id if self.current_plan else "unknown"}'
+                    },
+                    session_id=self.session_id
+                )
+                
+                if approval_response.approved:
+                    return f"✅ {step} - 実行準備完了（承認済み）"
+                else:
+                    return f"🚫 {step} - 実行が拒否されました: {approval_response.reason}"
+                    
+            except Exception as e:
+                return f"❌ {step} - エラー: {str(e)}"
+        
+        # その他のステップ（情報収集、分析等） - 承認不要
+        else:
+            return f"✅ {step} - 完了"
+    
+    def _request_plan_clarification(self) -> str:
+        """計画の明確化要求"""
+        if not self.current_plan:
+            return "明確化する計画がありません。"
+        
+        # より詳細な質問を生成
+        clarification_prompt = f"""
+現在の計画について、ユーザーがより詳しい情報を求めています。
+
+計画: {self.current_plan.purpose}
+手順: {', '.join(self.current_plan.steps)}
+
+以下の点について明確化質問を1-2個生成してください：
+1. 具体的な実装方法
+2. 技術的な詳細
+3. リスクや注意点
+4. 代替アプローチ
+
+簡潔で実用的な質問にしてください。"""
+        
+        try:
+            clarification = llm_manager.chat(clarification_prompt, self.system_prompt)
+            
+            return f"""📋 **計画の詳細について**
+
+{clarification}
+
+これらの点について教えていただけますか？計画をより具体的にできます。"""
+        
+        except Exception as e:
+            return f"""📋 **計画の詳細について**
+
+以下の点を明確にしていただけますか？
+
+1. どの部分をより詳しく説明が必要ですか？
+2. 技術的な制約や要求はありますか？
+3. 期待する結果のイメージを教えてください
+
+これらの情報があれば、計画をより具体的にできます。"""
+    
+    def _suggest_alternatives(self) -> str:
+        """代替案の提案"""
+        if not self.current_plan:
+            return "代替案を提案する計画がありません。"
+        
+        alternatives = [
+            "🔄 **段階的アプローチ**: 計画を更に小さなステップに分割",
+            "🛡️ **安全重視アプローチ**: より慎重で保守的な方法", 
+            "⚡ **シンプルアプローチ**: 最小限の変更で目的を達成",
+            "🧪 **試行アプローチ**: 小規模なテストから開始"
+        ]
+        
+        alternative_text = "\n".join(alternatives)
+        
+        # 計画をクリア
+        self.current_plan = None
+        
+        return f"""🤔 **代替案のご提案**
+
+現在の計画の代わりに、以下のようなアプローチはいかがでしょうか？
+
+{alternative_text}
+
+どのアプローチがお好みですか？または、全く違ったアプローチをご希望でしたら教えてください。"""
+    
+    def _update_plan_with_additional_info(self, additional_info: str) -> str:
+        """追加情報で計画を更新"""
+        if not self.current_plan:
+            return "更新する計画がありません。"
+        
+        # 追加情報をAgentStateに記録（将来の実装で活用）
+        return f"""📝 **追加情報を受け取りました**
+
+「{additional_info}」
+
+この情報を考慮して計画を調整できます。以下から選択してください：
+
+A: 調整した計画で実行
+B: さらに詳細を確認
+C: 代替案を検討
+
+どちらを希望されますか？"""
     
     def _analyze_intent_legacy(self, message: str) -> ActionType:
         """旧システムによる意図分析（保守的判定版）
@@ -383,7 +1389,7 @@ class CompanionCore:
             return f"すみません、考えがまとまりませんでした...。エラー: {str(e)}"
     
     def _handle_file_operation(self, user_message: str) -> str:
-        """ファイル操作を処理 - Phase 1.5版
+        """ファイル操作を処理 - A-2: 失敗認知ループ統合版
         
         Args:
             user_message: ユーザーメッセージ
@@ -392,26 +1398,39 @@ class CompanionCore:
             str: 処理結果メッセージ
         """
         try:
+            # A-2: 失敗コンテキストを含むプロンプト生成
+            failure_context = self._get_failure_context_for_prompt()
+            
+            # A-4: 汎用コンテキストの最小収集
+            minimal_context = self._get_minimal_context()
+            
+            base_prompt = f"""ユーザーメッセージを分析して、必要なファイル操作を判定してください。
+
+{failure_context}
+
+{minimal_context}
+
+ユーザーメッセージ: "{user_message}" 
+
+以下の厳格なJSONスキーマで応答してください：
+{{"operation":"create|read|write|list","filename":"<path>","content":"<string|optional>","is_directory":false,"justification":"<why>"}}
+
+**重要な注意事項:**
+- 必ずJSON形式で応答してください
+- ディレクトリ作成の場合: operation="create", is_directory=true, content=""
+- ファイル作成の場合: operation="create", is_directory=false, content="実際の内容"
+- justificationには操作の理由を簡潔に記載
+
+例1（ファイル作成）：
+{{"operation":"create","filename":"hello.py","content":"print('Hello, World!')","is_directory":false,"justification":"Python Hello Worldプログラムの作成"}}
+
+例2（ディレクトリ作成）：
+{{"operation":"create","filename":"temp_test_files","content":"","is_directory":true,"justification":"作業用ディレクトリの作成"}}"""
+
             # LLMに相談してファイル操作の詳細を決定
             rich_ui.print_message("🤔 どんなファイル操作が必要か考えています...", "info")
             
-            analysis_prompt = f"""ユーザーメッセージを分析して、必要なファイル操作を判定してください。
-
-ユーザーメッセージ: "{user_message}"
-
-以下の形式で応答してください：
-操作: [create/read/write/list]
-ファイル名: [ファイル名またはパス]
-内容: [ファイル作成/書き込みの場合の内容、それ以外は"なし"]
-
-例：
-操作: create
-ファイル名: hello.py
-内容: print("Hello, World!")
-
-判定をお願いします："""
-
-            analysis_result = llm_manager.chat(analysis_prompt, self.system_prompt)
+            analysis_result = llm_manager.chat(base_prompt, self.system_prompt)
             
             # 🔍 DEBUG: LLMレスポンスをログ出力
             rich_ui.print_message("🔍 [DEBUG] LLM分析結果:", "info")
@@ -419,8 +1438,12 @@ class CompanionCore:
             rich_ui.print_message(analysis_result, "muted")
             rich_ui.print_message(f"--- LLM Response End ---", "muted")
             
-            # 分析結果をパース
-            operation_info = self._parse_file_operation(analysis_result)
+            # A-3: JSONスキーマによる堅牢なパース
+            operation_info = self._parse_file_operation_json(analysis_result, user_message)
+            
+            # パースに失敗した場合は失敗認知ループに移行
+            if operation_info is None:
+                return self._handle_parse_failure(analysis_result, user_message)
             
             # 🔍 DEBUG: パース結果をログ出力
             rich_ui.print_message("🔍 [DEBUG] パース結果:", "info")
@@ -442,7 +1465,7 @@ class CompanionCore:
             return self._express_error_naturally(e)
     
     def _parse_file_operation(self, analysis_result: str) -> Dict[str, str]:
-        """LLMの分析結果をパース
+        """LLMの分析結果をパース（ディレクトリ対応版）
         
         Args:
             analysis_result: LLMの分析結果
@@ -453,7 +1476,8 @@ class CompanionCore:
         operation_info = {
             "operation": "unknown",
             "filename": "",
-            "content": ""
+            "content": "",
+            "is_directory": False
         }
         
         lines = analysis_result.strip().split('\n')
@@ -468,9 +1492,23 @@ class CompanionCore:
             if line.startswith('操作:'):
                 operation_info["operation"] = line.split(':', 1)[1].strip()
                 rich_ui.print_message(f"✅ 操作を検出: '{operation_info['operation']}'", "muted")
-            elif line.startswith('ファイル名:'):
-                operation_info["filename"] = line.split(':', 1)[1].strip()
-                rich_ui.print_message(f"✅ ファイル名を検出: '{operation_info['filename']}'", "muted")
+            elif line.startswith('ファイル名:') or line.startswith('ディレクトリ名:'):
+                filename = line.split(':', 1)[1].strip()
+                operation_info["filename"] = filename
+                
+                # ディレクトリかどうかの判定
+                if (filename.endswith('/') or 
+                    'フォルダ' in filename or 
+                    'ディレクトリ' in filename or
+                    line.startswith('ディレクトリ名:')):
+                    operation_info["is_directory"] = True
+                    # 末尾のスラッシュを除去
+                    if filename.endswith('/'):
+                        operation_info["filename"] = filename.rstrip('/')
+                    rich_ui.print_message(f"✅ ディレクトリを検出: '{operation_info['filename']}'", "muted")
+                else:
+                    rich_ui.print_message(f"✅ ファイル名を検出: '{operation_info['filename']}'", "muted")
+                    
             elif line.startswith('内容:'):
                 content = line.split(':', 1)[1].strip()
                 if content != "なし":
@@ -503,16 +1541,26 @@ class CompanionCore:
                 return "すみません、どのファイルを操作すればいいか分からませんでした...。もう少し具体的に教えてもらえますか？"
             
             if operation == "create":
-                # ファイル作成
-                if not content:
-                    # 内容が指定されていない場合、LLMに生成してもらう
-                    content = self._generate_file_content(filename, original_message)
-                
-                result = self.file_ops.create_file(filename, content)
-                if result["success"]:
-                    return f"✅ {filename} を作成しました！\n\n作成した内容:\n```\n{content}\n```\n\n何か他にお手伝いできることはありますか？"
+                # ディレクトリかファイルかを判定
+                if operation_info.get("is_directory", False):
+                    # ディレクトリ作成
+                    rich_ui.print_message("📁 ディレクトリを作成しています...", "info")
+                    result = self.file_ops.create_directory(filename)
+                    if result["success"]:
+                        return f"✅ ディレクトリ '{filename}' を作成しました！\n\nパス: {result.get('path', filename)}\n\n実装を始める準備が整いました。何か他にお手伝いできることはありますか？"
+                    else:
+                        return self._handle_file_operation_failure(result, "create_directory", filename)
                 else:
-                    return self._handle_file_operation_failure(result, "create", filename)
+                    # ファイル作成
+                    if not content:
+                        # 内容が指定されていない場合、LLMに生成してもらう
+                        content = self._generate_file_content(filename, original_message)
+                    
+                    result = self.file_ops.create_file(filename, content)
+                    if result["success"]:
+                        return f"✅ {filename} を作成しました！\n\n作成した内容:\n```\n{content}\n```\n\n何か他にお手伝いできることはありますか？"
+                    else:
+                        return self._handle_file_operation_failure(result, "create", filename)
             
             elif operation == "read":
                 # ファイル読み取り
@@ -603,7 +1651,7 @@ class CompanionCore:
             return f"コード実行処理中にエラーが発生しました: {str(e)}"
     
     def _handle_multi_step_task(self, user_message: str) -> str:
-        """複数ステップタスクを処理（シンプル版）
+        """B-1: 動的グラニュラリティの計画フェーズ
         
         Args:
             user_message: ユーザーメッセージ
@@ -612,15 +1660,32 @@ class CompanionCore:
             str: 処理結果メッセージ
         """
         try:
-            rich_ui.print_message("🔄 複数ステップタスクとして処理中...", "info")
+            rich_ui.print_message("📋 タスク計画を作成中...", "info")
             
-            # シンプルなアプローチ: 通常のチャットと同じプロンプトベースで、
-            # 複数ステップタスク用の最適化文を注入
-            return self._generate_enhanced_response(user_message, task_type="multi_step")
+            # 抽象度/具体度に基づく計画作成
+            abstraction_level, concreteness_score = self._analyze_abstraction_concreteness(user_message, [])
+            
+            # 動的グラニュラリティ決定
+            if abstraction_level == "low" and concreteness_score >= 0.7:
+                # マイクロプラン（1-2手順）
+                plan = self._create_micro_plan(user_message, abstraction_level, concreteness_score)
+            elif abstraction_level == "mid" or (abstraction_level == "high" and concreteness_score >= 0.3):
+                # 軽量計画（2-5手順）
+                plan = self._create_light_plan(user_message, abstraction_level, concreteness_score)
+            else:
+                # 明確化が必要（質問フェーズへ）
+                return self._handle_clarification_needed(user_message, abstraction_level, concreteness_score)
+            
+            # 計画を保存
+            self.current_plan = plan
+            
+            # ユーザーに計画を提示
+            return plan.to_user_display()
             
         except Exception as e:
-            rich_ui.print_message(f"❌ 複数ステップタスク処理でエラー: {e}", "error")
-            return f"複数ステップタスクの処理中にエラーが発生しました: {str(e)}"
+            rich_ui.print_message(f"❌ 計画作成処理でエラー: {e}", "error")
+            # フォールバックとして従来の処理
+            return self._generate_enhanced_response(user_message, task_type="multi_step")
     
     def _generate_enhanced_response(self, user_message: str, task_type: str = "direct") -> str:
         """タスクタイプに応じた最適化された応答を生成

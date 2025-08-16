@@ -51,6 +51,9 @@ class DualLoopSystem:
             self.context_manager
         )
         
+        # 相互参照を設定（Step 3: 協調的計画のため）
+        self.chat_loop.set_task_loop(self.task_loop)
+        
         # スレッド管理
         self.task_thread: Optional[threading.Thread] = None
         self.running = False
