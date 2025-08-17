@@ -326,7 +326,7 @@ class CompanionCore:
         rich_ui.print_message("💭 どう対応するか考えています...", "info")
         time.sleep(0.2)
     
-    async def _analyze_intent_new_system(self, message: str) -> ActionType:
+    async def _analyze_intent_new_system(self, message: str, external_context: Optional[Dict[str, Any]] = None) -> ActionType:
         """新しい意図理解システムによる分析
         
         Args:
@@ -338,12 +338,16 @@ class CompanionCore:
         try:
             rich_ui.print_message("🧠 新しい意図理解システムで分析中...", "info")
             
-            # コンテキストの準備
+            # コンテキストの準備（外部コンテキストをマージ）
             context = {
                 "recent_messages": self.conversation_history[-3:] if self.conversation_history else [],
                 "project_info": "Duckflow companion system",
                 "session_duration": (datetime.now() - self.session_start_time).total_seconds()
             }
+            
+            # 外部コンテキスト（プラン状態など）をマージ
+            if external_context:
+                context.update(external_context)
             
             # 統合意図理解の実行
             understanding_result = await self.intent_system.understand_intent(message, context)
@@ -1000,13 +1004,26 @@ class CompanionCore:
         """
         questions = self._generate_clarification_questions(user_message)
         
-        return f"""🤔 **ご要求をより理解するために**
+        # 固定テンプレート廃止: 選択肢+デフォルト方式
+        plan_response = f"""💭 **実行プランの選択**
 
-あなたの要求は抽象度が高く（{abstraction_level}、具体度: {concreteness_score:.2f}）、適切な計画を作成するためにいくつかの詳細を教えていただきたいです。
+ご要求: {user_message}
+抽象度: {abstraction_level} (具体度: {concreteness_score:.2f})
+
+推奨する進め方:
+1. [推奨] 最小限の安全な実装から始める
+2. 詳細を確認してから慎重に実装
+3. 段階的に複数回に分けて実装
 
 {questions}
 
-これらの詳細をお聞かせいただければ、より具体的で実用的な計画を作成できます。"""
+デフォルト（推奨プラン）で進めますか？"""
+        
+        # プラン状態を設定（実行阻害改善）
+        if hasattr(self, 'set_plan_state'):
+            self.set_plan_state(plan_response, "clarification_plan")
+        
+        return plan_response
     
     def _is_plan_response(self, user_message: str) -> bool:
         """計画への応答かどうかを判定"""

@@ -18,11 +18,14 @@ project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
 try:
-    # Enhanced Dual-Loop System (Step 2統合版) を優先使用
+    # Enhanced Dual-Loop System (実行阻害改善機能統合版) を優先使用
     from companion.enhanced_dual_loop import EnhancedDualLoopSystem
     from companion.dual_loop import DualLoopSystem  # フォールバック用
     from codecrafter.ui.rich_ui import rich_ui
     from codecrafter.base.config import config_manager
+    
+    # FILE_OPS_V2を有効化（実行阻害改善機能）
+    os.environ["FILE_OPS_V2"] = "1"
     
     # Enhanced版が利用可能かチェック
     ENHANCED_AVAILABLE = True
@@ -175,8 +178,10 @@ Duckflow Companionには、あなたの大切なファイルを保護するた�
 - 自動記憶要約 (100件→要約+最新20件)
 - 高度なコンテキスト管理
 - 既存システム完全統合
+- 実行阻害改善機能 (選択入力→実行ルート)
 
 🧠 **統合システム**: AgentState | ConversationMemory | PromptCompiler
+🛠️ **実行阻害改善**: OptionResolver | ActionSpec | AntiStallGuard
 """
         else:
             system_info = f"""
@@ -352,6 +357,7 @@ Duckflow Companionには、あなたの大切なファイルを保護するた�
 ✅ 高度なコンテキスト管理
 ✅ 既存システム統合
 ✅ セッション永続化
+✅ 実行阻害改善 (「１で」「OK実装してください」→実行)
 """
         
         help_text = f"""
@@ -379,6 +385,7 @@ Duckflow Companionには、あなたの大切なファイルを保護するた�
 ✅ ファイル操作
 ✅ タスク並行実行
 ✅ 対話継続（タスク実行中も対話可能）
+✅ 実行阻害改善（選択入力の確実な実行転送）
 {enhanced_features}
 **相棒としての特徴:**
 - 困ったときは素直に「困った」と言います

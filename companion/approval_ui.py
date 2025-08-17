@@ -334,3 +334,44 @@ class UserApprovalUI:
         }
         
         return risk_formats.get(risk_level, "❓ 不明なリスク")
+
+
+class NonInteractiveApprovalUI:
+    """非対話型の承認UI
+
+    - 対話入力ができない環境向けに、自動で承認/拒否を決定する
+    - 既定: 低リスクは自動承認、高リスク以上は拒否
+    - 環境変数で緩和可能:
+        - APPROVAL_AUTO_APPROVE_ALL=1 → すべて承認
+        - APPROVAL_AUTO_APPROVE_HIGH=1 → 高リスクも承認（CRITICALは拒否）
+    """
+
+    def __init__(self, auto_low: bool = True, auto_high: bool = False, auto_all: bool = False):
+        self.auto_low = auto_low
+        self.auto_high = auto_high
+        self.auto_all = auto_all
+
+    def show_approval_request(self, request: ApprovalRequest) -> ApprovalResponse:
+        import os
+        risk = request.operation_info.risk_level
+        # 環境変数で上書き可能
+        env_all = os.getenv("APPROVAL_AUTO_APPROVE_ALL") == "1"
+        env_high = os.getenv("APPROVAL_AUTO_APPROVE_HIGH") == "1"
+
+        approved = False
+        reason = None
+
+        if self.auto_all or env_all:
+            approved = True
+            reason = "AUTO_APPROVE_ALL"
+        elif risk == RiskLevel.LOW_RISK and self.auto_low:
+            approved = True
+            reason = "LOW_RISK_AUTO_APPROVE"
+        elif risk == RiskLevel.HIGH_RISK and (self.auto_high or env_high):
+            approved = True
+            reason = "HIGH_RISK_AUTO_APPROVE"
+        else:
+            approved = False
+            reason = f"non_interactive_reject:{getattr(risk, 'value', str(risk))}"
+
+        return ApprovalResponse(approved=approved, reason=reason)

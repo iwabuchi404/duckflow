@@ -5,13 +5,37 @@ LLMベース意図理解 + TaskProfile + Pecking Order統合システム
 """
 
 import logging
+import re
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+from enum import Enum
 
 from companion.intent_understanding.llm_intent_analyzer import LLMIntentAnalyzer, IntentAnalysis
 from companion.intent_understanding.task_profile_classifier import TaskProfileClassifier, TaskProfileResult
 from companion.task_management.pecking_order import PeckingOrder, TaskDecompositionResult
 # LLMクライアントは動的にインポート（既存アダプターまたは新クライアント）
+
+
+class RouteType(Enum):
+    """ルーティングタイプの定義"""
+    EXECUTION = "execution"           # ファイル操作などの実行
+    DIRECT_RESPONSE = "direct_response"  # 直接応答
+    CLARIFICATION = "clarification"   # 詳細確認
+    SAFE_DEFAULT = "safe_default"     # 安全なデフォルト提案
+
+
+class RiskLevel(Enum):
+    """リスクレベルの定義"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class PrerequisiteStatus(Enum):
+    """前提条件の状態"""
+    READY = "ready"                   # 実行準備完了
+    NEEDS_CLARIFICATION = "needs_clarification"  # 詳細確認が必要
+    INSUFFICIENT_INFO = "insufficient_info"       # 情報不足
 
 
 @dataclass
@@ -24,6 +48,11 @@ class IntentUnderstandingResult:
     overall_confidence: float
     processing_strategy: str
     next_actions: List[str]
+    # ルーティング情報（新規追加）
+    route_type: RouteType
+    risk_level: RiskLevel
+    prerequisite_status: PrerequisiteStatus
+    routing_reason: str
     metadata: Optional[Dict[str, Any]] = None
     
     def __post_init__(self):
@@ -31,6 +60,85 @@ class IntentUnderstandingResult:
             self.next_actions = []
         if self.metadata is None:
             self.metadata = {}
+
+
+class OptionResolver:
+    """選択入力リゾルバ - ユーザーの選択入力を正規化"""
+    
+    @staticmethod
+    def parse_selection(text: str) -> Optional[int]:
+        """選択入力をパースして選択番号を返す
+        
+        Args:
+            text: ユーザーの入力テキスト
+            
+        Returns:
+            Optional[int]: 選択番号（1ベース）、解釈できない場合はNone
+        """
+        if not text or not text.strip():
+            return None
+            
+        # 正規化: 全角半角統一、空白・句読点除去
+        import re
+        normalized = re.sub(r'[　\s\.,。、]', '', text.strip())
+        normalized = normalized.translate(str.maketrans('１２３４５６７８９０', '1234567890'))
+        normalized = normalized.lower()
+        
+        # 選択パターンのマッピング（厳密な選択入力のみ）
+        selection_mapping = {
+            # 数字
+            "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+            # 日本語数字
+            "一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+            "１": 1, "２": 2, "３": 3, "４": 4, "５": 5,
+            # デフォルト系（明確に選択を指している場合のみ）
+            "デフォルト": 1, "既定": 1, "推奨": 1, "おすすめ": 1,
+            "default": 1, "recommended": 1,
+            # 位置系（明確に選択肢を指している場合のみ）
+            "上": 1, "一番上": 1, "最初": 1, "first": 1, "top": 1,
+            "下": 2, "二番目": 2, "次": 2, "second": 2,
+            # 承認系（プラン提示後の承認のみ）
+            "はい": 1, "yes": 1, "ok": 1, "いいよ": 1, 
+            "実行": 1, "進める": 1, "続行": 1, "go": 1, "proceed": 1,
+            # より自然な承認表現（プラン提示後のみ）
+            "それで": 1, "それでお願いします": 1, "それでいいです": 1,
+            "了解": 1, "わかりました": 1, "承知": 1, "りょうかい": 1
+        }
+        
+        # 直接マッチング
+        if normalized in selection_mapping:
+            return selection_mapping[normalized]
+        
+        # 数字の抽出を試行
+        number_match = re.search(r'(\d+)', normalized)
+        if number_match:
+            try:
+                num = int(number_match.group(1))
+                if 1 <= num <= 9:  # 1-9の範囲のみ有効
+                    return num
+            except ValueError:
+                pass
+        
+        # 「で」「を」などの助詞付きパターン + 部分マッチング
+        for pattern, value in selection_mapping.items():
+            if pattern in normalized:
+                return value
+        
+        # より柔軟な承認表現の検出（プラン提示後のみ有効）
+        approval_patterns = [
+            "^ok$", "^それでいいです$", "^それで$", "^進めて$", "^続けて$"
+        ]
+        
+        for pattern in approval_patterns:
+            if re.search(pattern, normalized):
+                return 1  # デフォルト選択として扱う
+        
+        return None
+    
+    @staticmethod
+    def is_selection_input(text: str) -> bool:
+        """入力が選択入力かどうかを判定"""
+        return OptionResolver.parse_selection(text) is not None
 
 
 class IntentUnderstandingSystem:
@@ -44,6 +152,7 @@ class IntentUnderstandingSystem:
         self.intent_analyzer = LLMIntentAnalyzer(llm_client)
         self.task_profile_classifier = TaskProfileClassifier(llm_client)
         self.pecking_order = PeckingOrder(self.task_profile_classifier)
+        self.option_resolver = OptionResolver()
         
         self.logger = logging.getLogger(__name__)
         
@@ -78,6 +187,18 @@ class IntentUnderstandingSystem:
         try:
             self.logger.info(f"意図理解開始: {user_input[:50]}...")
             
+            # Phase 0: 選択入力の検出と処理（プラン保留時のみ有効）
+            plan_pending = bool(context and context.get("plan_state", {}).get("pending"))
+            if plan_pending:
+                selection = self.option_resolver.parse_selection(user_input)
+                if selection is not None:
+                    self.logger.info(f"選択入力を検出: {selection}")
+                    self.logger.info(f"コンテキスト: {context}")
+                    self.logger.info("既存プランの実行に転送")
+                    result = self._create_execution_result(user_input, selection, context)
+                    self.logger.info(f"実行結果作成完了: route_type={result.route_type}, force_execution={result.metadata.get('force_execution')}")
+                    return result
+            
             # Phase 1: LLM意図分析
             intent_analysis = await self.intent_analyzer.analyze_intent(user_input, context)
             self.logger.info(f"意図分析完了: {intent_analysis.primary_intent.value}")
@@ -94,7 +215,7 @@ class IntentUnderstandingSystem:
             
             # Phase 4: 結果の統合と最適化
             result = self._integrate_results(
-                user_input, intent_analysis, task_profile, task_decomposition
+                user_input, intent_analysis, task_profile, task_decomposition, context
             )
             
             self.logger.info(f"意図理解完了: 信頼度 {result.overall_confidence:.2f}")
@@ -104,12 +225,83 @@ class IntentUnderstandingSystem:
             self.logger.error(f"統合意図理解エラー: {e}")
             return self._create_fallback_result(user_input, str(e))
     
+    def _create_execution_result(
+        self, 
+        user_input: str, 
+        selection: int, 
+        context: Dict[str, Any]
+    ) -> IntentUnderstandingResult:
+        """選択入力に基づく実行結果を作成"""
+        from companion.intent_understanding.llm_intent_analyzer import IntentType, ComplexityLevel, IntentAnalysis
+        from companion.intent_understanding.task_profile_classifier import TaskProfileType, TaskProfileResult
+        
+        # 実行用の意図分析を作成
+        intent_analysis = IntentAnalysis(
+            primary_intent=IntentType.CREATION_REQUEST,
+            secondary_intents=[],
+            context_requirements=[],
+            execution_complexity=ComplexityLevel.SIMPLE,
+            confidence_score=0.9,
+            reasoning="選択入力による実行要求",
+            detected_targets=[],
+            suggested_approach="選択されたプランの実行"
+        )
+        
+        # 実行用のタスクプロファイルを作成
+        task_profile = TaskProfileResult(
+            profile_type=TaskProfileType.CREATION_REQUEST,
+            confidence=0.9,
+            reasoning="選択入力による実行要求",
+            detected_intent="execution_request",
+            complexity_assessment="simple",
+            suggested_approach="direct_execution",
+            context_requirements=[],
+            detected_targets=[],
+            metadata={}
+        )
+        
+        # 実行用のタスク分解を作成（簡略化）
+        from companion.task_management.pecking_order import TaskDecompositionResult
+        task_decomposition = TaskDecompositionResult(
+            main_task=None,  # 簡略化
+            subtasks=[],
+            decomposition_strategy="selected_plan_execution",
+            estimated_complexity="simple",
+            confidence_score=0.9,
+            metadata={}
+        )
+        
+        # プランが保留されているときのみ強制実行を許可
+        force_exec = bool(context.get("plan_state", {}).get("pending"))
+
+        return IntentUnderstandingResult(
+            user_input=user_input,
+            intent_analysis=intent_analysis,
+            task_profile=task_profile,
+            task_decomposition=task_decomposition,
+            overall_confidence=0.9,
+            processing_strategy="選択されたプランの実行",
+            next_actions=[f"選択 {selection} のプランを実行"],
+            route_type=RouteType.EXECUTION,
+            risk_level=RiskLevel.MEDIUM,
+            prerequisite_status=PrerequisiteStatus.READY,
+            routing_reason=f"ユーザー選択 {selection} による実行ルート",
+            metadata={
+                "selection": selection,
+                "execution_type": "selected_plan",
+                "plan_context": context.get("plan_state", {}),
+                "timestamp": self._get_current_timestamp(),
+                "force_execution": force_exec  # 強制実行は保留プランがある場合のみ
+            }
+        )
+    
     def _integrate_results(
         self,
         user_input: str,
         intent_analysis: IntentAnalysis,
         task_profile: TaskProfileResult,
-        task_decomposition: TaskDecompositionResult
+        task_decomposition: TaskDecompositionResult,
+        context: Optional[Dict[str, Any]] = None
     ) -> IntentUnderstandingResult:
         """結果の統合と最適化"""
         
@@ -121,6 +313,11 @@ class IntentUnderstandingSystem:
         # 処理戦略の決定
         processing_strategy = self._determine_processing_strategy(
             intent_analysis, task_profile, task_decomposition
+        )
+        
+        # ルーティング決定（新規追加）
+        routing_result = self._determine_routing(
+            intent_analysis, task_profile, task_decomposition, context
         )
         
         # 次のアクションの決定
@@ -136,9 +333,15 @@ class IntentUnderstandingSystem:
             overall_confidence=overall_confidence,
             processing_strategy=processing_strategy,
             next_actions=next_actions,
+            # ルーティング情報（新規追加）
+            route_type=routing_result["route_type"],
+            risk_level=routing_result["risk_level"],
+            prerequisite_status=routing_result["prerequisite_status"],
+            routing_reason=routing_result["routing_reason"],
             metadata={
                 "integration_method": "unified_understanding",
-                "timestamp": self._get_current_timestamp()
+                "timestamp": self._get_current_timestamp(),
+                "routing_applied": True
             }
         )
     
@@ -164,6 +367,146 @@ class IntentUnderstandingSystem:
         )
         
         return min(1.0, max(0.0, overall_confidence))
+    
+    def _determine_routing(
+        self,
+        intent_analysis: IntentAnalysis,
+        task_profile: TaskProfileResult,
+        task_decomposition: TaskDecompositionResult,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """ルーティング決定表による処理方法の決定
+        
+        Args:
+            intent_analysis: 意図分析結果
+            task_profile: タスクプロファイル結果
+            task_decomposition: タスク分解結果
+            
+        Returns:
+            Dict: ルーティング決定結果
+        """
+        # 基本パラメータ
+        profile_type = task_profile.profile_type.value
+        confidence = intent_analysis.confidence_score
+        
+        # リスクレベルの評価
+        risk_level = self._evaluate_risk_level(intent_analysis, task_profile, task_decomposition)
+        
+        # 前提条件の状態評価
+        prerequisite_status = self._evaluate_prerequisites(intent_analysis, task_profile)
+        
+        # ルーティング決定表の適用
+        route_type, routing_reason = self._apply_routing_table(
+            profile_type, confidence, risk_level, prerequisite_status, context
+        )
+        
+        return {
+            "route_type": route_type,
+            "risk_level": risk_level,
+            "prerequisite_status": prerequisite_status,
+            "routing_reason": routing_reason
+        }
+    
+    def _evaluate_risk_level(
+        self,
+        intent_analysis: IntentAnalysis,
+        task_profile: TaskProfileResult,
+        task_decomposition: TaskDecompositionResult
+    ) -> RiskLevel:
+        """リスクレベルの評価"""
+        profile_type = task_profile.profile_type.value
+        complexity = intent_analysis.execution_complexity.value
+        
+        # ファイル操作系は中〜高リスク
+        if profile_type in ["creation_request", "modification_request"]:
+            if complexity == "complex":
+                return RiskLevel.HIGH
+            else:
+                return RiskLevel.MEDIUM
+        
+        # 分析・検索系は低リスク
+        elif profile_type in ["analysis_request", "search_request", "information_request"]:
+            return RiskLevel.LOW
+            
+        # ガイダンス系は低リスク
+        elif profile_type == "guidance_request":
+            return RiskLevel.LOW
+            
+        # 不明な場合は高リスクと判定
+        else:
+            return RiskLevel.HIGH
+    
+    def _evaluate_prerequisites(
+        self,
+        intent_analysis: IntentAnalysis,
+        task_profile: TaskProfileResult
+    ) -> PrerequisiteStatus:
+        """前提条件の状態評価"""
+        confidence = intent_analysis.confidence_score
+        abstraction_level = getattr(intent_analysis, 'abstraction_level', 'medium')
+        
+        # 高信頼度かつ具体的 → 実行準備完了
+        if confidence >= 0.8 and abstraction_level in ["low", "medium"]:
+            return PrerequisiteStatus.READY
+            
+        # 中信頼度または抽象度高 → 詳細確認が必要
+        elif confidence >= 0.5 or abstraction_level == "high":
+            return PrerequisiteStatus.NEEDS_CLARIFICATION
+            
+        # 低信頼度 → 情報不足
+        else:
+            return PrerequisiteStatus.INSUFFICIENT_INFO
+    
+    def _apply_routing_table(
+        self,
+        profile_type: str,
+        confidence: float,
+        risk_level: RiskLevel,
+        prerequisite_status: PrerequisiteStatus,
+        context: Optional[Dict[str, Any]] = None
+    ) -> tuple[RouteType, str]:
+        """ルーティング決定表の適用
+        
+        Args:
+            profile_type: タスクプロファイルタイプ
+            confidence: 信頼度スコア
+            risk_level: リスクレベル
+            prerequisite_status: 前提条件の状態
+            context: 追加コンテキスト情報
+            
+        Returns:
+            tuple: (ルートタイプ, 決定理由)
+        """
+        
+        # コンテキストベースの優先ルーティング
+        if context:
+            plan_state = context.get("plan_state", {})
+            if plan_state.get("pending") and prerequisite_status == PrerequisiteStatus.READY:
+                return RouteType.EXECUTION, "保留中のプランが存在し前提条件が満たされている → 実行ルート"
+        # Rule 1: creation/modification系は基本的にExecution
+        if profile_type in ["creation_request", "modification_request"]:
+            if prerequisite_status == PrerequisiteStatus.READY and confidence >= 0.7:
+                return RouteType.EXECUTION, f"作成/修正要求（信頼度: {confidence:.2f}）→ 実行ルート"
+            else:
+                return RouteType.CLARIFICATION, f"作成/修正要求だが前提条件不足 → 詳細確認"
+        
+        # Rule 2: guidance系は基本的にDirectResponse
+        elif profile_type == "guidance_request":
+            return RouteType.DIRECT_RESPONSE, "ガイダンス要求 → 直接応答"
+        
+        # Rule 3: 分析・検索系は信頼度に基づく
+        elif profile_type in ["analysis_request", "search_request", "information_request"]:
+            if confidence >= 0.6:
+                return RouteType.EXECUTION, f"分析/検索要求（信頼度: {confidence:.2f}）→ 実行ルート"
+            else:
+                return RouteType.CLARIFICATION, f"分析/検索要求だが信頼度不足 → 詳細確認"
+        
+        # Rule 4: unknown/high-abstract → Safe-Default
+        else:
+            if risk_level == RiskLevel.LOW and confidence >= 0.5:
+                return RouteType.SAFE_DEFAULT, "不明な要求だが低リスク → 安全なデフォルト提案"
+            else:
+                return RouteType.CLARIFICATION, "不明な要求かつ高リスク → 詳細確認"
     
     def _determine_processing_strategy(
         self,
@@ -247,6 +590,11 @@ class IntentUnderstandingSystem:
             overall_confidence=0.3,
             processing_strategy="フォールバック戦略: エラー処理",
             next_actions=["エラーの解決", "基本処理の実行"],
+            # フォールバック時のルーティング情報
+            route_type=RouteType.CLARIFICATION,
+            risk_level=RiskLevel.HIGH,
+            prerequisite_status=PrerequisiteStatus.INSUFFICIENT_INFO,
+            routing_reason=f"エラーによるフォールバック: {error}",
             metadata={
                 "fallback_reason": error,
                 "integration_method": "fallback"
@@ -294,6 +642,13 @@ class IntentUnderstandingSystem:
         print(f"📊 TaskProfile: {result.task_profile.profile_type.value}")
         print(f"🔍 信頼度: {result.overall_confidence:.2%}")
         print(f"⚡ 処理戦略: {result.processing_strategy}")
+        
+        # ルーティング情報（新規追加）
+        print(f"\n🚦 **ルーティング決定**")
+        print(f"📍 ルート: {result.route_type.value}")
+        print(f"⚠️ リスク: {result.risk_level.value}")
+        print(f"✅ 前提条件: {result.prerequisite_status.value}")
+        print(f"💭 決定理由: {result.routing_reason}")
         
         print(f"\n📋 サブタスク数: {len(result.task_decomposition.subtasks)}")
         print(f"🔄 分解戦略: {result.task_decomposition.decomposition_strategy}")

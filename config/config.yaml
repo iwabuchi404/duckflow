@@ -23,7 +23,7 @@ llm:
     max_tokens: 4096
   
   groq:
-    model: "openai/gpt-oss-120b"
+    model: "openai/gpt-oss-20b"
     temperature: 0.1
     max_tokens: 8192
   
@@ -266,7 +266,7 @@ promptsmith:
         temperature: 0.0
         max_tokens: 4096
       groq:
-        model: "llama-3.1-70b-versatile"
+        model: "openai/gpt-oss-20b"
         temperature: 0.0
         max_tokens: 4096
       openrouter:
@@ -287,7 +287,7 @@ promptsmith:
         temperature: 0.2
         max_tokens: 3072
       groq:
-        model: "llama-3.1-70b-versatile"
+        model: "openai/gpt-oss-20b"
         temperature: 0.2
         max_tokens: 3072
       openrouter:
@@ -308,7 +308,7 @@ promptsmith:
         temperature: 0.1
         max_tokens: 2048
       groq:
-        model: "llama-3.1-70b-versatile"
+        model: "openai/gpt-oss-20b"
         temperature: 0.1
         max_tokens: 2048
       openrouter:
@@ -391,3 +391,15 @@ development:
   debug: false
   reload_on_change: false
   profiling: false
+
+# 承認システム設定
+approval:
+  mode: "standard"           # strict | standard | trusted
+  timeout_seconds: 30
+  show_preview: true
+  max_preview_length: 200
+  ui:
+    non_interactive: true     # 非対話UIを使用
+    auto_approve_low: true    # 低リスクは自動承認
+    auto_approve_high: false  # 高リスクの自動承認（必要時のみtrueに）
+    auto_approve_all: false   # 全自動承認（非推奨）

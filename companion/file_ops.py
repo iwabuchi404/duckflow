@@ -18,11 +18,12 @@ import hashlib
 import uuid
 
 from codecrafter.ui.rich_ui import rich_ui
+from codecrafter.base.config import ConfigManager
 
 # 承認システム
 from .approval_system import (
     ApprovalGate, OperationInfo, OperationType, RiskLevel,
-    ApprovalResponse, ApprovalRequest
+    ApprovalResponse, ApprovalRequest, ApprovalMode
 )
 
 
@@ -114,6 +115,15 @@ class SimpleFileOps:
         """
         self.current_directory = Path.cwd()
         self.approval_gate = approval_gate or ApprovalGate()
+        # コンフィグから承認設定を適用
+        self._apply_approval_settings_from_config()
+        # デバッグフラグ
+        try:
+            import os as _os
+            from codecrafter.base.config import ConfigManager as _CM
+            self.debug = _os.getenv("FILE_OPS_DEBUG") == "1" or _CM().is_debug_mode()
+        except Exception:
+            self.debug = False
         
         # C-1: 構造化操作ログ
         self.operation_logs: List[OperationLog] = []
@@ -263,7 +273,14 @@ class SimpleFileOps:
                 rich_ui.print_error(f"承認要求判定でエラーが発生しました: {check_error}")
                 # エラー時は安全のため承認必要として処理
                 approval_required = True
-            
+            if self.debug:
+                ui_type = type(getattr(self.approval_gate, 'approval_ui', None)).__name__ if getattr(self.approval_gate, 'approval_ui', None) else None
+                mode = getattr(self.approval_gate.config, 'approval_mode', 'unknown')
+                rich_ui.print_message(
+                    f"[DEBUG][FileOps] approval_required={approval_required} op={operation_type} risk={getattr(risk_level,'value',risk_level)} target={target} ui={ui_type} mode={mode}",
+                    "info"
+                )
+
             if not approval_required:
                 return True
             
@@ -286,6 +303,8 @@ class SimpleFileOps:
                     details, 
                     session_id
                 )
+                if self.debug:
+                    rich_ui.print_message(f"[DEBUG][FileOps] approval_response approved={response.approved} reason={response.reason}", "info")
                 return response.approved
             except Exception as approval_error:
                 rich_ui.print_error(f"承認要求でエラーが発生しました: {approval_error}")
@@ -295,6 +314,55 @@ class SimpleFileOps:
             rich_ui.print_error(f"承認処理で予期しないエラーが発生しました: {e}")
             # 予期しないエラー時は安全のため拒否
             return False
+
+    def _apply_approval_settings_from_config(self) -> None:
+        """グローバル設定から承認システム設定を反映"""
+        try:
+            cm = ConfigManager()
+            approval = cm.get_approval_settings()
+            # ApprovalMode の適用
+            mode_map = {
+                "strict": ApprovalMode.STRICT,
+                "standard": ApprovalMode.STANDARD,
+                "trusted": ApprovalMode.TRUSTED,
+            }
+            new_mode = mode_map.get(approval.mode.lower(), ApprovalMode.STANDARD)
+            # ApprovalConfig 更新
+            cfg = self.approval_gate.get_config()
+            cfg.timeout_seconds = approval.timeout_seconds
+            cfg.show_preview = approval.show_preview
+            cfg.max_preview_length = approval.max_preview_length
+            self.approval_gate.update_config(cfg)
+            self.approval_gate.update_approval_mode(new_mode)
+
+            # UI 設定
+            from .approval_ui import NonInteractiveApprovalUI, UserApprovalUI
+            if approval.ui and approval.ui.non_interactive:
+                ui = NonInteractiveApprovalUI(
+                    auto_low=approval.ui.auto_approve_low,
+                    auto_high=approval.ui.auto_approve_high,
+                    auto_all=approval.ui.auto_approve_all,
+                )
+            else:
+                ui = UserApprovalUI(timeout_seconds=approval.timeout_seconds)
+            self.approval_gate.set_approval_ui(ui)
+        except Exception as e:
+            # 設定反映失敗時は安全に続行（既定設定のまま）
+            rich_ui.print_message(f"⚠️ 承認設定適用エラー: {e}", "warning")
+            try:
+                from .approval_ui import NonInteractiveApprovalUI
+                if getattr(self.approval_gate, 'approval_ui', None) is None:
+                    self.approval_gate.set_approval_ui(NonInteractiveApprovalUI())
+                    rich_ui.print_message("🔧 フォールバック承認UIを設定しました", "info")
+            except Exception as ui_error:
+                # UI設定も失敗した場合は最低限のフォールバック
+                rich_ui.print_message(f"⚠️ 承認UI設定エラー: {ui_error}", "warning")
+                # 承認システムを無効化（安全のため）
+                try:
+                    self.approval_gate.config.approval_mode = ApprovalMode.TRUSTED
+                    rich_ui.print_message("🚨 承認システムを無効化しました（TRUSTED モード）", "warning")
+                except Exception:
+                    rich_ui.print_message("❌ 承認システムの設定に完全に失敗しました", "error")
 
     # --- V2: PREVIEW 生成と一体化ヘルパ ---
     @staticmethod
@@ -325,12 +393,33 @@ class SimpleFileOps:
 
         preview = self._make_diff_preview(current_text, content)
         op_type = "create_file" if not path.exists() else "write_file"
+        # リスク評価（低リスクなら承認バイパス可）
+        risk_level = RiskLevel.HIGH_RISK
+        try:
+            resolved = path.resolve()
+            inside_workspace = False
+            try:
+                resolved.relative_to(Path.cwd().resolve())
+                inside_workspace = True
+            except Exception:
+                inside_workspace = False
+            is_new_file = not path.exists()
+            small_content = len(content.encode("utf-8")) <= 64 * 1024
+            safe_ext = resolved.suffix.lower() in [".txt", ".md", ".ts", ".js", ".json", ".py"] or resolved.suffix == ""
+            # 新規作成 or 小規模の安全な上書き は低リスク扱い
+            if inside_workspace and small_content and safe_ext:
+                risk_level = RiskLevel.LOW_RISK
+        except Exception:
+            risk_level = RiskLevel.HIGH_RISK
+
+        if self.debug:
+            rich_ui.print_message(f"[DEBUG][FileOps] apply_with_approval_write op={op_type} path={path} preview_len={len(preview) if preview else 0} risk={getattr(risk_level,'value',risk_level)}", "info")
 
         approved = self._request_approval(
             operation_type=op_type,
             target=str(path),
             description=f"ファイル '{file_path}' を{'作成' if op_type=='create_file' else '更新'}",
-            risk_level=RiskLevel.HIGH_RISK,
+            risk_level=risk_level,
             details={
                 "file_path": str(path),
                 "content_length": len(content),
@@ -353,7 +442,7 @@ class SimpleFileOps:
             )
 
         rich_ui.print_message("🔎 PREVIEW(差分) → 承認済み。実行に進みます。", "info")
-        outcome = self.create_or_write_file_v2(file_path, content, session_id=session_id)
+        outcome = self.create_or_write_file_v2(file_path, content, session_id=session_id, skip_approval=True)
         if outcome.ok:
             rich_ui.print_message("🏁 RESULT: ファイル操作が検証付きで完了しました。", "success")
         else:
@@ -361,10 +450,11 @@ class SimpleFileOps:
         return outcome
 
     # --- V2: 冪等で検証付きの作成/書込 API（既存APIは保持） ---
-    def create_or_write_file_v2(self, file_path: str, content: str, session_id: Optional[str] = None) -> FileOpOutcome:
+    def create_or_write_file_v2(self, file_path: str, content: str, session_id: Optional[str] = None, skip_approval: bool = False) -> FileOpOutcome:
         """新規作成 or 上書き（冪等・検証・結果型）
 
         - 既存と内容が同一なら changed=False で成功とする。
+        - skip_approval=True の場合は承認をスキップ（apply_with_approval_write から呼ばれる場合）
         - 承認→実行→ポスト条件検証（存在/ハッシュ一致）まで行う。
         """
         path = Path(file_path)
@@ -389,30 +479,53 @@ class SimpleFileOps:
                 # 読み取り不能時は通常フローへ
                 pass
 
-        # 承認要求（create or write）
-        op_type = "create_file" if not path.exists() else "write_file"
-        approved = self._request_approval(
-            operation_type=op_type,
-            target=str(path),
-            description=f"ファイル '{file_path}' を{'作成' if op_type=='create_file' else '更新'}",
-            risk_level=RiskLevel.HIGH_RISK,
-            details={
-                "file_path": str(path),
-                "content_length": len(content),
-                "file_exists": path.exists(),
-            },
-            session_id=session_id or "file_ops_v2",
-        )
-        if not approved:
-            return FileOpOutcome(
-                ok=False,
-                op="create" if op_type == "create_file" else "write",
-                path=str(path),
-                reason="approval_denied",
-                before_hash=before_hash,
-                after_hash=before_hash,
-                changed=False,
+        # 承認要求（create or write）: 安全な新規作成は低リスク判定
+        # skip_approval=True の場合は承認をスキップ
+        if not skip_approval:
+            op_type = "create_file" if not path.exists() else "write_file"
+            risk_level = RiskLevel.HIGH_RISK
+            try:
+                cwd = Path.cwd().resolve()
+                resolved = path.resolve()
+                inside_workspace = False
+                try:
+                    # Python3.10 互換の相対判定
+                    resolved.relative_to(cwd)
+                    inside_workspace = True
+                except Exception:
+                    inside_workspace = False
+                is_new_file = not path.exists()
+                small_content = len(content.encode("utf-8")) <= 64 * 1024  # 64KB 以下を安全閾値
+                safe_ext = resolved.suffix.lower() in [".txt", ".md", ".ts", ".js", ".json", ".py"] or resolved.suffix == ""
+                if op_type == "create_file" and is_new_file and inside_workspace and small_content and safe_ext:
+                    risk_level = RiskLevel.LOW_RISK
+            except Exception:
+                # 失敗時はデフォルトの高リスクを維持
+                risk_level = RiskLevel.HIGH_RISK
+
+            approved = self._request_approval(
+                operation_type=op_type,
+                target=str(path),
+                description=f"ファイル '{file_path}' を{'作成' if op_type=='create_file' else '更新'}",
+                risk_level=risk_level,
+                details={
+                    "file_path": str(path),
+                    "content_length": len(content),
+                    "file_exists": path.exists(),
+                    "risk_level": risk_level.value,
+                },
+                session_id=session_id or "file_ops_v2",
             )
+            if not approved:
+                return FileOpOutcome(
+                    ok=False,
+                    op="create" if op_type == "create_file" else "write",
+                    path=str(path),
+                    reason="approval_denied",
+                    before_hash=before_hash,
+                    after_hash=before_hash,
+                    changed=False,
+                )
 
         # 親ディレクトリ作成
         try:
@@ -460,8 +573,44 @@ class SimpleFileOps:
 
         # 検証
         after_hash = self._hash_file_if_exists(path)
+        # 追加検証（テキストベース）
+        try:
+            read_back_text = path.read_text(encoding="utf-8") if path.exists() else None
+            text_hash = self._sha256_text(read_back_text) if read_back_text is not None else None
+        except Exception:
+            read_back_text = None
+            text_hash = None
+        if self.debug:
+            rich_ui.print_message(
+                f"[DEBUG][FileOps] verify path={path} exists={path.exists()} desired_hash={desired_hash} after_hash={after_hash} text_hash={text_hash} len_written={len(content)} len_read={len(read_back_text) if read_back_text is not None else 'N/A'}",
+                "warning" if (after_hash != desired_hash) else "info"
+            )
+
+        # テキストハッシュが利用可能で期待値と一致する場合、それを優先
+        if text_hash is not None and text_hash == desired_hash:
+            if self.debug:
+                rich_ui.print_message(
+                    f"[DEBUG][FileOps] TEXT_HASH_MATCH: using text_hash={text_hash} instead of after_hash={after_hash}",
+                    "info"
+                )
+            # テキストハッシュが一致している場合は成功とする
+            return FileOpOutcome(
+                ok=True,
+                op="write" if before_hash is not None else "create",
+                path=str(path),
+                reason=None,
+                before_hash=before_hash,
+                after_hash=text_hash,  # テキストハッシュを使用
+                changed=(before_hash != text_hash),
+            )
+        
         if (after_hash is None) or (after_hash != desired_hash):
             # 不一致 → 可能ならロールバック
+            if self.debug:
+                rich_ui.print_message(
+                    f"[DEBUG][FileOps] POST_CONDITION_FAILED: expected={desired_hash} actual={after_hash} text_hash={text_hash} path_exists={path.exists()}",
+                    "error"
+                )
             if backup_bytes is not None:
                 try:
                     path.write_bytes(backup_bytes)
@@ -473,7 +622,7 @@ class SimpleFileOps:
                 path=str(path),
                 reason="post_condition_failed",
                 before_hash=before_hash,
-                after_hash=after_hash,
+                after_hash=after_hash or text_hash,
                 changed=False,
             )
 
@@ -515,7 +664,7 @@ class SimpleFileOps:
             Dict[str, Any]: 操作結果
         """
         # V2 フラグが有効なら新実装に委譲
-        if os.getenv("FILE_OPS_V2") == "1":
+        if os.getenv("FILE_OPS_V2", "1") == "1":
             outcome = self.apply_with_approval_write(file_path, content, session_id=session_id)
             if not outcome.ok:
                 return {"success": False, "message": outcome.reason or "unknown_error", "path": outcome.path, "reason": outcome.reason}
@@ -704,7 +853,7 @@ class SimpleFileOps:
             Dict[str, Any]: 操作結果
         """
         # V2 フラグが有効なら新実装に委譲
-        if os.getenv("FILE_OPS_V2") == "1":
+        if os.getenv("FILE_OPS_V2", "1") == "1":
             outcome = self.apply_with_approval_write(file_path, content)
             if not outcome.ok:
                 return {"success": False, "message": outcome.reason or "unknown_error", "path": outcome.path, "reason": outcome.reason}

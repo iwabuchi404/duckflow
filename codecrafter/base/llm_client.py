@@ -162,7 +162,7 @@ class GroqClient(BaseLLMClient):
             raise LLMClientError("GROQ_API_KEY が設定されていません")
         
         self.client = ChatGroq(
-            model=config.get('model', 'mixtral-8x7b-32768'),
+            model=config.get('model'),
             temperature=config.get('temperature', 0.1),
             max_tokens=config.get('max_tokens', 8192),
             groq_api_key=api_key,
@@ -209,17 +209,46 @@ class GroqClient(BaseLLMClient):
             
         except Exception as e:
             # より詳細なエラー情報を提供
+            import traceback
+            import logging
+            
+            logger = logging.getLogger(__name__)
             error_msg = str(e)
+            
+            # 詳細なエラー情報を取得
+            error_details = traceback.format_exc()
+            logger.error(f"🔍 Groq API エラー詳細:\n{error_details}")
+            
+            # レスポンスボディの詳細を取得（もしあれば）
+            response_detail = ""
+            if hasattr(e, 'response') and e.response:
+                try:
+                    if hasattr(e.response, 'text'):
+                        response_detail = f"\n📄 レスポンス詳細: {e.response.text}"
+                    elif hasattr(e.response, 'content'):
+                        response_detail = f"\n📄 レスポンス詳細: {e.response.content}"
+                    logger.error(f"🔍 Groq API レスポンス詳細: {response_detail}")
+                except Exception as resp_err:
+                    logger.error(f"レスポンス詳細取得エラー: {resp_err}")
+            
+            # HTTPエラーの詳細情報を取得
+            if hasattr(e, '__class__') and hasattr(e.__class__, '__name__'):
+                error_type = e.__class__.__name__
+                logger.error(f"🔍 エラータイプ: {error_type}")
+            
+            # エラーメッセージに詳細情報を含める
+            detailed_msg = f"{error_msg}{response_detail}"
+            
             if "400" in error_msg or "Bad Request" in error_msg:
-                raise LLMClientError(f"Groq API リクエストエラー (400): リクエスト内容を確認してください - {error_msg}")
+                raise LLMClientError(f"Groq API リクエストエラー (400): リクエスト内容を確認してください{detailed_msg}")
             elif "401" in error_msg or "Unauthorized" in error_msg:
-                raise LLMClientError(f"Groq API 認証エラー (401): API キーを確認してください - {error_msg}")
+                raise LLMClientError(f"Groq API 認証エラー (401): API キーを確認してください{detailed_msg}")
             elif "429" in error_msg or "rate limit" in error_msg.lower():
-                raise LLMClientError(f"Groq API レート制限エラー (429): しばらく待ってから再試行してください - {error_msg}")
+                raise LLMClientError(f"Groq API レート制限エラー (429): しばらく待ってから再試行してください{detailed_msg}")
             elif "500" in error_msg or "Internal Server Error" in error_msg:
-                raise LLMClientError(f"Groq API サーバーエラー (500): しばらく待ってから再試行してください - {error_msg}")
+                raise LLMClientError(f"Groq API サーバーエラー (500): しばらく待ってから再試行してください{detailed_msg}")
             else:
-                raise LLMClientError(f"Groq API呼び出しに失敗しました: {error_msg}")
+                raise LLMClientError(f"Groq API呼び出しに失敗しました: {detailed_msg}")
     
     def is_available(self) -> bool:
         """クライアントが利用可能かどうか"""

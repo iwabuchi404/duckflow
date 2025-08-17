@@ -19,16 +19,22 @@ from codecrafter.ui.rich_ui import rich_ui
 # 既存のCompanionCore機能
 from .core import CompanionCore, ActionType
 from .shared_context_manager import SharedContextManager
+from .plan_tool import PlanTool, MessageRef
 
 
 class EnhancedCompanionCore:
     """既存システム統合版CompanionCore
     
     Step 2の改善:
-    - AgentStateによる統一状態管理
+    - AgentStateによる統一状態管理（単一ソース・オブ・トゥルース）
     - ConversationMemoryによる自動記憶要約
     - PromptCompilerによる高度なプロンプト最適化
     - PromptContextBuilderによる構造化コンテキスト管理
+    
+    状態管理統一（改修後）:
+    - AgentState: 唯一の書き込み可能な状態ソース
+    - Legacy CompanionCore: 読み取り専用ミラー（AgentState → Legacy の一方向同期）
+    - 状態の競合と二重化問題を解決
     """
     
     def __init__(self, session_id: Optional[str] = None):
@@ -43,12 +49,23 @@ class EnhancedCompanionCore:
         )
         
         # 既存システムとの統合
+        
+        # プラン状態管理（実行阻害改善）
+        self.current_plan_state = {
+            "pending": False,
+            "plan_content": None,
+            "plan_type": None,
+            "created_at": None
+        }
         self.memory_manager = conversation_memory
         self.prompt_compiler = prompt_compiler
         self.context_builder = PromptContextBuilder()
         
         # 既存のCompanionCoreも保持（フォールバック用）
         self.legacy_companion = CompanionCore()
+        
+        # PlanTool統合
+        self.plan_tool = PlanTool()
         
         # 統合モードフラグ
         self.use_enhanced_mode = True
@@ -57,7 +74,7 @@ class EnhancedCompanionCore:
         import logging
         self.logger = logging.getLogger(__name__)
     
-    async def analyze_intent_only(self, user_message: str) -> Dict[str, Any]:
+    async def analyze_intent_only(self, user_message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """統合版意図理解（AgentState活用）
         
         Args:
@@ -68,7 +85,7 @@ class EnhancedCompanionCore:
         """
         try:
             if self.use_enhanced_mode:
-                return await self._analyze_intent_enhanced(user_message)
+                return await self._analyze_intent_enhanced(user_message, context)
             else:
                 # フォールバック: 既存システム使用
                 return await self.legacy_companion.analyze_intent_only(user_message)
@@ -78,7 +95,7 @@ class EnhancedCompanionCore:
             # フォールバック
             return await self.legacy_companion.analyze_intent_only(user_message)
     
-    async def _analyze_intent_enhanced(self, user_message: str) -> Dict[str, Any]:
+    async def _analyze_intent_enhanced(self, user_message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """拡張版意図理解（既存システム活用）
         
         Args:
@@ -87,7 +104,7 @@ class EnhancedCompanionCore:
         Returns:
             Dict: 意図理解結果
         """
-        # AgentStateに記録（同期問題を解決）
+        # AgentStateに記録（単一ソース・オブ・トゥルース）
         self.state.add_message("user", user_message)
         
         # 記憶管理（自動要約）
@@ -96,18 +113,19 @@ class EnhancedCompanionCore:
             if success:
                 rich_ui.print_message("🧠 会話履歴を要約しました", "info")
         
-        # 既存CompanionCoreの会話履歴も同期
-        self._sync_conversation_history()
+        # Legacy CompanionCoreへの読み取り専用同期（AgentState → Legacy）
+        self._sync_to_legacy_readonly()
         
-        # 既存の意図理解システムを活用
+        # 既存の意図理解システムを活用（コンテキスト付き）
         if hasattr(self.legacy_companion, 'use_new_intent_system') and self.legacy_companion.use_new_intent_system:
-            action_type = await self.legacy_companion._analyze_intent_new_system(user_message)
+            action_type = await self.legacy_companion._analyze_intent_new_system(user_message, context)
             understanding_result = getattr(self.legacy_companion, 'last_understanding_result', None)
         else:
             action_type = self.legacy_companion._analyze_intent_legacy(user_message)
             understanding_result = None
-        
-        return {
+
+        # ベース結果
+        result: Dict[str, Any] = {
             "action_type": action_type,
             "understanding_result": understanding_result,
             "message": user_message,
@@ -115,6 +133,32 @@ class EnhancedCompanionCore:
             "session_id": self.state.session_id,
             "conversation_count": len(self.state.conversation_history)  # 同期確認用
         }
+
+        # ルーティング対応: 意図統合結果があれば主要フィールドをトップレベルへ昇格
+        try:
+            if understanding_result is not None:
+                # dataclass 風オブジェクトを想定
+                route_type = getattr(understanding_result, 'route_type', None)
+                risk_level = getattr(understanding_result, 'risk_level', None)
+                prereq = getattr(understanding_result, 'prerequisite_status', None)
+                routing_reason = getattr(understanding_result, 'routing_reason', None)
+                metadata = getattr(understanding_result, 'metadata', None)
+
+                if route_type is not None:
+                    result["route_type"] = route_type
+                if risk_level is not None:
+                    result["risk_level"] = risk_level
+                if prereq is not None:
+                    result["prerequisite_status"] = prereq
+                if routing_reason is not None:
+                    result["routing_reason"] = routing_reason
+                if metadata is not None:
+                    result["metadata"] = metadata
+        except Exception:
+            # 取得に失敗しても致命ではないため無視
+            pass
+
+        return result
     
     async def process_with_intent_result(self, intent_result: Dict[str, Any]) -> str:
         """統合版意図理解結果処理
@@ -168,8 +212,15 @@ class EnhancedCompanionCore:
         else:
             result = self.legacy_companion._handle_multi_step_task(user_message)
         
-        # AgentStateに応答を記録
-        self._sync_from_legacy_to_agent_state(user_message, result)
+        # プラン提示の検出と状態設定（実行阻害改善）
+        if self._looks_like_plan(result):
+            self.set_plan_state(result, "execution_plan")
+        
+        # AgentStateに応答を記録（単一ソース・オブ・トゥルース）
+        self.state.add_message("assistant", result)
+        
+        # Legacy CompanionCoreへの読み取り専用同期（AgentState → Legacy）
+        self._sync_to_legacy_readonly()
         
         return result
     
@@ -216,6 +267,124 @@ class EnhancedCompanionCore:
             "file_contents": {},
             "read_request_targets": []
         }
+    
+    def set_plan_state(self, plan_content: str, plan_type: str = "execution_plan"):
+        """プラン状態を設定（PlanTool統合版）
+        
+        Args:
+            plan_content: プランの内容
+            plan_type: プランの種類
+        """
+        # PlanToolでプランを提案
+        try:
+            plan_id = self.plan_tool.propose(
+                content=plan_content,
+                sources=[MessageRef(
+                    message_id=str(uuid.uuid4()),
+                    timestamp=datetime.now().isoformat()
+                )],
+                rationale=f"AI生成プラン: {plan_type}",
+                tags=[plan_type, "ai_generated"]
+            )
+            
+            # 従来の状態も維持（互換性のため）
+            self.current_plan_state = {
+                "pending": True,
+                "plan_content": plan_content,
+                "plan_type": plan_type,
+                "created_at": datetime.now(),
+                "plan_id": plan_id  # PlanTool ID を追加
+            }
+            
+        except Exception as e:
+            self.logger.error(f"PlanTool統合エラー: {e}")
+            # フォールバック: 従来の方式
+            self.current_plan_state = {
+                "pending": True,
+                "plan_content": plan_content,
+                "plan_type": plan_type,
+                "created_at": datetime.now()
+            }
+        
+        # プラン状態をAgentStateにも記録
+        self.state.collected_context["current_plan_state"] = self.current_plan_state
+        
+        # DualLoop の PlanContext にも反映（存在する場合）
+        if hasattr(self, "plan_context") and self.plan_context is not None:
+            try:
+                self.plan_context.pending = True
+                self.plan_context.current_plan = {
+                    "type": plan_type,
+                    "created_at": self.current_plan_state["created_at"],
+                    "summary": self._summarize_plan_for_context(plan_content)[:2000],
+                    "plan_id": self.current_plan_state.get("plan_id")
+                }
+            except Exception:
+                pass
+    
+    def get_plan_state(self) -> Dict[str, Any]:
+        """現在のプラン状態を取得（PlanTool統合版）
+        
+        Returns:
+            Dict: プラン状態
+        """
+        # PlanToolからの情報も含める
+        plan_state = self.current_plan_state.copy()
+        
+        if plan_state.get("plan_id"):
+            try:
+                plan_tool_state = self.plan_tool.get_state(plan_state["plan_id"])
+                plan_state["plan_tool_state"] = plan_tool_state
+            except Exception as e:
+                self.logger.warning(f"PlanTool状態取得エラー: {e}")
+        
+        return plan_state
+    
+    def clear_plan_state(self):
+        """プラン状態をクリア（PlanTool統合版）"""
+        # PlanToolの現在のプランもクリア
+        try:
+            self.plan_tool.clear_current()
+        except Exception as e:
+            self.logger.warning(f"PlanTool クリアエラー: {e}")
+        
+        self.current_plan_state = {
+            "pending": False,
+            "plan_content": None,
+            "plan_type": None,
+            "created_at": None
+        }
+        
+        # AgentStateからも削除
+        self.state.collected_context["current_plan_state"] = self.current_plan_state
+        # PlanContext 側も同期
+        if hasattr(self, "plan_context") and self.plan_context is not None:
+            try:
+                self.plan_context.reset()
+            except Exception:
+                pass
+
+    def _looks_like_plan(self, text: str) -> bool:
+        """応答テキストが「実装プラン/ロードマップ」的かを簡易判定"""
+        if not text or len(text) < 50:
+            return False
+        import re
+        indicators = [
+            "実装プラン", "実装ロードマップ", "ロードマップ", "開発フロー", "フェーズ", "次のステップ",
+            "アクションアイテム", "タスク実行計画", "ファイル構成", "テスト戦略", "CI/CD"
+        ]
+        hits = sum(1 for kw in indicators if kw in text)
+        # 番号付きリストやテーブル/コードブロックの存在
+        has_list = bool(re.search(r"\n\s*\d+\)\s|\n\s*\d+\.\s|\n\s*-\s", text))
+        has_code = "```" in text
+        return hits >= 2 and (has_list or has_code)
+
+    def _summarize_plan_for_context(self, text: str) -> str:
+        """PlanContext 用の軽い要約（先頭見出しと箇条書き先頭数件）"""
+        lines = text.splitlines()
+        header = next((l for l in lines if l.strip().startswith("#")), "")
+        bullets = [l.strip() for l in lines if l.strip().startswith(("- ", "1.", "2.", "3."))][:10]
+        return "\n".join([header] + bullets)
     
     async def _generate_enhanced_response(self, user_message: str, system_prompt: str) -> str:
         """拡張版直接応答生成（Chatと同じ内容を使用）
@@ -268,8 +437,8 @@ class EnhancedCompanionCore:
             rich_ui.print_message("📁 ファイル操作タスクとして処理中...", "info")
             
             # シンプルなアプローチ: 既存のファイル操作ロジックを活用
-            # ただし、AgentStateの会話履歴を同期してから実行
-            self._sync_conversation_history()
+            # AgentState → Legacy への読み取り専用同期
+            self._sync_to_legacy_readonly()
             return self.legacy_companion._handle_file_operation(user_message)
             
         except Exception as e:
@@ -322,30 +491,33 @@ class EnhancedCompanionCore:
         
         return self.use_enhanced_mode
     
-    def _sync_conversation_history(self):
-        """AgentStateとlegacy CompanionCoreの会話履歴を同期
+    def _sync_to_legacy_readonly(self):
+        """AgentState → Legacy CompanionCore への読み取り専用同期
         
-        AgentStateの会話履歴をlegacy CompanionCoreに反映させる
+        単一ソース・オブ・トゥルース（AgentState）から読み取り専用ミラー（Legacy）へ同期
+        逆同期は禁止（AgentStateが唯一の書き込み可能ソース）
         """
         try:
             # AgentStateの会話履歴をlegacy形式に変換
             legacy_history = []
             
-            for msg in self.state.conversation_history:
+            # ペアを作成（user-assistant）
+            for i in range(0, len(self.state.conversation_history)):
+                msg = self.state.conversation_history[i]
+                
                 if msg.role == "user":
                     # ユーザーメッセージの場合、次のアシスタントメッセージとペアにする
                     user_content = msg.content
                     assistant_content = ""
                     
                     # 対応するアシスタントメッセージを探す
-                    msg_index = self.state.conversation_history.index(msg)
-                    if msg_index + 1 < len(self.state.conversation_history):
-                        next_msg = self.state.conversation_history[msg_index + 1]
+                    if i + 1 < len(self.state.conversation_history):
+                        next_msg = self.state.conversation_history[i + 1]
                         if next_msg.role == "assistant":
                             assistant_content = next_msg.content
                     
-                    # legacy形式のエントリを作成
-                    if assistant_content:  # ペアが揃っている場合のみ追加
+                    # legacy形式のエントリを作成（完了ペアのみ）
+                    if assistant_content:
                         legacy_entry = {
                             "user": user_content,
                             "assistant": assistant_content,
@@ -354,27 +526,142 @@ class EnhancedCompanionCore:
                         }
                         legacy_history.append(legacy_entry)
             
-            # legacy CompanionCoreの履歴を更新
-            with self.legacy_companion._history_lock:
-                self.legacy_companion.conversation_history = legacy_history
+            # legacy CompanionCoreの履歴を更新（読み取り専用ミラー）
+            try:
+                if hasattr(self.legacy_companion, '_history_lock'):
+                    with self.legacy_companion._history_lock:
+                        self.legacy_companion.conversation_history = legacy_history
+                else:
+                    self.legacy_companion.conversation_history = legacy_history
+            except AttributeError:
+                # legacy_companionに会話履歴がない場合は無視
+                pass
             
-            self.logger.info(f"会話履歴を同期しました: AgentState({len(self.state.conversation_history)}) → Legacy({len(legacy_history)})")
+            # 明示的にログ出力（同期確認用）
+            self.logger.debug(f"AgentState → Legacy 読み取り専用同期完了: "
+                             f"AgentState({len(self.state.conversation_history)}) → Legacy({len(legacy_history)})")
             
         except Exception as e:
-            self.logger.error(f"会話履歴同期エラー: {e}")
+            self.logger.warning(f"AgentState → Legacy 同期エラー: {e}")
+            # エラーは無視して続行（Legacy依存を回避）
+    # === PlanTool API メソッド ===
     
-    def _sync_from_legacy_to_agent_state(self, user_message: str, assistant_response: str):
-        """legacy CompanionCoreからAgentStateに会話を同期
+    def propose_plan(self, content: str, rationale: str = "", tags: List[str] = None) -> str:
+        """プランを提案（PlanTool API）
         
         Args:
-            user_message: ユーザーメッセージ
-            assistant_response: アシスタント応答
+            content: プラン内容
+            rationale: 目的・前提
+            tags: タグリスト
+            
+        Returns:
+            str: プランID
         """
-        try:
-            # AgentStateに応答を記録（ユーザーメッセージは既に記録済み）
-            self.state.add_message("assistant", assistant_response)
+        return self.plan_tool.propose(
+            content=content,
+            sources=[MessageRef(
+                message_id=str(uuid.uuid4()),
+                timestamp=datetime.now().isoformat()
+            )],
+            rationale=rationale or "ユーザー要求によるプラン",
+            tags=tags or ["user_requested"]
+        )
+    
+    def set_plan_action_specs(self, plan_id: str, specs: List[Any]) -> Dict[str, Any]:
+        """プランにActionSpecを設定（PlanTool API）
+        
+        Args:
+            plan_id: プランID
+            specs: ActionSpecリスト
             
-            self.logger.info(f"AgentStateに応答を記録: {len(assistant_response)}文字")
+        Returns:
+            Dict: バリデーション結果
+        """
+        from .collaborative_planner import ActionSpec
+        
+        # ActionSpecに変換（必要に応じて）
+        action_specs = []
+        for spec in specs:
+            if isinstance(spec, ActionSpec):
+                action_specs.append(spec)
+            elif isinstance(spec, dict):
+                action_specs.append(ActionSpec(**spec))
+            else:
+                self.logger.warning(f"不明なActionSpec形式: {spec}")
+        
+        validation_result = self.plan_tool.set_action_specs(plan_id, action_specs)
+        return {
+            "ok": validation_result.ok,
+            "issues": validation_result.issues,
+            "action_count": len(validation_result.normalized)
+        }
+    
+    def preview_plan(self, plan_id: str) -> Dict[str, Any]:
+        """プランをプレビュー（PlanTool API）
+        
+        Args:
+            plan_id: プランID
             
-        except Exception as e:
-            self.logger.error(f"AgentState同期エラー: {e}")
+        Returns:
+            Dict: プレビュー情報
+        """
+        preview = self.plan_tool.preview(plan_id)
+        return {
+            "files": preview.files,
+            "diffs": preview.diffs,
+            "risk_score": preview.risk_score
+        }
+    
+    def approve_plan(self, plan_id: str, approver: str = "user") -> Dict[str, Any]:
+        """プランを承認（PlanTool API）
+        
+        Args:
+            plan_id: プランID
+            approver: 承認者
+            
+        Returns:
+            Dict: 承認結果
+        """
+        from .plan_tool import SpecSelection
+        
+        # 全ActionSpecを承認対象とする
+        selection = SpecSelection(all=True)
+        
+        # 承認要求
+        self.plan_tool.request_approval(plan_id, selection)
+        
+        # 承認実行
+        return self.plan_tool.approve(plan_id, approver, selection)
+    
+    def execute_plan(self, plan_id: str) -> Dict[str, Any]:
+        """プランを実行（PlanTool API）
+        
+        Args:
+            plan_id: プランID
+            
+        Returns:
+            Dict: 実行結果
+        """
+        result = self.plan_tool.execute(plan_id)
+        return {
+            "success": result.overall_success,
+            "results": result.results,
+            "started_at": result.started_at,
+            "finished_at": result.finished_at
+        }
+    
+    def list_plans(self) -> List[Dict[str, Any]]:
+        """プラン一覧を取得（PlanTool API）
+        
+        Returns:
+            List[Dict]: プラン一覧
+        """
+        return self.plan_tool.list()
+    
+    def get_current_plan(self) -> Optional[Dict[str, str]]:
+        """現在のプランを取得（PlanTool API）
+        
+        Returns:
+            Optional[Dict]: 現在のプラン情報
+        """
+        return self.plan_tool.get_current()

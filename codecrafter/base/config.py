@@ -73,6 +73,25 @@ class MemoryConfig(BaseModel):
     long_term: Dict[str, Any] = Field(default_factory=dict, description="長期記憶設定")
 
 
+class ApprovalUIConfig(BaseModel):
+    """承認UI設定クラス"""
+
+    non_interactive: bool = Field(default=True, description="非対話UIの使用")
+    auto_approve_low: bool = Field(default=True, description="低リスク自動承認")
+    auto_approve_high: bool = Field(default=False, description="高リスク自動承認")
+    auto_approve_all: bool = Field(default=False, description="全自動承認（非推奨）")
+
+
+class ApprovalSettings(BaseModel):
+    """承認システム設定クラス"""
+
+    mode: str = Field(default="standard", description="承認モード strict|standard|trusted")
+    timeout_seconds: int = Field(default=30, description="承認タイムアウト(秒)")
+    show_preview: bool = Field(default=True, description="プレビュー表示")
+    max_preview_length: int = Field(default=200, description="プレビュー最大長")
+    ui: ApprovalUIConfig = Field(default_factory=ApprovalUIConfig, description="承認UI設定")
+
+
 class SummaryLLMConfig(BaseModel):
     """要約用LLM設定クラス (ステップ2c)"""
     
@@ -186,6 +205,7 @@ class Config(BaseModel):
     development: DevelopmentConfig = Field(default_factory=DevelopmentConfig, description="開発設定")
     memory: MemoryConfig = Field(default_factory=MemoryConfig, description="記憶管理設定")
     summary_llm: SummaryLLMConfig = Field(default_factory=SummaryLLMConfig, description="要約用LLM設定")
+    approval: ApprovalSettings = Field(default_factory=ApprovalSettings, description="承認システム設定")
     promptsmith: Optional[PromptSmithConfig] = Field(default=None, description="PromptSmith設定")
     duck_keeper: DuckKeeperConfig = Field(default_factory=DuckKeeperConfig, description="Duck Keeper設定")
     duck_pacemaker: Optional[DuckPacemakerConfig] = Field(default=None, description="Duck Pacemaker設定")
@@ -475,6 +495,11 @@ class ConfigManager:
         """
         config = self.load_config()
         return config.duck_pacemaker
+
+    def get_approval_settings(self) -> ApprovalSettings:
+        """承認システム設定を取得"""
+        config = self.load_config()
+        return config.approval
     
     def get_duck_pacemaker_dynamic_limits(self) -> Dict[str, Any]:
         """Duck Pacemaker動的制限設定を取得
