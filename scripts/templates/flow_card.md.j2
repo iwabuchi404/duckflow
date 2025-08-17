@@ -1,0 +1,58 @@
+# Flow: {{ flow.title }} (`{{ flow.id }}`)
+
+| 属性 | 値 |
+|---|---|
+| **バージョン** | `{{ flow.version }}` |
+| **ステータス** | `{{ flow.status }}` |
+| **オーナー** | `{{ flow.owner }}` |
+| **目的** | `{{ flow.summary }}` |
+| **存在理由** | `{{ flow.rationale }}` |
+{% if flow.human_notes %}
+| **補足** | `{{ flow.human_notes }}` |
+{% endif %}
+
+---
+
+## メインパス
+
+{% for step in flow.steps %}
+**{{ loop.index }}. {{ step.name }}**
+- **Actor:** `{{ step.actor }}`
+- **Outputs:** `{{ step.outputs | join(', ') }}`
+- *{{ step.hint | default('') }}*
+{% endfor %}
+
+---
+
+## 分岐とガードレール
+
+### ルーティング
+{% for route in flow.routing %}
+- **{{ route.id }}:** `{{ route.if }}` → `{{ route.route }}` ({{ route.reason | default('理由未定義') }})
+{% endfor %}
+
+### 承認ポリシー
+- **High:** `{{ flow.approvals.high }}`
+- **Medium:** `{{ flow.approvals.medium }}`
+- **Low:** `{{ flow.approvals.low }}`
+
+### エラーハンドリング
+{% for error in flow.error_handling %}
+- **When:** `{{ error.when }}`, **Action:** `{{ error.action | default('N/A') }}`, **Redirect:** `{{ error.redirect | default('N/A') }}`
+{% endfor %}
+
+---
+
+## シーケンス図
+
+```mermaid
+{{ mermaid_sequence_diagram }}
+```
+
+---
+
+## 可観測性
+
+- **Events:** `{{ flow.observability.events | join(', ') }}`
+- **Log Keys:** `{{ flow.observability.log_keys | join(', ') }}`
+- **Artifacts:** `{{ flow.observability.artifacts | join(', ') }}`
