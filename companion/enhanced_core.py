@@ -18,6 +18,7 @@ from codecrafter.ui.rich_ui import rich_ui
 
 # 既存のCompanionCore機能
 from .core import CompanionCore, ActionType
+from .simple_approval import ApprovalMode
 from .shared_context_manager import SharedContextManager
 from .plan_tool import PlanTool, MessageRef
 
@@ -37,11 +38,12 @@ class EnhancedCompanionCore:
     - 状態の競合と二重化問題を解決
     """
     
-    def __init__(self, session_id: Optional[str] = None):
+    def __init__(self, session_id: Optional[str] = None, approval_mode: ApprovalMode = ApprovalMode.STANDARD):
         """初期化
         
         Args:
             session_id: セッションID（省略時は自動生成）
+            approval_mode: 承認モード
         """
         # AgentStateを初期化
         self.state = AgentState(
@@ -62,7 +64,11 @@ class EnhancedCompanionCore:
         self.context_builder = PromptContextBuilder()
         
         # 既存のCompanionCoreも保持（フォールバック用）
-        self.legacy_companion = CompanionCore()
+        self.legacy_companion = CompanionCore(approval_mode=approval_mode)
+        
+        # ファイル操作統合
+        from .file_ops import SimpleFileOps
+        self.file_ops = SimpleFileOps(approval_mode=approval_mode)
         
         # PlanTool統合
         self.plan_tool = PlanTool()
@@ -117,12 +123,9 @@ class EnhancedCompanionCore:
         self._sync_to_legacy_readonly()
         
         # 既存の意図理解システムを活用（コンテキスト付き）
-        if hasattr(self.legacy_companion, 'use_new_intent_system') and self.legacy_companion.use_new_intent_system:
-            action_type = await self.legacy_companion._analyze_intent_new_system(user_message, context)
-            understanding_result = getattr(self.legacy_companion, 'last_understanding_result', None)
-        else:
-            action_type = self.legacy_companion._analyze_intent_legacy(user_message)
-            understanding_result = None
+        result = await self.legacy_companion.analyze_intent_only(user_message)
+        action_type = result["action_type"]
+        understanding_result = result.get("understanding_result")
 
         # ベース結果
         result: Dict[str, Any] = {
@@ -424,7 +427,7 @@ class EnhancedCompanionCore:
             return self.legacy_companion._generate_direct_response(user_message)
     
     async def _handle_enhanced_file_operation(self, user_message: str, system_prompt: str) -> str:
-        """拡張版ファイル操作処理（シンプル版）
+        """拡張版ファイル操作処理
         
         Args:
             user_message: ユーザーメッセージ
@@ -436,15 +439,413 @@ class EnhancedCompanionCore:
         try:
             rich_ui.print_message("📁 ファイル操作タスクとして処理中...", "info")
             
-            # シンプルなアプローチ: 既存のファイル操作ロジックを活用
-            # AgentState → Legacy への読み取り専用同期
-            self._sync_to_legacy_readonly()
-            return self.legacy_companion._handle_file_operation(user_message)
+            # ファイル操作の種類を判定
+            user_message_lower = user_message.lower()
+            
+            # ファイル読み込み操作の検出と実行
+            if any(kw in user_message for kw in ["読", "読み", "確認", "内容", "見て", "把握"]) or "read" in user_message_lower:
+                return await self._handle_file_read_operation(user_message)
+            
+            # ファイル書き込み操作の検出と実行
+            elif "書" in user_message or "作成" in user_message or "write" in user_message_lower or "create" in user_message_lower:
+                return await self._handle_file_write_operation(user_message)
+            
+            # ファイル一覧操作の検出と実行
+            elif "一覧" in user_message or "list" in user_message_lower or "ls" in user_message_lower:
+                return await self._handle_file_list_operation(user_message)
+            
+            else:
+                # 汎用的なファイル操作として処理
+                return await self._handle_generic_file_operation(user_message, system_prompt)
             
         except Exception as e:
             self.logger.error(f"拡張ファイル操作エラー: {e}")
             # フォールバック
             return self.legacy_companion._handle_file_operation(user_message)
+    
+    async def _handle_file_read_operation(self, user_message: str) -> str:
+        """ファイル読み込み操作を処理
+        
+        Args:
+            user_message: ユーザーメッセージ
+            
+        Returns:
+            str: 読み込み結果
+        """
+        try:
+            # ファイル名の抽出（改善版）
+            import re
+            
+            # より柔軟なファイル名パターンを検索
+            file_patterns = [
+                # 引用符で囲まれたファイル名
+                r'["\']([^"\']+\.[a-zA-Z0-9]+)["\']',
+                r'["\']([^"\']+)["\']',  # 引用符で囲まれた任意の文字列
+                
+                # パス付きファイル名（Windows/Unix両対応）
+                r'([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',  # パス付き拡張子ファイル名
+                r'([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',   # パス付き拡張子ファイル名（アンダースコア対応）
+                
+                # 拡張子付きファイル名
+                r'([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',     # 拡張子付きファイル名
+                r'([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',     # 拡張子付きファイル名（アンダースコア対応）
+                
+                # 特定の拡張子ファイル
+                r'([a-zA-Z0-9_\-\.]+\.(?:py|md|txt|json|yaml|yml|js|html|css|java|cpp|c|h|sql|sh|bat|ps1))',
+                
+                # 日本語ファイル名（基本的なパターン）
+                r'([一-龯a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',
+                
+                # 拡張子のないファイル名（最後の手段）
+                r'([a-zA-Z0-9_\-\.]+)(?:\s|$|。|、|です|ます)',
+            ]
+            
+            file_path = None
+            for pattern in file_patterns:
+                match = re.search(pattern, user_message)
+                if match:
+                    file_path = match.group(1)
+                    # ファイル名の妥当性チェック
+                    if self._is_valid_file_path(file_path):
+                        break
+                    else:
+                        file_path = None
+            
+            # 正規表現で抽出できない場合、LLMにファイル名抽出を依頼
+            if not file_path:
+                file_path = await self._extract_filename_with_llm(user_message)
+            
+            if not file_path:
+                return "ファイル名が特定できませんでした。ファイル名を明示してください。\n\n例:\n- `example.py` を読んで\n- \"test.txt\" の内容を確認して\n- README.md を見て"
+            
+            rich_ui.print_message(f"📖 ファイル読み込み: {file_path}", "info")
+            
+            # ファイル読み込み実行（複数パターンを試行）
+            try:
+                # まず指定されたパスで試行
+                content = None
+                tried_paths = []
+                
+                try:
+                    content = self.file_ops.read_file(file_path)
+                    tried_paths.append(f"✓ {file_path}")
+                except Exception as e1:
+                    tried_paths.append(f"✗ {file_path} ({e1})")
+                    
+                    # カレントディレクトリでも試行
+                    if "/" not in file_path and "\\" not in file_path:
+                        try:
+                            import os
+                            current_path = os.path.join(".", file_path)
+                            content = self.file_ops.read_file(current_path)
+                            file_path = current_path  # 成功したパスを更新
+                            tried_paths.append(f"✓ {current_path}")
+                        except Exception as e2:
+                            tried_paths.append(f"✗ {current_path} ({e2})")
+                
+                if content is None:
+                    return f"ファイル '{file_path}' の読み込みに失敗しました。\n試行したパス:\n" + "\n".join(tried_paths)
+                
+                # 内容の要約を生成
+                summary = await self._generate_file_summary(file_path, content)
+                
+                # AgentStateに記録
+                self.state.add_message("assistant", f"ファイル '{file_path}' を読み込みました")
+                
+                return f"📄 ファイル '{file_path}' の内容:\n\n{summary}\n\n--- 完全な内容 ---\n{content}"
+                
+            except Exception as e:
+                return f"ファイル '{file_path}' の読み込みに失敗しました: {str(e)}"
+                
+        except Exception as e:
+            self.logger.error(f"ファイル読み込み操作エラー: {e}")
+            return f"ファイル読み込み処理でエラーが発生しました: {str(e)}"
+    
+    async def _handle_file_write_operation(self, user_message: str) -> str:
+        """ファイル書き込み操作を処理
+        
+        Args:
+            user_message: ユーザーメッセージ
+            
+        Returns:
+            str: 書き込み結果
+        """
+        try:
+            # ファイル名と内容の抽出（改善版）
+            import re
+            
+            # より柔軟なファイル名パターンを検索
+            file_patterns = [
+                # 引用符で囲まれたファイル名
+                r'["\']([^"\']+\.[a-zA-Z0-9]+)["\']',
+                r'["\']([^"\']+)["\']',  # 引用符で囲まれた任意の文字列
+                
+                # パス付きファイル名（Windows/Unix両対応）
+                r'([a-zA-Z0-9_\-\\./\\]+\.[a-zA-Z0-9]+)',  # パス付き拡張子ファイル名
+                r'([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',   # パス付き拡張子ファイル名（アンダースコア対応）
+                
+                # 拡張子付きファイル名
+                r'([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',     # 拡張子付きファイル名
+                r'([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',     # 拡張子付きファイル名（アンダースコア対応）
+                
+                # 特定の拡張子ファイル
+                r'([a-zA-Z0-9_\-\.]+\.(?:py|md|txt|json|yaml|yml|js|html|css|java|cpp|c|h|sql|sh|bat|ps1))',
+                
+                # 日本語ファイル名（基本的なパターン）
+                r'([一-龯a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',
+                
+                # 拡張子のないファイル名（最後の手段）
+                r'([a-zA-Z0-9_\-\.]+)(?:\s|$|。|、|です|ます)',
+            ]
+            
+            file_path = None
+            for pattern in file_patterns:
+                match = re.search(pattern, user_message)
+                if match:
+                    file_path = match.group(1)
+                    # ファイル名の妥当性チェック
+                    if self._is_valid_file_path(file_path):
+                        break
+                    else:
+                        file_path = None
+            
+            # 正規表現で抽出できない場合、LLMにファイル名抽出を依頼
+            if not file_path:
+                file_path = await self._extract_filename_with_llm(user_message)
+            
+            if not file_path:
+                return "ファイル名が特定できませんでした。ファイル名を明示してください。\n\n例:\n- `example.py` を作成して\n- \"test.txt\" に書き込んで\n- README.md を作成して"
+            
+            # 内容の抽出（実際のプロジェクトでは、より高度な内容抽出が必要）
+            content_keywords = ["内容", "コンテンツ", "テキスト", "データ", "コード", "内容を"]
+            if any(kw in user_message for kw in content_keywords):
+                # LLMを使って適切な内容を生成
+                content_prompt = f"""
+ユーザー要求: {user_message}
+ファイルパス: {file_path}
+
+上記の要求に基づいて、適切なファイル内容を生成してください。
+要求が不明確な場合は、一般的なテンプレートを提供してください。
+"""
+                
+                from codecrafter.base.llm_client import llm_manager
+                generated_content = llm_manager.chat_with_history([
+                    {"role": "system", "content": "ユーザーの要求に基づいて適切なファイル内容を生成してください。"},
+                    {"role": "user", "content": content_prompt}
+                ])
+                
+                content = generated_content
+            else:
+                # デフォルト内容
+                content = f"""# {file_path}
+
+このファイルは {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} に作成されました。
+
+## 内容
+ユーザー要求: {user_message}
+
+# TODO: 必要な内容を追加してください
+"""
+            
+            rich_ui.print_message(f"📝 ファイル書き込み: {file_path}", "info")
+            
+            # ファイル書き込み実行
+            result = self.file_ops.write_file(file_path, content)
+            
+            if result["success"]:
+                # AgentStateに記録
+                self.state.add_message("assistant", f"ファイル '{file_path}' を作成しました")
+                
+                return f"""📄 ファイル '{file_path}' を正常に作成しました
+
+📊 書き込み情報:
+- サイズ: {result.get('size', 0)}バイト
+- 行数: {result.get('lines', 0)}行
+- 更新日時: {result.get('modified', 'N/A')}
+
+📝 書き込み内容:
+```
+{content[:500]}{'...' if len(content) > 500 else ''}
+```
+"""
+            else:
+                return f"ファイル '{file_path}' の書き込みに失敗しました: {result.get('message', '不明なエラー')}"
+                
+        except Exception as e:
+            self.logger.error(f"ファイル書き込み操作エラー: {e}")
+            return f"ファイル書き込み処理でエラーが発生しました: {str(e)}"
+    
+    def _is_valid_file_path(self, file_path: str) -> bool:
+        """ファイルパスの妥当性をチェック"""
+        if not file_path or len(file_path.strip()) == 0:
+            return False
+        
+        # 基本的なファイル名の妥当性チェック
+        import os
+        from pathlib import Path
+        
+        try:
+            # パスの正規化
+            normalized_path = Path(file_path).resolve()
+            
+            # ファイル名部分の妥当性
+            filename = normalized_path.name
+            if len(filename) == 0 or filename.startswith('.'):
+                return False
+            
+            # 禁止文字のチェック（Windows/Unix両対応）
+            invalid_chars = ['<', '>', ':', '"', '|', '?', '*', '\0']
+            if any(char in filename for char in invalid_chars):
+                return False
+            
+            # ファイル名の長さチェック
+            if len(filename) > 255:  # 一般的なファイルシステムの制限
+                return False
+            
+            return True
+            
+        except Exception:
+            return False
+    
+    async def _extract_filename_with_llm(self, user_message: str) -> Optional[str]:
+        """LLMを使用してファイル名を抽出"""
+        try:
+            from codecrafter.base.llm_client import llm_manager
+            
+            extraction_prompt = f"""
+ユーザーのメッセージから、作成・編集・読み込みしたいファイル名を抽出してください。
+
+ユーザーメッセージ: {user_message}
+
+抽出ルール:
+1. ファイル名のみを抽出（パス情報は含めない）
+2. 拡張子がある場合は含める
+3. 日本語ファイル名も対応
+4. ファイル名が見つからない場合は空文字列を返す
+5. 引用符やバッククォートで囲まれた部分を優先的に抽出
+6. 一般的なファイル拡張子（.py, .md, .txt, .json, .yaml, .yml, .js, .html, .css等）を認識
+
+例:
+- "test.pyを作成して" → test.py
+- `README.md` を読んで → README.md
+- 設定ファイルconfig.yaml → config.yaml
+- 日本語ファイル.txt → 日本語ファイル.txt
+
+抽出結果（ファイル名のみ、見つからない場合は空文字列）:
+"""
+            
+            response = llm_manager.chat_with_history([
+                {"role": "system", "content": "ファイル名抽出の専門家です。ユーザーメッセージからファイル名のみを抽出し、見つからない場合は空文字列を返してください。"},
+                {"role": "user", "content": extraction_prompt}
+            ])
+            
+            # レスポンスからファイル名を抽出
+            extracted_name = response.strip()
+            
+            # 基本的な妥当性チェック
+            if extracted_name and self._is_valid_file_path(extracted_name):
+                return extracted_name
+            
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"LLMファイル名抽出エラー: {e}")
+            return None
+    
+    async def _handle_file_list_operation(self, user_message: str) -> str:
+        """ファイル一覧操作を処理
+        
+        Args:
+            user_message: ユーザーメッセージ
+            
+        Returns:
+            str: 一覧結果
+        """
+        try:
+            # ディレクトリを指定されている場合はその値を使用、なければカレントディレクトリ
+            directory = "."
+            
+            rich_ui.print_message(f"📂 ディレクトリ一覧: {directory}", "info")
+            
+            files = self.file_ops.list_files(directory)
+            
+            if not files:
+                return f"ディレクトリ '{directory}' にファイルが見つかりませんでした。"
+            
+            result = f"📂 ディレクトリ '{directory}' の内容:\n\n"
+            for file_info in files[:20]:  # 最大20件
+                file_type = file_info["type"]
+                name = file_info["name"]
+                size = file_info.get("size", 0)
+                
+                emoji = "📁" if file_type == "directory" else "📄"
+                size_str = f" ({size}B)" if file_type == "file" else ""
+                result += f"{emoji} {name}{size_str}\n"
+            
+            if len(files) > 20:
+                result += f"\n... および他 {len(files) - 20} 個のアイテム"
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"ファイル一覧操作エラー: {e}")
+            return f"ファイル一覧処理でエラーが発生しました: {str(e)}"
+    
+    async def _handle_generic_file_operation(self, user_message: str, system_prompt: str) -> str:
+        """汎用ファイル操作を処理
+        
+        Args:
+            user_message: ユーザーメッセージ
+            system_prompt: システムプロンプト
+            
+        Returns:
+            str: 処理結果
+        """
+        try:
+            from codecrafter.base.llm_client import llm_manager
+            
+            # LLMを使って汎用的な応答を生成
+            messages = [
+                {"role": "system", "content": system_prompt + "\n\nファイル操作に関する質問です。適切に回答してください。"},
+                {"role": "user", "content": user_message}
+            ]
+            
+            response = llm_manager.chat_with_history(messages)
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"汎用ファイル操作エラー: {e}")
+            return f"ファイル操作処理でエラーが発生しました: {str(e)}"
+    
+    async def _generate_file_summary(self, file_path: str, content: str) -> str:
+        """ファイル内容の要約を生成
+        
+        Args:
+            file_path: ファイルパス
+            content: ファイル内容
+            
+        Returns:
+            str: 要約
+        """
+        try:
+            from codecrafter.base.llm_client import llm_manager
+            
+            # 内容が短い場合は要約を省略
+            if len(content) < 500:
+                return "（内容が短いため要約を省略）"
+            
+            # LLMで要約を生成
+            messages = [
+                {"role": "system", "content": "以下のファイル内容を簡潔に要約してください。重要なポイントを3-5行でまとめてください。"},
+                {"role": "user", "content": f"ファイル: {file_path}\n\n内容:\n{content[:2000]}"}  # 最初の2000文字
+            ]
+            
+            summary = llm_manager.chat_with_history(messages)
+            return f"📋 要約:\n{summary}"
+            
+        except Exception as e:
+            self.logger.warning(f"ファイル要約生成エラー: {e}")
+            return "（要約の生成に失敗しました）"
     
     def get_agent_state(self) -> AgentState:
         """AgentStateを取得
@@ -665,3 +1066,48 @@ class EnhancedCompanionCore:
             Optional[Dict]: 現在のプラン情報
         """
         return self.plan_tool.get_current()
+
+    def test_filename_extraction(self, test_messages: List[str]) -> Dict[str, str]:
+        """ファイル名抽出のテスト用メソッド（デバッグ用）"""
+        results = {}
+        
+        for message in test_messages:
+            # 正規表現パターンでの抽出をテスト
+            file_path = None
+            import re
+            
+            file_patterns = [
+                # 引用符で囲まれたファイル名
+                r'["\']([^"\']+\.[a-zA-Z0-9]+)["\']',
+                r'["\']([^"\']+)["\']',  # 引用符で囲まれた任意の文字列
+                
+                # パス付きファイル名（Windows/Unix両対応）
+                r'([a-zA-Z0-9_\-\\./\\]+\.[a-zA-Z0-9]+)',  # パス付き拡張子ファイル名
+                r'([a-zA-Z0-9_\-\./\\]+\.[a-zA-Z0-9]+)',   # パス付き拡張子ファイル名（アンダースコア対応）
+                
+                # 拡張子付きファイル名
+                r'([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',     # 拡張子付きファイル名
+                r'([a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',     # 拡張子付きファイル名（アンダースコア対応）
+                
+                # 特定の拡張子ファイル
+                r'([a-zA-Z0-9_\-\.]+\.(?:py|md|txt|json|yaml|yml|js|html|css|java|cpp|c|h|sql|sh|bat|ps1))',
+                
+                # 日本語ファイル名（基本的なパターン）
+                r'([一-龯a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)',
+                
+                # 拡張子のないファイル名（最後の手段）
+                r'([a-zA-Z0-9_\-\.]+)(?:\s|$|。|、|です|ます)',
+            ]
+            
+            for pattern in file_patterns:
+                match = re.search(pattern, message)
+                if match:
+                    file_path = match.group(1)
+                    if self._is_valid_file_path(file_path):
+                        break
+                    else:
+                        file_path = None
+            
+            results[message] = file_path or "抽出失敗"
+        
+        return results

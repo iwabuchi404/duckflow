@@ -1,0 +1,84 @@
+id: flow.duckflow_chat_flow.v1
+title: Duckflow チャット入力・ファイル操作・応答生成フロー
+version: 1
+status: approved   # draft|approved|deprecated
+owner: team/companion
+scope: Duckflow の対話ループにおけるユーザー入力から意図解析、アクション判定、実行、応答生成までの一連のフロー
+summary: ユーザーからのメッセージを受け取り、意図を解析し、適切なアクション（直接応答・ファイル操作・コード実行・複数ステップタスク）を実行して応答を生成する
+rationale: Duckflow が「相棒」としてユーザーと継続的に対話しつつ、ファイル操作やコード実行などのタスクを安全に実行できるようにするための標準フロー
+human_notes: >-
+  作成/修正要求は flow.chat_plan_execute.v1（プラン→承認→実行）に委譲します。
+  承認は下位フローで実施され、このフローでは直接の変更適用は行いません。
+
+routing:
+  - id: r1
+    if: task_profile in [creation, modification] and confidence >= 0.7
+    route: plan_execute
+    reason: 作成/修正要求はプラン実行経路へ（下位フローに委譲）
+  - id: r2
+    if: task_profile == guidance
+    route: direct_response
+    reason: ガイダンスは直接応答
+  - id: r3
+    if: else
+    route: clarification
+    reason: 不確実/抽象度高は確認を優先
+
+subflows:
+  - flow.chat_plan_execute.v1
+
+steps:
+  - id: s1
+    name: receive_user_input
+    actor: chat_loop
+    inputs: [user_message]
+    outputs: [raw_input]
+    hint: ユーザーからのテキスト入力を取得
+  - id: s2
+    name: analyze_intent
+    actor: core
+    inputs: [raw_input]
+    outputs: [action_type, intent_result]
+    hint: IntentUnderstandingSystem で意図を解析し ActionType を決定
+  - id: s3
+    name: dispatch_action
+    actor: core
+    inputs: [action_type, intent_result]
+    outputs: [action_result]
+    hint: ActionType に応じて DirectResponse / FileOperation / CodeExecution / MultiStepTask を実行
+  - id: s4
+    name: generate_response
+    actor: core
+    inputs: [action_result]
+    outputs: [assistant_message]
+    hint: 実行結果を元に自然な応答メッセージを生成
+  - id: s5
+    name: output_to_user
+    actor: chat_loop
+    inputs: [assistant_message]
+    outputs: [displayed_message]
+    hint: Rich UI でユーザーに応答を表示
+
+approvals:
+  high: manual_required
+  medium: policy_default
+  low: policy_default
+
+error_handling:
+  - when: intent_analysis_failed
+    action: request_clarification
+    redirect: s2
+  - when: file_operation_failed
+    action: request_clarification
+    redirect: s2
+  - when: code_execution_failed
+    action: request_clarification
+    redirect: s2
+  - when: unknown_action_type
+    action: fallback_direct_response
+    redirect: s4
+
+observability:
+  events: [input_received, intent_analyzed, action_dispatched, response_generated, flow_completed]
+  log_keys: [flow_id, step_id, plan_id, correlation_id, session_id, user_message, action_type]
+  artifacts: [logs/sessions/<session_id>/flow.log]

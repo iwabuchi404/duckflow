@@ -971,3 +971,147 @@ class PlanTool:
             self._current_plan_id = None
         self._update_index()
         self.logger.info("現在のプランをクリア")
+    
+    # === LLM選択処理統合メソッド ===
+    
+    async def process_user_selection_enhanced(self, user_input: str, plan_id: str) -> Dict[str, Any]:
+        """LLM強化ユーザー選択処理
+        
+        Args:
+            user_input: ユーザーの入力テキスト
+            plan_id: プランID
+            
+        Returns:
+            Dict[str, Any]: 選択処理結果
+        """
+        if plan_id not in self._plans:
+            raise ValueError(f"プランが見つかりません: {plan_id}")
+        
+        # LLMPlanApprovalHandlerをインポート（循環インポート回避）
+        from companion.llm_choice.plan_approval_handler import (
+            LLMPlanApprovalHandler, PlanApprovalContext
+        )
+        
+        # プランコンテキストを構築
+        plan = self._plans[plan_id]
+        plan_state = self._plan_states[plan_id]
+        
+        # ActionSpecをavailable_actionsに変換（簡略化）
+        available_actions = [spec.base for spec in plan_state.action_specs]
+        
+        plan_context = PlanApprovalContext(
+            plan=plan,
+            plan_state=plan_state,
+            available_actions=available_actions,
+            risk_level=self._assess_plan_risk_level(plan_state),
+            preview_summary=self._generate_preview_summary(plan_state)
+        )
+        
+        # LLM処理を実行
+        handler = LLMPlanApprovalHandler()
+        approval_result = await handler.process_plan_response(user_input, plan_context)
+        
+        # 結果を処理してPlanToolの形式に変換
+        return self._convert_approval_result_to_selection(approval_result, plan_id)
+    
+    def _assess_plan_risk_level(self, plan_state: PlanState) -> str:
+        """プランのリスクレベルを評価
+        
+        Args:
+            plan_state: プラン状態
+            
+        Returns:
+            str: リスクレベル ("low", "medium", "high")
+        """
+        if plan_state.previews and plan_state.previews.risk_score:
+            if plan_state.previews.risk_score >= 0.8:
+                return "high"
+            elif plan_state.previews.risk_score >= 0.5:
+                return "medium"
+            else:
+                return "low"
+        
+        # ActionSpecの内容に基づく簡易評価
+        high_risk_operations = {"write", "create", "mkdir"}
+        risky_spec_count = sum(
+            1 for spec in plan_state.action_specs
+            if spec.base.kind in high_risk_operations
+        )
+        
+        total_specs = len(plan_state.action_specs)
+        if total_specs == 0:
+            return "low"
+        
+        risk_ratio = risky_spec_count / total_specs
+        if risk_ratio >= 0.7:
+            return "high"
+        elif risk_ratio >= 0.3:
+            return "medium"
+        else:
+            return "low"
+    
+    def _generate_preview_summary(self, plan_state: PlanState) -> str:
+        """プレビューサマリーを生成
+        
+        Args:
+            plan_state: プラン状態
+            
+        Returns:
+            str: プレビューサマリー
+        """
+        if plan_state.previews and plan_state.previews.files:
+            files_summary = f"{len(plan_state.previews.files)}個のファイル"
+            if plan_state.previews.diffs:
+                files_summary += f"、{len(plan_state.previews.diffs)}箇所の変更"
+            return files_summary
+        
+        # ActionSpecベースの簡易サマリー
+        operation_counts = {}
+        for spec in plan_state.action_specs:
+            op = spec.base.kind
+            operation_counts[op] = operation_counts.get(op, 0) + 1
+        
+        summary_parts = []
+        for op, count in operation_counts.items():
+            summary_parts.append(f"{op}: {count}件")
+        
+        return ", ".join(summary_parts) if summary_parts else "アクションなし"
+    
+    def _convert_approval_result_to_selection(self, approval_result, plan_id: str) -> Dict[str, Any]:
+        """承認結果をPlanToolの選択結果に変換
+        
+        Args:
+            approval_result: LLM承認結果
+            plan_id: プランID
+            
+        Returns:
+            Dict[str, Any]: 選択結果
+        """
+        from companion.llm_choice.plan_approval_handler import ApprovalAction
+        
+        result = {
+            "plan_id": plan_id,
+            "action": approval_result.action.value,
+            "confidence": approval_result.confidence,
+            "reasoning": approval_result.reasoning,
+            "approved_spec_ids": approval_result.approved_spec_ids,
+            "clarification_needed": approval_result.clarification_needed,
+            "user_message": approval_result.user_message
+        }
+        
+        # アクションに応じた具体的な処理
+        if approval_result.action == ApprovalAction.APPROVE_ALL:
+            result["should_approve"] = True
+            result["selection"] = SpecSelection(all=True)
+        elif approval_result.action == ApprovalAction.APPROVE_PARTIAL:
+            result["should_approve"] = True
+            result["selection"] = SpecSelection(all=False, ids=approval_result.approved_spec_ids)
+        elif approval_result.action == ApprovalAction.REJECT:
+            result["should_approve"] = False
+            result["selection"] = SpecSelection(all=False, ids=[])
+        else:  # REQUEST_MODIFICATION or REQUEST_DETAILS
+            result["should_approve"] = False
+            result["needs_clarification"] = True
+            result["modifications_requested"] = approval_result.modifications_requested
+        
+        return result

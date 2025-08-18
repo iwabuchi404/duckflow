@@ -1,0 +1,58 @@
+id: flow.direct_response.v1
+title: 直接応答（DirectResponse）
+version: 1
+status: approved
+owner: team/companion
+scope: ガイダンス/説明/要約などの応答生成フロー
+
+summary: ガイダンス系の入力を解析し、LLMで直接応答を生成してユーザーに返す
+rationale: 低リスク・高速応答を優先し、実行やファイル変更は行わない
+human_notes: >-
+  対話履歴（直近20件）とシステムプロンプトを用いて LLM で応答を生成します。
+  作成/修正要求に該当する場合は本フローではなく plan_execute 側にルーティングします。
+
+routing:
+  - id: r1
+    if: task_profile == guidance or action_type == direct_response
+    route: direct_response
+    reason: ガイダンス/説明系の入力
+
+steps:
+  - id: s1
+    name: receive_user_input
+    actor: chat_loop
+    inputs: [user_message]
+    outputs: [raw_input]
+  - id: s2
+    name: analyze_intent
+    actor: core
+    inputs: [raw_input]
+    outputs: [action_type]
+    hint: guidance かつ direct_response であることを確認
+  - id: s3
+    name: generate_response
+    actor: core
+    inputs: [raw_input]
+    outputs: [assistant_message]
+    hint: EnhancedCore or CompanionCore で LLM 応答生成
+  - id: s4
+    name: output_to_user
+    actor: chat_loop
+    inputs: [assistant_message]
+    outputs: [displayed_message]
+
+approvals:
+  high: not_applicable
+  medium: not_applicable
+  low: not_applicable
+
+error_handling:
+  - when: intent_analysis_failed
+    action: fallback_direct_response
+    redirect: s3
+
+observability:
+  events: [input_received, intent_analyzed, response_generated, flow_completed]
+  log_keys: [flow_id, step_id, correlation_id, session_id]
+  artifacts: [logs/sessions/<session_id>/direct_response.log]
+

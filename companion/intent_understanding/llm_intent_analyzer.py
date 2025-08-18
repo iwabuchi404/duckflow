@@ -80,8 +80,9 @@ class LLMIntentAnalyzer:
 7. **推奨アプローチ（Suggested Approach）**: 実行方法の提案
 
 **6種類の意図（正確な値を使用してください）:**
-- information_request: 情報の確認・表示・説明（ファイル内容の確認も含む）
-- analysis_request: コード・データの分析・評価
+- information_request: 一般的な情報の確認・説明・質問（概念や手順について）
+- analysis_request: コード・データ・ファイル内容の分析・評価・確認・読み込み
+  例: 「ファイルを読んで」「内容を確認」「game_doc.mdを見て」
 - creation_request: 新規ファイル・機能の作成
 - modification_request: 既存コード・設定の修正
 - search_request: 特定の要素・パターンの検索
@@ -260,7 +261,7 @@ information_request, analysis_request, creation_request, modification_request, s
             primary_intent = IntentType.CREATION_REQUEST
         elif any(kw in input_lower for kw in ["修正", "変更", "改善", "直して", "更新"]):
             primary_intent = IntentType.MODIFICATION_REQUEST
-        elif any(kw in input_lower for kw in ["分析", "評価", "診断", "チェック"]):
+        elif any(kw in input_lower for kw in ["分析", "評価", "診断", "チェック", "読み", "読んで", "確認", "内容", "見て", "把握"]):
             primary_intent = IntentType.ANALYSIS_REQUEST
         elif any(kw in input_lower for kw in ["検索", "探して", "見つけて", "調べて"]):
             primary_intent = IntentType.SEARCH_REQUEST

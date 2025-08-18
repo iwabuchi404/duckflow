@@ -1,0 +1,51 @@
+id: flow.code_execution.v1
+title: コード実行（承認付き）
+version: 1
+status: approved
+owner: team/companion
+scope: 小規模なコード実行/テスト実行などの安全な実行制御
+
+summary: 実行は高リスクのため必ず承認を経て、実装が未対応の場合は明確に失敗として扱う
+rationale: 誤実行のリスクが高く、逐次拡張の余地を残しつつ安全側に倒す
+human_notes: >-
+  現行実装では実行コマンドの本実行は未対応です（承認 UI による可否判断とログのみ）。
+  拡張時は sandbox/timeout/出力収集の仕様を追加してください。
+
+routing:
+  - id: r1
+    if: action_type == code_execution
+    route: code_execute
+    reason: 明示的な実行要求
+
+steps:
+  - id: s1
+    name: request_execution_approval
+    actor: approval_ui
+    outputs: [approved]
+    hint: OperationType.EXECUTE_PYTHON 等で承認を取得
+  - id: s2
+    name: execute_command
+    actor: core
+    outputs: [result]
+    hint: 現状は未実装。将来は sandbox 実行へ
+  - id: s3
+    name: post_report
+    actor: system
+    outputs: [artifacts]
+
+approvals:
+  high: manual_required
+  medium: manual_required
+  low: manual_required
+
+error_handling:
+  - when: not_approved
+    action: block_and_hint
+  - when: execution_not_implemented
+    action: fail_with_message
+
+observability:
+  events: [execution_requested, approved, executed, completed]
+  log_keys: [flow_id, step_id, correlation_id, session_id]
+  artifacts: [logs/executions/<correlation_id>.json]
+

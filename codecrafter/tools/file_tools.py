@@ -420,57 +420,28 @@ class FileTools:
         except Exception as e:
             raise FileOperationError(f"ファイル一覧の取得に失敗しました: {e}")
     
-    def read_file(self, file_path: str, encoding: Optional[str] = None) -> str:
+    @staticmethod
+    def read_file(file_path: str, encoding: Optional[str] = None) -> str:
         """
-        ファイルを読み取り（Duck Keeper統合版）
+        ファイルを読み取り（シンプル実装）
         
         Args:
             file_path: ファイルパス
-            encoding: 文字エンコーディング（Noneの場合は自動判定）
+            encoding: 文字エンコーディング（Noneの場合はUTF-8を使用）
         
         Returns:
             ファイルの内容
         """
-        # まずDuck FSを試行
-        duck_fs_error = None
+        path = Path(file_path)
+        if not path.is_file():
+            raise FileOperationError(f"ファイルが存在しません: {file_path}")
+        # エンコーディングが指定されていない場合はUTF-8を使用
+        if encoding is None:
+            encoding = "utf-8"
         try:
-            result = duck_fs.read(file_path)
-            return result.content
-        except DuckFileSystemError as e:
-            duck_fs_error = e
-            print(f"[DEBUG] Duck FSエラー: {str(e)}")
+            return path.read_text(encoding=encoding)
         except Exception as e:
-            duck_fs_error = e
-            print(f"[DEBUG] Duck FS予期外エラー: {str(e)}")
-        
-        # Duck FSが失敗した場合、フォールバック処理を実行
-        try:
-            path = self._validate_file_path(file_path)
-            self._validate_file_size(path)
-            
-            if not path.exists():
-                raise FileOperationError(f"ファイルが存在しません: {file_path}")
-            
-            if not path.is_file():
-                raise FileOperationError(f"パスがファイルではありません: {file_path}")
-            
-            # エンコーディングが指定されていない場合は自動判定
-            if encoding is None:
-                encoding = self._detect_encoding(path)
-            
-            # ファイル読み取りを試行
-            try:
-                with open(path, 'r', encoding=encoding, errors='replace') as f:
-                    content = f.read()
-                print(f"[DEBUG] フォールバック読み取り成功: {len(content)} chars")
-                return content
-            except UnicodeDecodeError:
-                # 指定されたエンコーディングで失敗した場合、フォールバック試行
-                return self._read_with_fallback_encoding(path, encoding)
-                
-        except Exception as fallback_error:
-            # 両方失敗した場合は両方のエラーを報告
-            raise FileOperationError(f"Duck Keeper読み取りエラー: {duck_fs_error}, フォールバック読み取りエラー: {fallback_error}")
+            raise FileOperationError(f"ファイル読み取り失敗: {e}")
     
     def write_file(self, file_path: str, content: str, encoding: Optional[str] = None, create_dirs: bool = True) -> Dict[str, Any]:
         """

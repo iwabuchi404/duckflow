@@ -1,0 +1,61 @@
+id: flow.multi_step_task.v1
+title: 複数ステップタスク（計画→選択→分岐）
+version: 1
+status: approved
+owner: team/companion
+scope: 分析/調査/改善案など、複数手順を伴うタスクの対話進行
+
+summary: まず計画（TaskPlan）を提示し、ユーザーの選択（実行/明確化/代替案）に応じて分岐する
+rationale: 抽象的な要求に対して、性急に適用せず、理解と共通認識を優先
+human_notes: >-
+  A: 実行 → 内容に応じて下位フロー（file_operation / code_execution）へ委譲。
+  B: 明確化 → 具体化の質問を返し、再度計画生成または更新。
+  C: 代替案 → 代替アプローチを提示して、再選択を促す。
+
+routing:
+  - id: r1
+    if: action_type == multi_step_task
+    route: plan_and_decide
+    reason: 抽象要求はまず計画提示へ
+
+steps:
+  - id: s1
+    name: create_task_plan
+    actor: core
+    inputs: [user_message]
+    outputs: [task_plan]
+  - id: s2
+    name: present_plan_and_options
+    actor: core
+    outputs: [user_choice]
+    hint: A(実行)/B(明確化)/C(代替案)
+  - id: s3a
+    name: execute_selected
+    actor: core
+    outputs: [result]
+    hint: ファイル/実行は下位フローに委譲
+  - id: s3b
+    name: request_clarification
+    actor: core
+    outputs: [questions]
+  - id: s3c
+    name: suggest_alternatives
+    actor: core
+    outputs: [alternatives]
+
+approvals:
+  high: delegated_to_subflows
+  medium: delegated_to_subflows
+  low: delegated_to_subflows
+
+error_handling:
+  - when: plan_generation_failed
+    action: fallback_micro_plan
+  - when: invalid_choice
+    action: reprompt_choice
+
+observability:
+  events: [plan_created, options_presented, choice_received, delegated, completed]
+  log_keys: [flow_id, step_id, correlation_id]
+  artifacts: [logs/sessions/<correlation_id>/multi_step.json]
+

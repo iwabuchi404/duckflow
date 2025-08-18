@@ -403,3 +403,5 @@ approval:
     auto_approve_low: true    # 低リスクは自動承認
     auto_approve_high: false  # 高リスクの自動承認（必要時のみtrueに）
     auto_approve_all: false   # 全自動承認（非推奨）
+
+

@@ -17,6 +17,7 @@ from .chat_loop import ChatLoop
 from .task_loop import TaskLoop
 from .collaborative_planner import ActionSpec
 from .file_ops import SimpleFileOps, FileOpOutcome
+from .simple_approval import ApprovalMode
 
 
 class EnhancedChatLoop(ChatLoop):
@@ -119,27 +120,9 @@ class EnhancedChatLoop(ChatLoop):
         plan_state = self.enhanced_companion.get_plan_state()
         plan_pending = bool(plan_state and plan_state.get("pending"))
         
-        if plan_pending and OptionResolver.is_selection_input(user_message):
-            self.logger.info("プラン保留中の選択入力を検出、選択プラン実行に直行")
-            # 実行可能なActionSpecがなければ選択実行は行わない
-            if not (self.dual_loop_system and self.dual_loop_system._has_executable_plan()):
-                from codecrafter.ui.rich_ui import rich_ui
-                self.logger.warning("選択できるプランが未定義のため、選択実行を中止")
-                rich_ui.print_message("⚠️ 現在選択できる具体的プランがありません。作業項目を提案します。", "warning")
-                await self._handle_enhanced_clarification_flow(intent_result)
-                return
-            # メタデータに選択番号が無ければデフォルト1を付与
-            md = intent_result.setdefault("metadata", {})
-            if "selection" not in md:
-                md["selection"] = 1
-            task_data = {
-                "type": "execute_selected_plan",
-                "intent_result": intent_result,
-                "timestamp": datetime.now(),
-            }
-            self.task_queue.put(task_data)
-            from codecrafter.ui.rich_ui import rich_ui
-            rich_ui.print_message("🚀 選択されたプランを実行キューに投入しました", "success")
+        if plan_pending:
+            # LLM強化プラン選択処理を使用
+            await self._handle_plan_pending_input_enhanced(user_message, intent_result)
             return
         
         # アンチスタール検出（clarificationの場合のみ）
@@ -344,6 +327,153 @@ class EnhancedChatLoop(ChatLoop):
             self.logger.error(f"拡張版タスク送信エラー: {e}")
             # フォールバック
             await super()._handle_task_with_intent(intent_result)
+    
+    async def _handle_plan_pending_input_enhanced(self, user_message: str, intent_result: Dict[str, Any]):
+        """LLM強化プラン保留中入力処理
+        
+        Args:
+            user_message: ユーザーメッセージ
+            intent_result: 意図理解結果
+        """
+        try:
+            from codecrafter.ui.rich_ui import rich_ui
+            
+            # 実行可能なプランがあるかチェック
+            if not (self.dual_loop_system and self.dual_loop_system._has_executable_plan()):
+                self.logger.warning("選択できるプランが未定義のため、詳細確認フローに移行")
+                rich_ui.print_message("⚠️ 現在選択できる具体的プランがありません。作業項目を提案します。", "warning")
+                await self._handle_enhanced_clarification_flow(intent_result)
+                return
+            
+            # プラン情報を取得
+            plan_state = self.enhanced_companion.get_plan_state()
+            current_plan_id = plan_state.get("plan_id")
+            
+            if not current_plan_id:
+                self.logger.warning("プランIDが未設定、通常の対話処理に移行")
+                await self._handle_enhanced_task_with_intent(intent_result)
+                return
+            
+            # PlanToolのLLM強化選択処理を使用
+            try:
+                plan_tool = self.enhanced_companion.plan_tool
+                if hasattr(plan_tool, 'process_user_selection_enhanced'):
+                    selection_result = await plan_tool.process_user_selection_enhanced(
+                        user_message, current_plan_id
+                    )
+                    
+                    self.logger.info(f"LLM選択処理結果: {selection_result['action']} (確信度: {selection_result['confidence']:.2f})")
+                    
+                    # 結果に基づく処理分岐
+                    if selection_result.get("clarification_needed"):
+                        # 確認要求
+                        from companion.llm_choice.plan_approval_handler import LLMPlanApprovalHandler
+                        from companion.plan_tool import Plan, PlanState
+                        
+                        # 確認メッセージを表示
+                        handler = LLMPlanApprovalHandler()
+                        plan = plan_tool._plans.get(current_plan_id)
+                        plan_state_obj = plan_tool._plan_states.get(current_plan_id)
+                        
+                        if plan and plan_state_obj:
+                            from companion.llm_choice.plan_approval_handler import PlanApprovalContext
+                            
+                            plan_context = PlanApprovalContext(
+                                plan=plan,
+                                plan_state=plan_state_obj,
+                                available_actions=[spec.base for spec in plan_state_obj.action_specs],
+                                risk_level=selection_result.get("risk_level", "medium")
+                            )
+                            
+                            confirmation_msg = handler.format_approval_confirmation(
+                                type('ApprovalResult', (), selection_result)(), plan_context
+                            )
+                            rich_ui.print_message(confirmation_msg, "question")
+                        else:
+                            rich_ui.print_message("申し訳ありませんが、より明確に選択肢を指定してください。", "question")
+                        
+                        return
+                    
+                    elif selection_result.get("should_approve"):
+                        # 承認実行
+                        if selection_result.get("selection"):
+                            # 正式な承認処理
+                            approval_result = plan_tool.approve(
+                                current_plan_id,
+                                approver="user",
+                                selection=selection_result["selection"]
+                            )
+                            
+                            rich_ui.print_message(f"✅ プランを承認しました: {approval_result['title']}", "success")
+                            
+                            # 実行キューに送信
+                            md = intent_result.setdefault("metadata", {})
+                            md["approved_plan"] = approval_result
+                            md["selection_result"] = selection_result
+                            
+                            task_data = {
+                                "type": "execute_approved_plan_enhanced",
+                                "intent_result": intent_result,
+                                "plan_approval": approval_result,
+                                "timestamp": datetime.now(),
+                            }
+                            self.task_queue.put(task_data)
+                            rich_ui.print_message("🚀 承認されたプランを実行キューに投入しました", "success")
+                        else:
+                            rich_ui.print_message("⚠️ 承認対象の選択肢が特定できませんでした", "warning")
+                    
+                    else:
+                        # 拒否または修正要求
+                        if selection_result.get("modifications_requested"):
+                            rich_ui.print_message("📝 プランの修正要求を受け付けました:", "info")
+                            for mod in selection_result["modifications_requested"]:
+                                rich_ui.print_message(f"  - {mod}", "info")
+                        else:
+                            rich_ui.print_message("❌ プランが拒否されました", "info")
+                        
+                        # プラン状態をクリア
+                        self.enhanced_companion.clear_plan_state()
+                        rich_ui.print_message("新しい要求をお聞かせください。", "info")
+                
+                else:
+                    # フォールバック: 従来のパターンマッチング
+                    await self._handle_plan_pending_fallback(user_message, intent_result)
+                    
+            except Exception as e:
+                self.logger.error(f"LLM選択処理エラー: {e}")
+                # フォールバック処理
+                await self._handle_plan_pending_fallback(user_message, intent_result)
+                
+        except Exception as e:
+            self.logger.error(f"プラン保留中入力処理エラー: {e}")
+            # 最終フォールバック
+            from codecrafter.ui.rich_ui import rich_ui
+            rich_ui.print_message("申し訳ありませんが、入力を理解できませんでした。", "error")
+    
+    async def _handle_plan_pending_fallback(self, user_message: str, intent_result: Dict[str, Any]):
+        """プラン保留中の従来処理（フォールバック用）"""
+        from companion.intent_understanding.intent_integration import OptionResolver
+        
+        if OptionResolver.is_selection_input(user_message):
+            self.logger.info("従来のパターンマッチングでプラン選択を処理")
+            
+            # メタデータに選択番号が無ければデフォルト1を付与
+            md = intent_result.setdefault("metadata", {})
+            if "selection" not in md:
+                md["selection"] = 1
+            
+            task_data = {
+                "type": "execute_selected_plan",
+                "intent_result": intent_result,
+                "timestamp": datetime.now(),
+            }
+            self.task_queue.put(task_data)
+            
+            from codecrafter.ui.rich_ui import rich_ui
+            rich_ui.print_message("🚀 選択されたプランを実行キューに投入しました", "success")
+        else:
+            # 選択入力ではない場合は通常の対話処理
+            await self._handle_enhanced_task_with_intent(intent_result)
 
 
 class EnhancedTaskLoop(TaskLoop):
@@ -1204,11 +1334,12 @@ class EnhancedDualLoopSystem:
     - 既存システムとの完全統合
     """
     
-    def __init__(self, session_id: Optional[str] = None):
+    def __init__(self, session_id: Optional[str] = None, approval_mode: ApprovalMode = ApprovalMode.STANDARD):
         """拡張システムを初期化
         
         Args:
             session_id: セッションID（省略時は自動生成）
+            approval_mode: 承認モード
         """
         # セッションID
         self.session_id = session_id or str(uuid.uuid4())
@@ -1220,10 +1351,10 @@ class EnhancedDualLoopSystem:
         # 実行阻害改善機能
         self.plan_context = PlanContext()
         self.anti_stall_guard = AntiStallGuard()
-        self.plan_executor = PlanExecutor(SimpleFileOps())
+        self.plan_executor = PlanExecutor(SimpleFileOps(approval_mode=approval_mode))
         
         # 拡張版CompanionCore（既存システム統合）
-        self.enhanced_companion = EnhancedCompanionCore(self.session_id)
+        self.enhanced_companion = EnhancedCompanionCore(self.session_id, approval_mode=approval_mode)
         
         # 実行阻害改善機能をCompanionCoreに注入
         self.enhanced_companion.plan_context = self.plan_context
