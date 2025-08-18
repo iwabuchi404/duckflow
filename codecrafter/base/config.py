@@ -209,6 +209,8 @@ class Config(BaseModel):
     promptsmith: Optional[PromptSmithConfig] = Field(default=None, description="PromptSmith設定")
     duck_keeper: DuckKeeperConfig = Field(default_factory=DuckKeeperConfig, description="Duck Keeper設定")
     duck_pacemaker: Optional[DuckPacemakerConfig] = Field(default=None, description="Duck Pacemaker設定")
+    # Phase 1 settings (optional, ignored if absent)
+    phase1: Optional[Dict[str, Any]] = Field(default=None, description="Phase 1 設定")
 
 
 class ConfigManager:

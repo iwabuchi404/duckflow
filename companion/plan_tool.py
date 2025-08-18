@@ -186,6 +186,48 @@ class PlanTool:
         
         # 起動時にインデックスを読み込み
         self._load_index()
+        # ディープデバッグログ（外部から有効化）
+        self.enable_deep_plan_logging = False
+        try:
+            self.logger.info(f"PlanTool init: id={id(self)} logs_dir={self.logs_dir} plans_dir={self.plans_dir}")
+        except Exception:
+            pass
+
+    def debug_state(self) -> Dict[str, Any]:
+        """現在のPlanTool状態をダンプ（診断用）"""
+        try:
+            plans_summary = []
+            for pid, plan in self._plans.items():
+                st = self._plan_states.get(pid)
+                plans_summary.append({
+                    'id': pid,
+                    'title': plan.title,
+                    'status': st.status.value if st else 'unknown',
+                    'action_count': len(st.action_specs) if st else 0,
+                    'created_at': plan.created_at
+                })
+            state = {
+                'self_id': id(self),
+                'logs_dir': str(self.logs_dir),
+                'plans_dir': str(self.plans_dir),
+                'plans_dir_exists': self.plans_dir.exists(),
+                'index_exists': (self.plans_dir / 'index.json').exists(),
+                'current_plan_id': self._current_plan_id,
+                'plans_total': len(self._plans),
+                'plans': plans_summary,
+            }
+            return state
+        except Exception as e:
+            return {'error': str(e)}
+
+    def _log_debug_state(self, where: str):
+        """ディープログが有効な場合に内部状態を出力"""
+        try:
+            if getattr(self, 'enable_deep_plan_logging', False):
+                state = self.debug_state()
+                self.logger.info(f"[PlanTool debug] {where}: {state}")
+        except Exception:
+            pass
     
     def _load_index(self):
         """インデックスファイルから既存プランを読み込み"""
@@ -358,6 +400,7 @@ class PlanTool:
         self._save_plan(plan_id)
         
         self.logger.info(f"プラン提案: {plan_id} - {title}")
+        self._log_debug_state("after_propose")
         return plan_id
     
     def _generate_title(self, content: str) -> str:
@@ -400,6 +443,7 @@ class PlanTool:
             self._save_plan(plan_id)
             
             self.logger.info(f"ActionSpec設定完了: {plan_id} ({len(specs)}件)")
+            self._log_debug_state("after_set_action_specs")
         else:
             self.logger.warning(f"ActionSpecバリデーション失敗: {plan_id}")
         
@@ -601,6 +645,7 @@ class PlanTool:
         self._save_plan(plan_id)
         
         self.logger.info(f"承認要求: {plan_id} (要求ID: {approval_request_id})")
+        self._log_debug_state("after_request_approval")
         return approval_request_id
     
     def approve(self, plan_id: str, approver: str, selection: SpecSelection) -> Dict[str, Any]:
@@ -644,6 +689,7 @@ class PlanTool:
         }
         
         self.logger.info(f"プラン承認: {plan_id} by {approver}")
+        self._log_debug_state("after_approve")
         return approved_plan
     
     def _get_selected_specs(self, plan_id: str, selection: SpecSelection) -> List[ActionSpecExt]:

@@ -18,6 +18,9 @@ from .task_loop import TaskLoop
 from .collaborative_planner import ActionSpec
 from .file_ops import SimpleFileOps, FileOpOutcome
 from .simple_approval import ApprovalMode
+from .state.transition import TransitionController, TransitionLimiter
+from .state.agent_state import Step, Status
+from codecrafter.ui.rich_ui import rich_ui
 
 
 class EnhancedChatLoop(ChatLoop):
@@ -42,13 +45,72 @@ class EnhancedChatLoop(ChatLoop):
         self.enhanced_companion = enhanced_companion
         self.agent_state = enhanced_companion.get_agent_state()
         self.dual_loop_system = dual_loop_system  # 親システムへの参照
+        # 発話単位の遷移カウンタ（Outer loop側で管理）
+        if self.dual_loop_system and hasattr(self.dual_loop_system, 'transition_limiter'):
+            self.transition_limiter = self.dual_loop_system.transition_limiter
+        else:
+            self.transition_limiter = TransitionLimiter()
         
         # ログ設定
         self.logger = logging.getLogger(__name__)
+
+    def _show_task_status(self):
+        """現在のタスク状況を表示（Step/Status 付き）"""
+        try:
+            st = self.agent_state
+            rich_ui.print_message(f"🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "info")
+        except Exception:
+            pass
+        
+        # EnhancedDualLoopSystemの詳細ステータスを表示
+        if self.dual_loop_system:
+            try:
+                system_status = self.dual_loop_system.get_status()
+                phase1_info = system_status.get("phase1", {})
+                
+                if "current_step" in phase1_info:
+                    rich_ui.print_message(f"🎯 システム状態: {phase1_info['current_step']} → {phase1_info['current_status']}", "muted")
+                
+                # 遷移制御情報
+                transition_info = phase1_info.get("transition_control", {})
+                if transition_info.get("enabled"):
+                    max_trans = transition_info.get("max_transitions", 1)
+                    current_count = transition_info.get("current_count", 0)
+                    can_trans = transition_info.get("can_transition", True)
+                    
+                    status_icon = "✅" if can_trans else "⚠️"
+                    rich_ui.print_message(f"{status_icon} 遷移制御: {current_count}/{max_trans} (1発話内)", "muted")
+                
+                # 許可された遷移
+                allowed_trans = phase1_info.get("allowed_transitions", {})
+                if allowed_trans:
+                    rich_ui.print_message("🔄 許可された遷移:", "muted")
+                    for from_step, to_steps in allowed_trans.items():
+                        if to_steps:
+                            rich_ui.print_message(f"  {from_step}: {' → '.join(to_steps)}", "muted")
+                
+            except Exception as e:
+                rich_ui.print_message(f"⚠️ システムステータス取得エラー: {e}", "warning")
+        
+        # 既存の状況表示も実行
+        try:
+            super()._show_task_status()
+        except Exception:
+            pass
     
     async def _handle_user_input_unified(self, user_input: str):
         """拡張版統一意図理解による入力処理"""
         try:
+            # 発話の先頭で遷移カウンタをリセット
+            if self.transition_limiter:
+                self.transition_limiter.reset()
+            # ステータス更新（Outer Loopで会話開始）
+            try:
+                self.agent_state.set_step_status(Step.PLANNING, Status.IN_PROGRESS)
+                st = self.agent_state
+                rich_ui.print_message(f"💬 会話開始 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+            except Exception:
+                pass
             # 1. 拡張版統一意図理解を実行（プラン状態をコンテキストに含める）
             plan_state = self.enhanced_companion.get_plan_state()
             context = {"plan_state": plan_state} if plan_state.get("pending") else None
@@ -65,7 +127,7 @@ class EnhancedChatLoop(ChatLoop):
             
             # 新ルーティングシステムが適用されている場合
             if route_type and hasattr(route_type, 'value'):
-                await self._handle_routing_based_processing(intent_result)
+                await self._handle_state_based_processing(intent_result)
             else:
                 # フォールバック: 既存のActionType分岐
                 if action_type.value == "direct_response":
@@ -80,15 +142,178 @@ class EnhancedChatLoop(ChatLoop):
             # フォールバック: 既存システム
             await super()._handle_user_input_unified(user_input)
     
+    async def _handle_state_based_processing(self, intent_result: Dict[str, Any]):
+        """状態ベース処理のハンドラー（設計簡略化版）
+        
+        Args:
+            intent_result: 統合意図理解結果
+        """
+        try:
+            self.logger.info("状態ベース処理を開始")
+            
+            # 状態に基づく処理ロジック
+            action_type = intent_result.get("action_type")
+            
+            if action_type and hasattr(action_type, 'value'):
+                if action_type.value == "creation_request":
+                    # ファイル作成要求の処理
+                    return await self._handle_file_creation(intent_result)
+                elif action_type.value == "guidance_request":
+                    # ガイダンス要求の処理
+                    return await self._handle_guidance_request(intent_result)
+                else:
+                    # その他の要求は既存システムに委譲
+                    return await self._handle_legacy_processing(intent_result)
+            else:
+                # アクションタイプが不明な場合は既存システムに委譲
+                return await self._handle_legacy_processing(intent_result)
+                
+        except Exception as e:
+            self.logger.error(f"状態ベース処理エラー: {e}")
+            # エラー時は既存システムに委譲
+            return await self._handle_legacy_processing(intent_result)
+    
+    async def _handle_file_creation(self, intent_result: Dict[str, Any]):
+        """ファイル作成要求の処理"""
+        try:
+            self.logger.info("ファイル作成要求を処理中")
+            
+            # プラン生成と実行
+            if hasattr(self, 'enhanced_companion') and self.enhanced_companion:
+                # 統一プラン生成
+                plan_id = self.enhanced_companion._generate_plan_unified(intent_result.get("message", ""))
+                
+                # プランの実行
+                result = self.enhanced_companion.plan_tool.execute(plan_id)
+                
+                return {
+                    "success": True,
+                    "plan_id": plan_id,
+                    "result": result
+                }
+            else:
+                raise ValueError("enhanced_companionが利用できません")
+                
+        except Exception as e:
+            self.logger.error(f"ファイル作成処理エラー: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def _handle_guidance_request(self, intent_result: Dict[str, Any]):
+        """ガイダンス要求の処理"""
+        try:
+            self.logger.info("ガイダンス要求を処理中")
+            
+            # 基本的なガイダンス応答
+            return {
+                "success": True,
+                "response_type": "guidance",
+                "message": "ガイダンスを提供します。具体的な要求をお聞かせください。"
+            }
+            
+        except Exception as e:
+            self.logger.error(f"ガイダンス処理エラー: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    async def _handle_legacy_processing(self, intent_result: Dict[str, Any]):
+        """既存システムへの委譲処理"""
+        try:
+            self.logger.info("既存システムに委譲中")
+            
+            action_type = intent_result.get("action_type")
+            if action_type and hasattr(action_type, 'value'):
+                if action_type.value == "direct_response":
+                    return await self._handle_enhanced_direct_response_with_validation(intent_result)
+                else:
+                    return await self._handle_enhanced_task_with_intent(intent_result)
+            else:
+                # フォールバック: 既存システム
+                return await super()._handle_user_input_unified(intent_result.get("message", ""))
+                
+        except Exception as e:
+            self.logger.error(f"既存システム委譲エラー: {e}")
+            # 最終フォールバック
+            return await super()._handle_user_input_unified(intent_result.get("message", ""))
+
     async def _handle_routing_based_processing(self, intent_result: Dict[str, Any]):
-        """新ルーティング決定表に基づく処理
+        """新ルーティング決定表に基づく処理（レガシー・削除予定）
         
         Args:
             intent_result: 統合意図理解結果（ルーティング情報含む）
         """
+        # このメソッドは設計簡略化により削除予定
+        # 現在は状態ベース処理に委譲
+        return await self._handle_state_based_processing(intent_result)
         route_type = intent_result["route_type"]
         
         self.logger.info(f"ルーティング決定表適用: {route_type.value}")
+        # Deep diagnostics: intent_resultのキーと承認トリガテキストをログ
+        try:
+            if getattr(self, 'enhanced_companion', None) and getattr(self.enhanced_companion.plan_tool, 'enable_deep_plan_logging', False):
+                keys = list(intent_result.keys())
+                msg_preview = intent_result.get("message", "")[:120]
+                self.logger.info(f"[Routing debug] intent_result.keys={keys} message_preview={msg_preview}")
+                # PlanToolの状態
+                dbg = self.enhanced_companion.plan_tool.debug_state()
+                self.logger.info(f"[Routing debug] PlanTool state(before): {dbg}")
+                # AgentState格納のcurrent_plan_id
+                try:
+                    current_plan_id_ctx = self.enhanced_companion.state.collected_context.get('current_plan_id')
+                except Exception:
+                    current_plan_id_ctx = None
+                self.logger.info(f"[Routing debug] AgentState.current_plan_id={current_plan_id_ctx}")
+        except Exception:
+            pass
+        
+        # ユーザーが実装開始を明示し、承認待ちプランがある場合は自動承認→実行へ
+        try:
+            user_text = intent_result.get("message", "")
+            approve_kws = ["承認", "approve", "実装を始め", "実装を進め", "実行開始", "start implementation"]
+            if any(kw in user_text for kw in approve_kws):
+                current = self.enhanced_companion.plan_tool.get_current()
+                if current and 'id' in current:
+                    plan_id = current['id']
+                    plan_state = self.enhanced_companion.plan_tool.get_state(plan_id)
+                    status = plan_state['state']['status']
+                    action_count = plan_state['state'].get('action_count', 0)
+                    if status in ("pending_review", "proposed") and action_count > 0:
+                        from companion.plan_tool import SpecSelection
+                        approved = self.enhanced_companion.plan_tool.approve(plan_id, approver="user", selection=SpecSelection(all=True))
+                        # 実行キューに送信
+                        task_data = {
+                            "type": "execute_approved_plan_enhanced",
+                            "intent_result": intent_result,
+                            "plan_approval": approved,
+                            "timestamp": datetime.now(),
+                        }
+                        self.task_queue.put(task_data)
+                        from codecrafter.ui.rich_ui import rich_ui
+                        rich_ui.print_message("✅ プランを承認しました。実行を開始します。", "success")
+                        return
+        except Exception as e:
+            self.logger.warning(f"自動承認処理エラー: {e}")
+        
+        # 未定義プラン遷移の理由を詳細に記録（clarificationルートに落とす前に）
+        try:
+            if getattr(self.enhanced_companion.plan_tool, 'enable_deep_plan_logging', False):
+                current = self.enhanced_companion.plan_tool.get_current()
+                reason = None
+                if not current:
+                    reason = 'no_current'
+                else:
+                    st = self.enhanced_companion.plan_tool.get_state(current['id'])
+                    if st['state']['action_count'] == 0:
+                        reason = 'action_count_zero'
+                    elif st['state']['status'] not in ('pending_review', 'approved', 'proposed'):
+                        reason = f"status={st['state']['status']}"
+                self.logger.info(f"[Routing debug] plan_selection_reason={reason} current={current}")
+        except Exception:
+            pass
         
         # 強制実行フラグのチェック（最優先）
         metadata = intent_result.get("metadata", {})
@@ -116,39 +341,127 @@ class EnhancedChatLoop(ChatLoop):
         user_message = intent_result.get("message", "")
         from companion.intent_understanding.intent_integration import OptionResolver
         
-        # プラン保留状態の確認
-        plan_state = self.enhanced_companion.get_plan_state()
-        plan_pending = bool(plan_state and plan_state.get("pending"))
-        
-        if plan_pending:
-            # LLM強化プラン選択処理を使用
-            await self._handle_plan_pending_input_enhanced(user_message, intent_result)
-            return
-        
-        # アンチスタール検出（clarificationの場合のみ）
-        if route_type.value == "clarification":
-            user_message = intent_result.get("message", "")
-            if self.enhanced_companion.anti_stall_guard.add_question(user_message):
-                # スタール判定でも即時ファイル作成は行わず、まずは作業項目の具体化を提示
-                self.logger.warning("スタール状態を検出、詳細具体化フローに切り替えます")
-                await self._handle_enhanced_clarification_flow(intent_result)
-                return
-        
-        if route_type.value == "direct_response":
-            # guidance_requestのみ許可
-            await self._handle_enhanced_direct_response_with_validation(intent_result)
-        elif route_type.value == "execution":
-            # 実行→検証→結果まで必須
-            await self._handle_enhanced_execution_with_verification(intent_result)
-        elif route_type.value == "clarification":
-            # 詳細確認フロー
-            await self._handle_enhanced_clarification_flow(intent_result)
-        elif route_type.value == "safe_default":
-            # 安全なデフォルト提案
-            await self._handle_enhanced_safe_default(intent_result)
-        else:
-            self.logger.warning(f"未知のルートタイプ: {route_type.value}")
-            await self._handle_enhanced_task_with_intent(intent_result)
+        # 状態ベース処理に統一
+        return await self._handle_state_based_processing(intent_result)
+    
+    async def _handle_plan_generation(self, intent_result: dict):
+        """統一プラン生成処理"""
+        try:
+            # タスクキューにプラン生成タスクを投入
+            task_data = {
+                "type": "generate_plan_unified",
+                "intent_result": intent_result,
+                "timestamp": datetime.now(),
+            }
+            self.task_queue.put(task_data)
+            
+            return "統一プラン生成を開始しました"
+            
+        except Exception as e:
+            self.logger.error(f"プラン生成処理エラー: {e}")
+            return f"プラン生成に失敗しました: {str(e)}"
+    
+    async def _handle_auto_approval_and_execution(self, intent_result: dict):
+        """自動承認・実行処理"""
+        try:
+            current = self.enhanced_companion.plan_tool.get_current()
+            plan_id = current['id']
+            
+            # 自動承認
+            from companion.plan_tool import SpecSelection
+            approved = self.enhanced_companion.plan_tool.approve(
+                plan_id, 
+                approver="user", 
+                selection=SpecSelection(all=True)
+            )
+            
+            # 実行タスクを投入
+            task_data = {
+                "type": "execute_approved_plan_enhanced",
+                "intent_result": intent_result,
+                "plan_approval": approved,
+                "timestamp": datetime.now(),
+            }
+            self.task_queue.put(task_data)
+            
+            from codecrafter.ui.rich_ui import rich_ui
+            rich_ui.print_message("✅ プランを自動承認しました。実行を開始します。", "success")
+            
+            return "自動承認・実行を開始しました"
+            
+        except Exception as e:
+            self.logger.error(f"自動承認・実行エラー: {e}")
+            return f"自動承認・実行に失敗しました: {str(e)}"
+    
+    async def _handle_plan_execution(self, intent_result: dict):
+        """プラン実行処理"""
+        try:
+            # 既存プランを実行
+            task_data = {
+                "type": "generate_plan_unified",
+                "intent_result": intent_result,
+                "timestamp": datetime.now(),
+            }
+            self.task_queue.put(task_data)
+            
+            return "プラン実行を開始しました"
+            
+        except Exception as e:
+            self.logger.error(f"プラン実行エラー: {e}")
+            return f"プラン実行に失敗しました: {str(e)}"
+    
+    def _execute_generate_plan_unified(self, task_data: dict):
+        """統一プラン生成タスクの実行"""
+        try:
+            intent_result = task_data["intent_result"]
+            user_message = intent_result.get("message", "プラン生成")
+            
+            self.logger.info(f"統一プラン生成開始: {user_message}")
+            self._send_status(f"📋 統一プラン生成中: {user_message[:50]}...")
+            
+            # EnhancedCompanionCoreでプラン生成
+            plan_id = self.enhanced_companion._generate_plan_unified(user_message)
+            
+            self._send_status(f"✅ プラン生成完了: {plan_id}")
+            self.logger.info(f"統一プラン生成完了: {plan_id}")
+            
+        except Exception as e:
+            self.logger.error(f"統一プラン生成エラー: {e}")
+            self._send_status(f"❌ プラン生成エラー: {str(e)}")
+    
+    def _execute_current_plan(self, task_data: dict):
+        """現在のプラン実行タスク"""
+        try:
+            intent_result = task_data["intent_result"]
+            user_message = intent_result.get("message", "プラン実行")
+            
+            self.logger.info(f"現在のプラン実行開始: {user_message}")
+            self._send_status(f"⚙️ 現在のプラン実行中: {user_message[:50]}...")
+            
+            # 既存のプラン実行ロジックを使用
+            current_plan = self.enhanced_companion.plan_tool.get_current()
+            if current_plan and current_plan.get('action_count', 0) > 0:
+                # プランが実行可能 → 実行
+                task_data = {
+                    "type": "execute_approved_plan_enhanced",
+                    "intent_result": intent_result,
+                    "plan_approval": {"plan_id": current_plan['id']},
+                    "timestamp": datetime.now(),
+                }
+                self._execute_approved_plan_enhanced(task_data)
+            else:
+                # プランが実行不可能 → プラン生成
+                self._send_status("⚠️ 実行可能なプランがありません。プラン生成を実行します。")
+                task_data = {
+                    "type": "generate_plan_unified",
+                    "intent_result": intent_result,
+                    "timestamp": datetime.now(),
+                }
+                self._execute_generate_plan_unified(task_data)
+                
+        except Exception as e:
+            self.logger.error(f"現在のプラン実行エラー: {e}")
+            self._send_status(f"❌ プラン実行エラー: {str(e)}")
     
     async def _handle_anti_stall_recovery(self, intent_result: Dict[str, Any]):
         """アンチスタール回復処理"""
@@ -206,7 +519,7 @@ class EnhancedChatLoop(ChatLoop):
             await self._handle_enhanced_task_with_intent(intent_result)
     
     async def _handle_enhanced_execution_with_verification(self, intent_result: Dict[str, Any]):
-        """実行→検証→結果まで完了必須の拡張版実行"""
+        """実行→検証→結果まで完了必須の拡張版実行（ChatLoop側はタスク投入のみ）"""
         try:
             # TaskLoopに送信（検証フラグ付き）
             task_data = {
@@ -216,13 +529,12 @@ class EnhancedChatLoop(ChatLoop):
                 "verification_required": True,  # 検証必須フラグ
                 "timestamp": datetime.now()
             }
-            
             self.task_queue.put(task_data)
-            
+
             from codecrafter.ui.rich_ui import rich_ui
             rich_ui.print_message("🚀 検証付き実行タスクを開始しました", "success")
             rich_ui.print_message("実行→承認→検証→結果の完全フローを実行中...", "info")
-            
+
         except Exception as e:
             self.logger.error(f"検証付き実行タスク送信エラー: {e}")
             # フォールバック
@@ -502,6 +814,38 @@ class EnhancedTaskLoop(TaskLoop):
         # ログ設定
         self.logger = logging.getLogger(__name__)
     
+    def get_status(self) -> Dict[str, Any]:
+        """拡張版ステータス情報を取得（Step/Status 付き）"""
+        base_status = super().get_status()
+        
+        # Step/Status情報を追加
+        try:
+            st = self.agent_state
+            base_status["phase1"] = {
+                "step": st.step.value if hasattr(st.step, 'value') else str(st.step),
+                "status": st.status.value if hasattr(st.status, 'value') else str(st.status),
+                "transition_count": getattr(self.dual_loop_system, 'transition_limiter', None)
+            }
+        except Exception:
+            base_status["phase1"] = {"error": "AgentState取得失敗"}
+        
+        return base_status
+    
+    def _send_status(self, status: str):
+        """状態送信（Step/Status 付き）"""
+        try:
+            # 現在のStep/Statusを取得
+            st = self.agent_state
+            step_info = f"🦶 {st.step.value} | 📊 {st.status.value}"
+            enhanced_status = f"{step_info} | {status}"
+            
+            # 親クラスの状態送信を呼び出し
+            super()._send_status(enhanced_status)
+            
+        except Exception:
+            # エラー時は元の状態送信を使用
+            super()._send_status(status)
+    
     def _execute_task_unified(self, task_data):
         """拡張版統一タスク実行"""
         try:
@@ -521,9 +865,18 @@ class EnhancedTaskLoop(TaskLoop):
                 elif task_type == "enhanced_task_with_intent":
                     # 拡張版: AgentState統合タスク
                     self._execute_enhanced_task_with_intent(task_data)
+                elif task_type == "execute_approved_plan_enhanced":
+                    # 新規: 承認済みプランの実行（PlanTool使用）
+                    self._execute_approved_plan_enhanced(task_data)
                 elif task_type == "execute_selected_plan":
                     # 新規: 選択されたプランの実行
                     self._execute_selected_plan(task_data)
+                elif task_type == "generate_plan_unified":
+                    # 新規: 統一プラン生成
+                    self._execute_generate_plan_unified(task_data)
+                elif task_type == "execute_current_plan":
+                    # 新規: 現在のプラン実行
+                    self._execute_current_plan(task_data)
                 elif task_type == "task_with_intent":
                     # 標準版: 意図理解結果付きタスク
                     super()._execute_task_with_intent(task_data)
@@ -550,7 +903,26 @@ class EnhancedTaskLoop(TaskLoop):
         """
         intent_result = task_data["intent_result"]
         verification_required = task_data.get("verification_required", True)
-        user_message = intent_result["message"]
+        # 早期にユーザーメッセージ取得エラーを復旧フローに乗せる
+        try:
+            user_message = intent_result["message"]
+        except Exception as e:
+            self._send_status(f"❌ 検証必須実行エラー: {str(e)}")
+            self.logger.error(f"検証必須実行タスクエラー(early): {e}")
+            try:
+                recovery = self.dual_loop_system.transition_controller.get_error_recovery_step(self.agent_state.step)
+                # 既に同一ステップの場合は遷移せずにステータスのみERRORへ
+                if self.agent_state.step == recovery:
+                    self.agent_state.set_step_status(recovery, Status.ERROR)
+                else:
+                    if self.dual_loop_system._try_transition(recovery):
+                        self.agent_state.set_step_status(recovery, Status.ERROR)
+                st = self.agent_state
+                rich_ui.print_message(f"🚨 復旧 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+            except Exception:
+                pass
+            self.current_task = None
+            return
         
         self.current_task = user_message
         self.logger.info(f"検証必須実行タスク開始: {user_message}")
@@ -559,6 +931,14 @@ class EnhancedTaskLoop(TaskLoop):
             # 実行開始を通知
             self._send_status(f"🚀 検証必須実行開始: {user_message[:50]}...")
             self._send_status(f"📋 フロー: 実行→承認→検証→結果")
+            # 遷移: EXECUTIONへ（許可かつ1回まで）
+            try:
+                if self.dual_loop_system._try_transition(Step.EXECUTION):
+                    self.agent_state.set_step_status(Step.EXECUTION, Status.IN_PROGRESS)
+                    st = self.agent_state
+                    rich_ui.print_message(f"⚙️ 実行 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+            except Exception:
+                pass
             # もし既に実行可能なプランが存在する場合は、選択プラン実行に直行（LLM経路を回避）
             if hasattr(self.enhanced_companion, 'plan_context') and self.enhanced_companion.plan_context.action_specs:
                 self._send_status("⚙️ 既存プランに基づき即時実行します...")
@@ -593,6 +973,14 @@ class EnhancedTaskLoop(TaskLoop):
             # 結果フェーズ（完了条件）
             self._send_status("📊 Phase 3: 最終結果確定中...")
             final_result = self._finalize_execution_result(result, intent_result)
+            # 遷移: REVIEWへ（許可かつ1回まで）
+            try:
+                if self.dual_loop_system._try_transition(Step.REVIEW):
+                    self.agent_state.set_step_status(Step.REVIEW, Status.IN_PROGRESS)
+                    st = self.agent_state
+                    rich_ui.print_message(f"🔍 検証 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+            except Exception:
+                pass
             
             # 完了通知（検証済み結果イベント）
             self._send_status("✅ 検証済み実行完了")
@@ -605,8 +993,127 @@ class EnhancedTaskLoop(TaskLoop):
             error_msg = f"❌ 検証必須実行エラー: {str(e)}"
             self._send_status(error_msg)
             self.logger.error(f"検証必須実行タスクエラー: {e}")
+            try:
+                # エラー時の特別遷移: 現在ステップからPLANNINGへ
+                recovery = self.dual_loop_system.transition_controller.get_error_recovery_step(self.agent_state.step)
+                if self.dual_loop_system._try_transition(recovery):
+                    self.agent_state.set_step_status(recovery, Status.ERROR)
+                    st = self.agent_state
+                    rich_ui.print_message(f"🚨 復旧 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+            except Exception:
+                pass
         
         finally:
+            self.current_task = None
+    
+    def _execute_approved_plan_enhanced(self, task_data: dict):
+        """承認済みプランをPlanToolで実行
+        
+        Args:
+            task_data: {
+                'intent_result': Dict,
+                'plan_approval': Dict{'plan_id', 'title', ...}
+            }
+        """
+        try:
+            intent_result = task_data.get("intent_result", {})
+            plan_approval = task_data.get("plan_approval", {})
+            plan_id = plan_approval.get("plan_id")
+            plan_title = plan_approval.get("title", "(no title)")
+            # フォールバック: current plan
+            if not plan_id:
+                try:
+                    current = self.enhanced_companion.plan_tool.get_current()
+                    if current and 'id' in current:
+                        plan_id = current['id']
+                        plan_title = current.get('title', plan_title)
+                except Exception:
+                    pass
+            # 実行前ステータス
+            try:
+                if self.dual_loop_system._try_transition(Step.EXECUTION):
+                    self.agent_state.set_step_status(Step.EXECUTION, Status.IN_PROGRESS)
+            except Exception:
+                pass
+            self.current_task = f"execute_plan:{plan_id or 'unknown'}"
+            self._send_status(f"🚀 承認済みプラン実行開始: {plan_title}")
+            # 実行
+            if not plan_id:
+                self._send_status("❌ 実行エラー: plan_id が特定できません")
+                return
+            # ディープログ（任意）
+            try:
+                if getattr(self.enhanced_companion.plan_tool, 'enable_deep_plan_logging', False):
+                    dbg = self.enhanced_companion.plan_tool.debug_state()
+                    self.logger.info(f"[Plan exec debug] before_execute: {dbg}")
+            except Exception:
+                pass
+            exec_result = self.dual_loop_system._execute_plan_with_plan_tool(plan_id)
+            # ディープログ（任意）
+            try:
+                if getattr(self.enhanced_companion.plan_tool, 'enable_deep_plan_logging', False):
+                    dbg = self.enhanced_companion.plan_tool.debug_state()
+                    self.logger.info(f"[Plan exec debug] after_execute: {dbg}")
+            except Exception:
+                pass
+            # 結果処理
+            if exec_result.get('success'):
+                # 実行結果の詳細を表示
+                result_details = exec_result.get('results', [])
+                if result_details:
+                    self._send_status("✅ プラン実行完了")
+                    self._send_status(f"📋 実行結果: {len(result_details)}件のアクション")
+                    
+                    # 各アクションの結果を詳細表示
+                    for i, result in enumerate(result_details, 1):
+                        if isinstance(result, dict):
+                            # 結果が辞書形式の場合
+                            if result.get('success'):
+                                spec = result.get('spec', {})
+                                action_type = spec.get('kind', 'unknown')
+                                path = spec.get('path', 'N/A')
+                                self._send_status(f"  ✓ {action_type}: {path}")
+                            else:
+                                error_msg = result.get('error', 'unknown error')
+                                self._send_status(f"  ✗ エラー: {error_msg}")
+                        else:
+                            # 結果が文字列の場合
+                            self._send_status(f"  📄 {result}")
+                else:
+                    self._send_status("✅ プラン実行完了（詳細なし）")
+                
+                # REVIEWへ
+                try:
+                    if self.dual_loop_system._try_transition(Step.REVIEW):
+                        self.agent_state.set_step_status(Step.REVIEW, Status.SUCCESS)
+                except Exception:
+                    pass
+            else:
+                msg = exec_result.get('message', 'プラン実行に失敗しました')
+                self._send_status(f"❌ プラン実行エラー: {msg}")
+                
+                # エラー詳細も表示
+                error_details = exec_result.get('results', [])
+                if error_details:
+                    self._send_status("📋 エラー詳細:")
+                    for error in error_details:
+                        if isinstance(error, dict) and not error.get('success'):
+                            error_msg = error.get('error', 'unknown error')
+                            self._send_status(f"  ❌ {error_msg}")
+                
+                try:
+                    self.agent_state.set_step_status(self.agent_state.step, Status.ERROR)
+                except Exception:
+                    pass
+        except Exception as e:
+            self._send_status(f"❌ プラン実行中に例外: {str(e)}")
+            self.logger.error(f"承認済みプラン実行エラー: {e}")
+        finally:
+            # 後片付け
+            try:
+                self.dual_loop_system._clear_current_plan()
+            except Exception:
+                pass
             self.current_task = None
     
     def _execute_enhanced_clarification(self, task_data: dict):
@@ -922,6 +1429,13 @@ class EnhancedTaskLoop(TaskLoop):
                     self._send_status(f"✅ 拡張完了: {result}")
             else:
                 self._send_status("✅ 拡張タスクが完了しました（結果なし）")
+            # REVIEWを成功で締める（表示のみ）
+            try:
+                self.enhanced_companion.state.set_step_status(Step.REVIEW, Status.SUCCESS)
+                st = self.agent_state
+                rich_ui.print_message(f"🎉 完了 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+            except Exception:
+                pass
             
             # 拡張コンテキスト更新
             if self.context_manager:
@@ -1366,6 +1880,34 @@ class EnhancedDualLoopSystem:
         
         # 共有コンテキスト管理
         self.context_manager = SharedContextManager()
+
+        # 遷移制御（Phase 1）
+        self.transition_controller = TransitionController()
+        # 設定から最大回数を取得
+        try:
+            from codecrafter.base.config import config_manager
+            cfg = config_manager.load_config()
+            p1 = getattr(cfg, 'phase1', None)
+            max_trans = 1
+            enabled = True
+            deep_plan_logging = False
+            if isinstance(p1, dict):
+                max_trans = int(p1.get('max_transitions_per_utterance', 1))
+                enabled = bool(p1.get('enable_transition_control', True))
+                deep_plan_logging = bool(p1.get('enable_deep_plan_logging', False))
+            self.transition_limiter = TransitionLimiter(max_transitions_per_utterance=max_trans)
+            self.transition_enabled = enabled
+        except Exception:
+            self.transition_limiter = TransitionLimiter()
+            self.transition_enabled = True
+            deep_plan_logging = False
+        # PlanToolのディープログ設定
+        try:
+            if hasattr(self.enhanced_companion, 'plan_tool'):
+                self.enhanced_companion.plan_tool.enable_deep_plan_logging = deep_plan_logging
+                self.logger.info(f"PlanTool deep logging: {deep_plan_logging}")
+        except Exception:
+            pass
         
         # 拡張版ループの初期化
         self.chat_loop = EnhancedChatLoop(
@@ -1390,6 +1932,21 @@ class EnhancedDualLoopSystem:
         
         # ログ設定
         self.logger = logging.getLogger(__name__)
+
+    def _try_transition(self, to_step: Step) -> bool:
+        """許可 + 1発話上限を満たす場合のみ遷移を許可"""
+        if not getattr(self, 'transition_enabled', True):
+            return True
+        try:
+            current_step = self.enhanced_companion.state.step
+        except Exception:
+            current_step = Step.PLANNING
+        if not self.transition_limiter.can_transition():
+            return False
+        if not self.transition_controller.is_transition_allowed(current_step, to_step) and to_step != "DONE":
+            return False
+        self.transition_limiter.record_transition()
+        return True
     
     def start(self):
         """拡張システムを開始"""
@@ -1444,7 +2001,7 @@ class EnhancedDualLoopSystem:
         self.logger.info("Enhanced Dual-Loop System を停止しました")
     
     def get_status(self) -> Dict[str, Any]:
-        """拡張システムの状態を取得"""
+        """拡張システムの状態を取得（Phase 1 強化版）"""
         base_status = {
             "running": self.running,
             "session_id": self.session_id,
@@ -1469,6 +2026,45 @@ class EnhancedDualLoopSystem:
             base_status["context_manager"] = context_status
         except Exception as e:
             base_status["context_manager_error"] = str(e)
+        
+        # Phase 1: 遷移制御とStep/Statusの統合情報
+        try:
+            current_step = self.enhanced_companion.state.step
+            current_status = self.enhanced_companion.state.status
+            
+            # Step/Statusの値を安全に取得
+            step_value = current_step.value if hasattr(current_step, 'value') else str(current_step)
+            status_value = current_status.value if hasattr(current_status, 'value') else str(current_status)
+            
+            base_status["phase1"] = {
+                "current_step": step_value,
+                "current_status": status_value,
+                "transition_control": {
+                    "enabled": getattr(self, 'transition_enabled', True),
+                    "max_transitions": getattr(self.transition_limiter, 'max_transitions_per_utterance', 1),
+                    "current_count": getattr(self.transition_limiter, 'transition_count', 0),
+                    "can_transition": self.transition_limiter.can_transition() if hasattr(self, 'transition_limiter') else True
+                },
+                "allowed_transitions": {
+                    "from_planning": [s.value if hasattr(s, 'value') else str(s) for s in self.transition_controller.allowed_transitions.get(Step.PLANNING, [])],
+                    "from_execution": [s.value if hasattr(s, 'value') else str(s) for s in self.transition_controller.allowed_transitions.get(Step.EXECUTION, [])],
+                    "from_review": [s.value if hasattr(s, 'value') else str(s) for s in self.transition_controller.allowed_transitions.get(Step.REVIEW, [])]
+                } if hasattr(self, 'transition_controller') else {}
+            }
+        except Exception as e:
+            base_status["phase1_error"] = str(e)
+            # エラーが発生しても基本的なPhase 1情報は提供
+            base_status["phase1"] = {
+                "current_step": "UNKNOWN",
+                "current_status": "UNKNOWN",
+                "transition_control": {
+                    "enabled": False,
+                    "max_transitions": 1,
+                    "current_count": 0,
+                    "can_transition": False
+                },
+                "allowed_transitions": {}
+            }
         
         return base_status
     

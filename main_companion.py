@@ -57,13 +57,13 @@ class DuckflowCompanion:
                 if ENHANCED_AVAILABLE:
                     self.dual_loop_system = EnhancedDualLoopSystem()
                     self.system_version = "Enhanced v2.0"
-                    rich_ui.print_success("✅ Enhanced Dual-Loop System (v2.0) が準備できました！")
+                    rich_ui.print_success("Enhanced Dual-Loop System (v2.0) が準備できました！")
                     rich_ui.print_message("🧠 AgentState統合 | 💾 ConversationMemory | 🎯 PromptCompiler", "info")
                 else:
                     raise ImportError("Enhanced版が利用できません")
             except Exception as e:
                 # フォールバック: 標準版を使用
-                rich_ui.print_message(f"⚠️ Enhanced版の初期化に失敗: {e}", "warning")
+                rich_ui.print_message(f"Enhanced版の初期化に失敗: {e}", "warning")
                 rich_ui.print_message("📋 標準版Dual-Loop Systemを使用します", "info")
                 self.dual_loop_system = DualLoopSystem()
                 self.system_version = "Standard v1.0"
@@ -76,7 +76,7 @@ class DuckflowCompanion:
             )
             
         except Exception as e:
-            rich_ui.print_error(f"❌ 初期化に失敗しました: {e}")
+            rich_ui.print_error(f"初期化に失敗しました: {e}")
             raise
     
     def _check_approval_system(self):
@@ -579,7 +579,7 @@ def main():
         companion = DuckflowCompanion()
         companion.start()
     except Exception as e:
-        print(f"❌ 起動に失敗しました: {e}")
+        print(f"起動に失敗しました: {e}")
         sys.exit(1)
 
 

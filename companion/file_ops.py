@@ -20,6 +20,7 @@ import asyncio
 
 from codecrafter.ui.rich_ui import rich_ui
 from codecrafter.base.config import ConfigManager
+from companion.security.file_protector import FileProtector
 
 # 新しいシンプル承認システム
 from .simple_approval import SimpleApprovalGate, ApprovalRequest, RiskLevel, ApprovalResult, ApprovalMode
@@ -62,6 +63,20 @@ class SimpleFileOps:
             self.debug = _os.getenv("FILE_OPS_DEBUG") == "1" or _CM().is_debug_mode()
         except Exception:
             self.debug = False
+        # Phase 1: initialize FileProtector from config
+        try:
+            cm = ConfigManager()
+            cfg = cm.load_config()
+            p1 = getattr(cfg, 'phase1', None)
+            work_dir = p1.get('work_dir') if isinstance(p1, dict) else '.'
+            safe_ext = p1.get('safe_extensions', [".txt", ".md", ".py", ".json", ".yaml", ".yml", ".csv"]) if isinstance(p1, dict) else [".txt", ".md", ".py", ".json", ".yaml", ".yml", ".csv"]
+            from pathlib import Path as _Path
+            base = _Path.cwd() if work_dir == "." else _Path(work_dir)
+            self.file_protector = FileProtector(str(base.resolve()), safe_ext)
+        except Exception:
+            # Fail-safe default: repo root
+            from pathlib import Path as _Path
+            self.file_protector = FileProtector(str(_Path.cwd().resolve()), [".txt", ".md", ".py", ".json", ".yaml", ".yml", ".csv"])
 
     def _assess_write_risk(self, file_path: str) -> RiskLevel:
         """書き込みリスク評価"""
@@ -76,6 +91,14 @@ class SimpleFileOps:
 
     def write_file_with_approval(self, file_path: str, content: str) -> FileOpOutcome:
         """承認付きファイル書き込み"""
+        # Phase 1 safety: allow writes only inside work_dir and safe extensions
+        if not self.file_protector.check_operation("write", file_path):
+            return FileOpOutcome(
+                ok=False,
+                op="write",
+                path=file_path,
+                reason="安全ポリシーによりブロックされました（作業フォルダ外または拡張子が安全でない）"
+            )
         request = ApprovalRequest(
             operation="ファイル書き込み",
             description=f"ファイル '{file_path}' に内容を書き込みます",
@@ -115,6 +138,14 @@ class SimpleFileOps:
     
     async def write_file_with_llm_approval(self, file_path: str, content: str) -> FileOpOutcome:
         """LLM強化承認付きファイル書き込み"""
+        # Phase 1 safety gate
+        if not self.file_protector.check_operation("write", file_path):
+            return FileOpOutcome(
+                ok=False,
+                op="write",
+                path=file_path,
+                reason="安全ポリシーによりブロックされました（作業フォルダ外または拡張子が安全でない）"
+            )
         request = ApprovalRequest(
             operation="ファイル書き込み",
             description=f"ファイル '{file_path}' に内容を書き込みます",
@@ -262,6 +293,9 @@ class SimpleFileOps:
 
     def create_directory(self, directory_path: str) -> Dict[str, Any]:
         """ディレクトリを作成"""
+        # Phase 1 safety check
+        if not self.file_protector.check_operation("mkdir", directory_path):
+            return {"success": False, "message": "安全ポリシーによりブロックされました（作業フォルダ外）", "path": directory_path}
         request = ApprovalRequest(
             operation="ディレクトリ作成",
             description=f"ディレクトリ '{directory_path}' を作成します",
@@ -278,3 +312,8 @@ class SimpleFileOps:
             return {"success": True, "message": f"ディレクトリ '{directory_path}' を作成しました", "path": str(path.absolute())}
         except Exception as e:
             raise FileOperationError(f"ディレクトリ作成に失敗しました: {directory_path} - {str(e)}")
+
+    # === Phase 1 compatibility API (used by PlanExecutor/PlanTool) ===
+    def apply_with_approval_write(self, file_path: str, content: str, session_id: str = "") -> FileOpOutcome:
+        """Compatibility wrapper used by executors to perform an approved write with safety checks."""
+        return self.write_file_with_approval(file_path, content)

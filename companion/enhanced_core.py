@@ -9,12 +9,15 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 
 # 既存システムとの統合
-from codecrafter.state.agent_state import AgentState
+from companion.state.agent_state import AgentState
 from codecrafter.memory.conversation_memory import conversation_memory
 from codecrafter.prompts.prompt_compiler import prompt_compiler
 from codecrafter.prompts.context_builder import PromptContextBuilder
 from codecrafter.base.llm_client import llm_manager
 from codecrafter.ui.rich_ui import rich_ui
+from companion.validators.llm_output import LLMOutputFormatter, MainLLMOutput
+from companion.state.agent_state import Step
+from companion.prompts.context_assembler import ContextAssembler
 
 # 既存のCompanionCore機能
 from .core import CompanionCore, ActionType
@@ -73,12 +76,90 @@ class EnhancedCompanionCore:
         # PlanTool統合
         self.plan_tool = PlanTool()
         
+        # Phase 1.6: コード実行機能統合
+        from .code_runner import SimpleCodeRunner
+        self.code_runner = SimpleCodeRunner(approval_mode=approval_mode)
+        
         # 統合モードフラグ
         self.use_enhanced_mode = True
+        # LLM出力バリデータ（Phase 1）
+        self.llm_output_formatter = LLMOutputFormatter()
+        # Phase 2: Context Assembler（Base+Main）
+        self.context_assembler = ContextAssembler()
         
         # ログ設定
         import logging
         self.logger = logging.getLogger(__name__)
+    
+    def _generate_plan_unified(self, content: str):
+        """統一プラン生成（全パスで使用）"""
+        try:
+            # プラン作成に必要な引数を準備
+            from .plan_tool import MessageRef
+            sources = [MessageRef(message_id="user_request", timestamp=datetime.now().isoformat())]
+            rationale = f"ユーザー要求: {content[:100]}..."
+            tags = ["user_request", "auto_generated"]
+            
+            # プラン作成
+            plan_id = self.plan_tool.propose(content, sources, rationale, tags)
+            
+            # ActionSpec保証
+            self._ensure_action_specs(plan_id, content)
+            
+            # 承認要求
+            from .plan_tool import SpecSelection
+            self.plan_tool.request_approval(plan_id, SpecSelection(all=True))
+            
+            return plan_id
+            
+        except Exception as e:
+            self.logger.error(f"統一プラン生成エラー: {e}")
+            raise
+    
+    def _ensure_action_specs(self, plan_id: str, content: str):
+        """ActionSpec保証（フォールバックなし）"""
+        from .collaborative_planner import ActionSpec
+        
+        # 動的なファイルパスと説明の生成
+        file_path = self._generate_dynamic_file_path(content)
+        description = self._generate_dynamic_description(content)
+        
+        action_spec = ActionSpec(
+            kind='implement',
+            path=file_path,
+            description=description,
+            optional=False
+        )
+        
+        # エラー時は例外を投げる（フォールバックなし）
+        self.plan_tool.set_action_specs(plan_id, [action_spec])
+    
+    def _generate_dynamic_file_path(self, content: str) -> str:
+        """動的なファイルパスを生成"""
+        # 内容に基づいて適切なファイルパスを決定
+        # 優先順位を明確にする
+        if "計画" in content or "プラン" in content:
+            return "plan.md"
+        elif "実装" in content:
+            return "implementation.md"
+        elif "作成" in content:
+            return "implementation.md"
+        elif "設計" in content or "アーキテクチャ" in content:
+            return "design.md"
+        else:
+            return "task.md"
+    
+    def _generate_dynamic_description(self, content: str) -> str:
+        """動的な説明を生成"""
+        # 内容に基づいて適切な説明を生成
+        if "実装" in content:
+            return f"ユーザー要求に基づく実装: {content[:100]}..."
+        elif "計画" in content:
+            return f"ユーザー要求に基づく計画作成: {content[:100]}..."
+        elif "設計" in content:
+            return f"ユーザー要求に基づく設計: {content[:100]}..."
+        else:
+            return f"ユーザー要求の処理: {content[:100]}..."
     
     async def analyze_intent_only(self, user_message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """統合版意図理解（AgentState活用）
@@ -161,7 +242,56 @@ class EnhancedCompanionCore:
             # 取得に失敗しても致命ではないため無視
             pass
 
+        # Phase 1: Main LLM出力（JSON）を生成・検証（軽量版、LLM未使用）
+        try:
+            main_json = self._build_main_llm_output(result)
+            validated = self.llm_output_formatter.validate(main_json)
+            result["main_llm_output"] = validated.model_dump()
+        except Exception:
+            # 一度だけ修復を試みる
+            repaired = self.llm_output_formatter.try_repair(main_json if 'main_json' in locals() else {})
+            if repaired is not None:
+                result["main_llm_output"] = repaired.model_dump()
+            else:
+                result["main_llm_output_error"] = "validation_failed"
+
         return result
+
+    def _build_main_llm_output(self, intent_result: Dict[str, Any]) -> Dict[str, Any]:
+        """意図理解結果から最小のMain LLM JSONを合成（Phase 1 簡易版）"""
+        # rationale
+        rationale = "意図分析に基づく次アクションの決定"
+        # goal consistency
+        goal = getattr(self.state, 'goal', '') or ''
+        goal_consistency = "yes: 目標未設定" if not goal else "yes: 目標と整合"
+        # constraint check
+        constraints = getattr(self.state, 'constraints', []) or []
+        constraint_check = "yes: 制約なし" if not constraints else "yes: 制約を尊重"
+        # next_step（action_typeベース）
+        action_type = intent_result.get("action_type")
+        action_val = getattr(action_type, 'value', str(action_type))
+        if action_val == "direct_response":
+            next_step = "continue"
+        elif action_val == "file_operation":
+            next_step = "continue"
+        else:
+            next_step = "defer"
+        # step（現在のStateから）
+        try:
+            step = self.state.step.value if isinstance(self.state.step, Step) else str(self.state.step)
+        except Exception:
+            step = "PLANNING"
+        # state_delta
+        state_delta = getattr(self.state, 'last_delta', '') or ""
+
+        return {
+            "rationale": rationale,
+            "goal_consistency": goal_consistency,
+            "constraint_check": constraint_check,
+            "next_step": next_step,
+            "step": step,
+            "state_delta": state_delta,
+        }
     
     async def process_with_intent_result(self, intent_result: Dict[str, Any]) -> str:
         """統合版意図理解結果処理
@@ -203,7 +333,11 @@ class EnhancedCompanionCore:
         context = await self._build_enhanced_context(action_type)
         
         # システムプロンプトをコンパイル
-        system_prompt = self.prompt_compiler.compile_system_prompt_dto(context)
+        # Phase 2: 新しいアセンブラーでBase+Mainを構築（最小）
+        try:
+            system_prompt = self.context_assembler.build_system_prompt(self.state)
+        except Exception:
+            system_prompt = self.prompt_compiler.compile_system_prompt_dto(context)
         
         # アクション実行（既存ロジック活用）
         if action_type == ActionType.DIRECT_RESPONSE:
@@ -218,6 +352,16 @@ class EnhancedCompanionCore:
         # プラン提示の検出と状態設定（実行阻害改善）
         if self._looks_like_plan(result):
             self.set_plan_state(result, "execution_plan")
+            # Deep plan logging: PlanToolの状態とcurrent_plan_idを記録
+            try:
+                dbg = self.plan_tool.debug_state() if hasattr(self.plan_tool, 'debug_state') else {}
+                self.logger.info(f"Plan detected & registered. PlanTool state: {dbg}")
+                # AgentStateにも保存（ルーティング側で参照）
+                plan_id = dbg.get('current_plan_id')
+                if plan_id:
+                    self.state.collected_context['current_plan_id'] = plan_id
+            except Exception as e:
+                self.logger.warning(f"Plan debug logging failed: {e}")
         
         # AgentStateに応答を記録（単一ソース・オブ・トゥルース）
         self.state.add_message("assistant", result)
@@ -432,7 +576,7 @@ class EnhancedCompanionCore:
         Args:
             user_message: ユーザーメッセージ
             system_prompt: システムプロンプト
-            
+        
         Returns:
             str: 処理結果
         """
@@ -441,23 +585,70 @@ class EnhancedCompanionCore:
             
             # ファイル操作の種類を判定
             user_message_lower = user_message.lower()
+            # 先にファイルパス候補を抽出（書き込みは必ずパスが必要）
+            import re
+            file_path = None
+            file_patterns = [
+                r'["\']([^"\']+\.[a-zA-Z0-9]+)["\']',
+                r'([a-zA-Z0-9_\-\\./]+\.[a-zA-Z0-9]+)',
+                r'([一-龯a-zA-Z0-9_\-\.]+\.[a-zA-Z0-9]+)'
+            ]
+            for pattern in file_patterns:
+                m = re.search(pattern, user_message)
+                if m:
+                    file_path = m.group(1)
+                    break
             
             # ファイル読み込み操作の検出と実行
             if any(kw in user_message for kw in ["読", "読み", "確認", "内容", "見て", "把握"]) or "read" in user_message_lower:
                 return await self._handle_file_read_operation(user_message)
-            
-            # ファイル書き込み操作の検出と実行
-            elif "書" in user_message or "作成" in user_message or "write" in user_message_lower or "create" in user_message_lower:
+             
+            # 実装プラン生成の検出（ファイル名が無い場合のみ）
+            plan_kw = ["実装プラン", "計画", "プラン", "implementation plan", "plan"]
+            if any(kw in user_message for kw in plan_kw) and not file_path:
+                # 直近の読込ファイルからプランを生成（簡易）
+                ctx = self.state.collected_context.get("last_read_file", {}) if hasattr(self.state, 'collected_context') else {}
+                path = ctx.get("path", "(不明)")
+                summary = ctx.get("summary", "(要約なし)")
+                rich_ui.print_message("📋 ドキュメントをもとに実装プランを作成します", "info")
+                plan = f"""🗓️ 実装計画（{path} に基づく）
+ 
+ 前提要約:
+ {summary}
+ 
+ ステップ:
+ 1) 事前分析: 目的/制約/既存構成の把握（読取のみ）
+ 2) 最小実装: スケルトン/テンプレの追加（安全なファイルのみ）
+ 3) 検証: 実行/読み取りで確認、必要なら調整
+ 
+ 次のアクション候補:
+ - approve: この計画で進める
+ - modify: 修正点を指示
+ - reject: いったん却下
+ """
+                 # 将来的にPlanToolに提案/承認へ流す
+                self.set_plan_state(plan, "execution_plan")
+                                # 統一プラン生成（ActionSpec保証付き）
+                try:
+                    plan_id = self._generate_plan_unified(plan)
+                    self.logger.info(f"統一プラン生成完了: {plan_id}")
+                    return plan
+                except Exception as e:
+                    self.logger.error(f"統一プラン生成エラー: {e}")
+                    return f"プラン生成に失敗しました: {str(e)}"
+
+            # ファイル書き込み操作の検出と実行（パスがある場合のみ）
+            elif ("書" in user_message or "作成" in user_message or "write" in user_message_lower or "create" in user_message_lower) and file_path:
                 return await self._handle_file_write_operation(user_message)
-            
+             
             # ファイル一覧操作の検出と実行
             elif "一覧" in user_message or "list" in user_message_lower or "ls" in user_message_lower:
                 return await self._handle_file_list_operation(user_message)
-            
+             
             else:
                 # 汎用的なファイル操作として処理
                 return await self._handle_generic_file_operation(user_message, system_prompt)
-            
+             
         except Exception as e:
             self.logger.error(f"拡張ファイル操作エラー: {e}")
             # フォールバック
@@ -548,6 +739,16 @@ class EnhancedCompanionCore:
                 
                 # 内容の要約を生成
                 summary = await self._generate_file_summary(file_path, content)
+
+                # AgentStateに保持（再利用用）
+                try:
+                    self.state.collected_context["last_read_file"] = {
+                        "path": file_path,
+                        "summary": summary,
+                        "length": len(content)
+                    }
+                except Exception:
+                    pass
                 
                 # AgentStateに記録
                 self.state.add_message("assistant", f"ファイル '{file_path}' を読み込みました")
@@ -1066,6 +1267,73 @@ class EnhancedCompanionCore:
             Optional[Dict]: 現在のプラン情報
         """
         return self.plan_tool.get_current()
+
+    # Phase 1.6: コード実行機能
+    def run_python_file(self, file_path: str, args: Optional[List[str]] = None) -> Dict[str, Any]:
+        """Pythonファイルを実行
+        
+        Args:
+            file_path: 実行するPythonファイルのパス
+            args: コマンドライン引数
+            
+        Returns:
+            Dict: 実行結果
+        """
+        try:
+            self.logger.info(f"Pythonファイル実行要求: {file_path}")
+            
+            # コードランナーで実行
+            result = self.code_runner.run_python_file(file_path, args)
+            
+            # 結果をAgentStateに記録
+            self.state.add_message("system", f"コード実行完了: {file_path}")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Pythonファイル実行エラー: {e}")
+            return {
+                "success": False,
+                "error": f"実行中にエラーが発生しました: {str(e)}",
+                "file_path": file_path,
+                "output": "",
+                "exit_code": -1
+            }
+    
+    def run_command(self, command: str, cwd: Optional[str] = None) -> Dict[str, Any]:
+        """コマンドを実行
+        
+        Args:
+            command: 実行するコマンド
+            cwd: 作業ディレクトリ
+            
+        Returns:
+            Dict: 実行結果
+        """
+        try:
+            self.logger.info(f"コマンド実行要求: {command}")
+            
+            # コードランナーで実行
+            result = self.code_runner.run_command(command, cwd)
+            
+            # 結果をAgentStateに記録
+            self.state.add_message("system", f"コマンド実行完了: {command}")
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"コマンド実行エラー: {e}")
+            return {
+                "success": False,
+                "error": f"実行中にエラーが発生しました: {str(e)}",
+                "command": command,
+                "output": "",
+                "exit_code": -1
+            }
+    
+    def format_execution_result(self, result: Dict[str, Any]) -> str:
+        """実行結果をユーザーフレンドリーな形式にフォーマット"""
+        return self.code_runner.format_execution_result(result)
 
     def test_filename_extraction(self, test_messages: List[str]) -> Dict[str, str]:
         """ファイル名抽出のテスト用メソッド（デバッグ用）"""

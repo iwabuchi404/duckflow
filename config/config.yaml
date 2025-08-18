@@ -196,6 +196,14 @@ logging:
     enabled: true
     file: "logs/conversation.json"
 
+# Phase 1: Prompt/State/Transition/Safety
+phase1:
+  work_dir: "."               # リポジトリルート（相対→絶対に解決）
+  safe_extensions: [".txt", ".md", ".py", ".json", ".yaml", ".yml", ".csv"]
+  enable_transition_control: true
+  max_transitions_per_utterance: 1
+  enable_deep_plan_logging: true
+
 # 記憶管理設定 (ステップ2c)
 memory:
   # 短期記憶設定

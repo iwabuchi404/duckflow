@@ -132,13 +132,13 @@ class CompanionCore:
                 self.intent_system = IntentUnderstandingSystem(default_llm_adapter)
                 self.use_new_intent_system = True
                 provider_info = default_llm_adapter.get_provider_info()
-                rich_ui.print_message(f"✨ 新しい意図理解システムを初期化しました（{provider_info['provider_name']}）", "success")
+                rich_ui.print_message(f"新しい意図理解システムを初期化しました（{provider_info['provider_name']}）", "success")
             else:
                 rich_ui.print_message("⚠️ LLMが利用できません。旧システムを使用します", "warning")
                 self.intent_system = None
                 self.use_new_intent_system = False
         except Exception as e:
-            rich_ui.print_message(f"[!] 新しい意図理解システムの初期化に失敗しました。旧システムを使用します: {e}", "warning")
+            rich_ui.print_message(f"新しい意図理解システムの初期化に失敗しました。旧システムを使用します: {e}", "warning")
             self.intent_system = None
             self.use_new_intent_system = False
         
@@ -279,8 +279,29 @@ class CompanionCore:
             return f"すみません、考えがまとまりませんでした...。エラー: {str(e)}"
 
     def _handle_file_operation(self, user_message: str) -> str:
-        """ファイル操作を処理"""
-        # この部分は新しい承認システムと連携するように、後で大幅な修正が必要
+        """ファイル操作を処理（フォールバック時の簡易読み取り対応）"""
+        try:
+            # 簡易に引用や拡張子を含むファイル名を検出して読み取り
+            import re
+            patterns = [
+                r'["\']([^"\']+\.[a-zA-Z0-9]+)["\']',
+                r'([a-zA-Z0-9_\-\.\\/]+\.[a-zA-Z0-9]+)'
+            ]
+            file_path = None
+            for p in patterns:
+                m = re.search(p, user_message)
+                if m:
+                    file_path = m.group(1)
+                    break
+            if file_path:
+                from .file_ops import SimpleFileOps
+                ops = SimpleFileOps()
+                content = ops.read_file(file_path)
+                preview = content if len(content) < 800 else content[:800] + '...'
+                return f"📄 ファイル '{file_path}' の内容:\n\n{preview}"
+        except Exception:
+            pass
+        # 既定のメッセージ（従来）
         rich_ui.print_message("ファイル操作は現在リファクタリング中です。", "warning")
         return "ファイル操作機能は、新しい承認システムへの移行作業中のため、現在ご利用いただけません。"
 
