@@ -262,7 +262,7 @@ Duckflow Companionには、あなたの大切なファイルを保護するた�
     def _change_approval_mode(self, mode: str) -> bool:
         """承認モードを変更"""
         try:
-            from companion.approval_system import ApprovalMode
+            from companion.simple_approval import ApprovalMode
             
             mode_map = {
                 'strict': ApprovalMode.STRICT,
