@@ -11,7 +11,7 @@ import concurrent.futures
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-from codecrafter.ui.rich_ui import rich_ui
+from .ui import rich_ui
 from .core import CompanionCore
 from .workspace_manager import WorkspaceManager
 

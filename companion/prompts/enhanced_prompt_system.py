@@ -12,6 +12,7 @@ from .main_prompt_generator import MainPromptGenerator
 from .specialized_prompt_generator import SpecializedPromptGenerator
 from .prompt_router import PromptRouter
 from .llm_call_manager import LLMCallManager
+from .conversation_gate import ConversationGate
 from ..tools.tool_router import ToolRouter
 
 
@@ -27,6 +28,7 @@ class EnhancedPromptSystem:
         self.specialized_generator = SpecializedPromptGenerator()
         self.prompt_router = PromptRouter()
         self.llm_manager = LLMCallManager()
+        self.conversation_gate = ConversationGate(work_dir)
         self.tool_router = ToolRouter(work_dir)
         
         # 設定
@@ -34,12 +36,21 @@ class EnhancedPromptSystem:
         self.enable_specialized_prompts = True
         self.enable_tool_routing = True
         self.enable_llm_calls = True
+        self.enable_conversation_gate = True
         
         # 使用統計
         self.prompt_usage = {
             'base_main': 0,
             'base_main_specialized': 0,
             'base_specialized': 0
+        }
+        
+        # 承認システム統計
+        self.approval_stats = {
+            'total_requests': 0,
+            'auto_approved': 0,
+            'manual_approved': 0,
+            'rejected': 0
         }
     
     def process_request(self, 
@@ -308,6 +319,111 @@ class EnhancedPromptSystem:
         except Exception as e:
             self.logger.warning(f"AgentState更新エラー: {e}")
     
+    def request_approval(self, 
+                        user_input: str, 
+                        operation_type: str,
+                        target_path: Optional[str] = None,
+                        user_id: str = "default",
+                        session_id: str = "default") -> Dict[str, Any]:
+        """承認リクエストを作成"""
+        try:
+            if not self.enable_conversation_gate:
+                return {
+                    'approved': True,
+                    'reason': '承認システムが無効',
+                    'auto_approved': True
+                }
+            
+            # ConversationGateで承認リクエストを作成
+            request = self.conversation_gate.request_approval(
+                user_input, operation_type, target_path, user_id, session_id
+            )
+            
+            # 統計を更新
+            self.approval_stats['total_requests'] += 1
+            if request.approval_status.value == 'approved':
+                self.approval_stats['auto_approved'] += 1
+            else:
+                self.approval_stats['manual_approved'] += 1
+            
+            # 承認プロンプトを生成
+            approval_prompt = self.conversation_gate.generate_approval_prompt(request)
+            
+            return {
+                'request_id': request.request_id,
+                'approved': request.approval_status.value == 'approved',
+                'auto_approved': request.approval_status.value == 'approved',
+                'approval_prompt': approval_prompt,
+                'risk_level': request.risk_level.value,
+                'expires_at': request.expires_at.isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"承認リクエスト作成に失敗: {e}")
+            return {
+                'approved': False,
+                'reason': f'承認システムエラー: {e}',
+                'auto_approved': False
+            }
+    
+    def process_approval_response(self, request_id: str, user_response: str) -> Dict[str, Any]:
+        """承認レスポンスを処理"""
+        try:
+            if not self.enable_conversation_gate:
+                return {
+                    'approved': True,
+                    'reason': '承認システムが無効'
+                }
+            
+            # ConversationGateで承認レスポンスを処理
+            response = self.conversation_gate.process_approval_response(request_id, user_response)
+            
+            # 統計を更新
+            if response.approved:
+                self.approval_stats['manual_approved'] += 1
+            else:
+                self.approval_stats['rejected'] += 1
+            
+            return {
+                'approved': response.approved,
+                'reason': response.reasoning,
+                'timestamp': response.timestamp.isoformat()
+            }
+            
+        except Exception as e:
+            self.logger.error(f"承認レスポンス処理に失敗: {e}")
+            return {
+                'approved': False,
+                'reason': f'承認処理エラー: {e}'
+            }
+    
+    def get_approval_statistics(self) -> Dict[str, Any]:
+        """承認統計を取得"""
+        try:
+            if not self.enable_conversation_gate:
+                return {
+                    'enabled': False,
+                    'message': '承認システムが無効'
+                }
+            
+            # ConversationGateの統計を取得
+            gate_stats = self.conversation_gate.get_approval_statistics()
+            
+            # 統合統計
+            return {
+                'enabled': True,
+                'conversation_gate': gate_stats,
+                'enhanced_system': self.approval_stats,
+                'pending_requests': len(self.conversation_gate.get_pending_requests())
+            }
+            
+        except Exception as e:
+            self.logger.error(f"承認統計取得に失敗: {e}")
+            return {
+                'enabled': False,
+                'error': str(e)
+            }
+    
     def get_system_status(self) -> Dict[str, Any]:
         """システムの状態を取得"""
         return {
@@ -316,11 +432,13 @@ class EnhancedPromptSystem:
                 'max_total_length': self.max_total_length,
                 'enable_specialized_prompts': self.enable_specialized_prompts,
                 'enable_tool_routing': self.enable_tool_routing,
-                'enable_llm_calls': self.enable_llm_calls
+                'enable_llm_calls': self.enable_llm_calls,
+                'enable_conversation_gate': self.enable_conversation_gate
             },
             'prompt_usage': self.prompt_usage.copy(),
             'tool_router': self.tool_router.to_dict(),
             'llm_manager': self.llm_manager.to_dict(),
+            'conversation_gate': self.get_approval_statistics(),
             'supported_patterns': self.prompt_router.get_supported_steps()
         }
     
@@ -335,6 +453,11 @@ class EnhancedPromptSystem:
         """統計をリセット"""
         for key in self.prompt_usage:
             self.prompt_usage[key] = 0
+        
+        # 承認システム統計のリセット
+        for key in self.approval_stats:
+            self.approval_stats[key] = 0
+        
         self.prompt_router.reset_statistics()
         self.tool_router.clear_history()
         self.llm_manager.clear_history()

@@ -19,8 +19,8 @@ from .collaborative_planner import ActionSpec
 from .file_ops import SimpleFileOps, FileOpOutcome
 from .simple_approval import ApprovalMode
 from .state.transition import TransitionController, TransitionLimiter
-from .state.agent_state import Step, Status
-from codecrafter.ui.rich_ui import rich_ui
+from .state_machine import Step, Status, StateMachine
+from .ui import rich_ui
 
 
 class EnhancedChatLoop(ChatLoop):
@@ -104,11 +104,17 @@ class EnhancedChatLoop(ChatLoop):
             # 発話の先頭で遷移カウンタをリセット
             if self.transition_limiter:
                 self.transition_limiter.reset()
-            # ステータス更新（Outer Loopで会話開始）
+            # ステータス更新（ステートマシン経由で会話開始）
             try:
-                self.agent_state.set_step_status(Step.PLANNING, Status.IN_PROGRESS)
-                st = self.agent_state
-                rich_ui.print_message(f"💬 会話開始 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+                if self.dual_loop_system and hasattr(self.dual_loop_system, 'state_machine'):
+                    self.dual_loop_system.state_machine.transition_to(Step.PLANNING, Status.RUNNING, "会話開始")
+                    st = self.dual_loop_system.state_machine.get_current_state()
+                    rich_ui.print_message(f"💬 会話開始 🦶 Step: {st['step']} | 📊 Status: {st['status']}", "muted")
+                else:
+                    # フォールバック: 従来の方式
+                    self.agent_state.set_step_status(Step.PLANNING, Status.IN_PROGRESS)
+                    st = self.agent_state
+                    rich_ui.print_message(f"💬 会話開始 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
             except Exception:
                 pass
             # 1. 拡張版統一意図理解を実行（プラン状態をコンテキストに含める）
@@ -292,7 +298,7 @@ class EnhancedChatLoop(ChatLoop):
                             "timestamp": datetime.now(),
                         }
                         self.task_queue.put(task_data)
-                        from codecrafter.ui.rich_ui import rich_ui
+                        from .ui import rich_ui
                         rich_ui.print_message("✅ プランを承認しました。実行を開始します。", "success")
                         return
         except Exception as e:
@@ -321,7 +327,7 @@ class EnhancedChatLoop(ChatLoop):
             self.logger.info("強制実行フラグを検出、選択プラン実行に直行")
             # 実行可能なActionSpecが存在しない場合は実行せず、詳細確認へ誘導
             if not (self.dual_loop_system and self.dual_loop_system._has_executable_plan()):
-                from codecrafter.ui.rich_ui import rich_ui
+                from .ui import rich_ui
                 self.logger.warning("実行可能なプランがありません。詳細の特定が必要です。")
                 rich_ui.print_message("⚠️ 実行可能なプランが見つかりません。まず具体的な作業項目を特定します。", "warning")
                 await self._handle_enhanced_clarification_flow(intent_result)
@@ -333,7 +339,7 @@ class EnhancedChatLoop(ChatLoop):
                 "timestamp": datetime.now(),
             }
             self.task_queue.put(task_data)
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("🚀 選択されたプランを実行キューに投入しました", "success")
             return
         
@@ -384,7 +390,7 @@ class EnhancedChatLoop(ChatLoop):
             }
             self.task_queue.put(task_data)
             
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("✅ プランを自動承認しました。実行を開始します。", "success")
             
             return "自動承認・実行を開始しました"
@@ -487,7 +493,7 @@ class EnhancedChatLoop(ChatLoop):
             
             self.task_queue.put(anti_stall_data)
             
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("🔄 スタール状態を検出しました。最小実装で前進します。", "warning")
             rich_ui.print_message("この実装は後で拡張・修正できます。", "info")
             
@@ -531,7 +537,7 @@ class EnhancedChatLoop(ChatLoop):
             }
             self.task_queue.put(task_data)
 
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("🚀 検証付き実行タスクを開始しました", "success")
             rich_ui.print_message("実行→承認→検証→結果の完全フローを実行中...", "info")
 
@@ -553,7 +559,7 @@ class EnhancedChatLoop(ChatLoop):
             
             self.task_queue.put(clarification_data)
             
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("🤔 詳細確認フローを開始しました", "info")
             rich_ui.print_message("選択肢+デフォルト方式で効率的に確認中...", "info")
             
@@ -574,7 +580,7 @@ class EnhancedChatLoop(ChatLoop):
             
             self.task_queue.put(safe_default_data)
             
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("🛡️ 安全なデフォルト提案を開始しました", "info")
             rich_ui.print_message("低リスクの最小操作を提案中...", "info")
             
@@ -589,7 +595,7 @@ class EnhancedChatLoop(ChatLoop):
             # EnhancedCompanionCoreで拡張応答を生成
             response = await self.enhanced_companion.process_with_intent_result(intent_result)
             
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_conversation_message("Duckflow Enhanced", response)
             
             # 拡張コンテキスト更新
@@ -621,7 +627,7 @@ class EnhancedChatLoop(ChatLoop):
             
             self.task_queue.put(task_data)
             
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("🚀 拡張タスクを開始しました", "success")
             rich_ui.print_message("AgentState統合により高度なコンテキスト管理を実行中...", "info")
             
@@ -648,7 +654,7 @@ class EnhancedChatLoop(ChatLoop):
             intent_result: 意図理解結果
         """
         try:
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             
             # 実行可能なプランがあるかチェック
             if not (self.dual_loop_system and self.dual_loop_system._has_executable_plan()):
@@ -759,7 +765,7 @@ class EnhancedChatLoop(ChatLoop):
         except Exception as e:
             self.logger.error(f"プラン保留中入力処理エラー: {e}")
             # 最終フォールバック
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("申し訳ありませんが、入力を理解できませんでした。", "error")
     
     async def _handle_plan_pending_fallback(self, user_message: str, intent_result: Dict[str, Any]):
@@ -781,7 +787,7 @@ class EnhancedChatLoop(ChatLoop):
             }
             self.task_queue.put(task_data)
             
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             rich_ui.print_message("🚀 選択されたプランを実行キューに投入しました", "success")
         else:
             # 選択入力ではない場合は通常の対話処理
@@ -931,12 +937,18 @@ class EnhancedTaskLoop(TaskLoop):
             # 実行開始を通知
             self._send_status(f"🚀 検証必須実行開始: {user_message[:50]}...")
             self._send_status(f"📋 フロー: 実行→承認→検証→結果")
-            # 遷移: EXECUTIONへ（許可かつ1回まで）
+            # 遷移: EXECUTIONへ（ステートマシン経由）
             try:
-                if self.dual_loop_system._try_transition(Step.EXECUTION):
-                    self.agent_state.set_step_status(Step.EXECUTION, Status.IN_PROGRESS)
-                    st = self.agent_state
-                    rich_ui.print_message(f"⚙️ 実行 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+                if self.dual_loop_system and hasattr(self.dual_loop_system, 'state_machine'):
+                    if self.dual_loop_system.state_machine.transition_to(Step.EXECUTION, Status.RUNNING, "実行開始"):
+                        st = self.dual_loop_system.state_machine.get_current_state()
+                        rich_ui.print_message(f"⚙️ 実行 🦶 Step: {st['step']} | 📊 Status: {st['status']}", "muted")
+                else:
+                    # フォールバック: 従来の方式
+                    if self.dual_loop_system._try_transition(Step.EXECUTION):
+                        self.agent_state.set_step_status(Step.EXECUTION, Status.IN_PROGRESS)
+                        st = self.agent_state
+                        rich_ui.print_message(f"⚙️ 実行 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
             except Exception:
                 pass
             # もし既に実行可能なプランが存在する場合は、選択プラン実行に直行（LLM経路を回避）
@@ -973,12 +985,18 @@ class EnhancedTaskLoop(TaskLoop):
             # 結果フェーズ（完了条件）
             self._send_status("📊 Phase 3: 最終結果確定中...")
             final_result = self._finalize_execution_result(result, intent_result)
-            # 遷移: REVIEWへ（許可かつ1回まで）
+            # 遷移: REVIEWへ（ステートマシン経由）
             try:
-                if self.dual_loop_system._try_transition(Step.REVIEW):
-                    self.agent_state.set_step_status(Step.REVIEW, Status.IN_PROGRESS)
-                    st = self.agent_state
-                    rich_ui.print_message(f"🔍 検証 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+                if self.dual_loop_system and hasattr(self.dual_loop_system, 'state_machine'):
+                    if self.dual_loop_system.state_machine.transition_to(Step.REVIEW, Status.RUNNING, "検証開始"):
+                        st = self.dual_loop_system.state_machine.get_current_state()
+                        rich_ui.print_message(f"🔍 検証 🦶 Step: {st['step']} | 📊 Status: {st['status']}", "muted")
+                else:
+                    # フォールバック: 従来の方式
+                    if self.dual_loop_system._try_transition(Step.REVIEW):
+                        self.agent_state.set_step_status(Step.REVIEW, Status.IN_PROGRESS)
+                        st = self.dual_loop_system.state_machine.get_current_state()
+                        rich_ui.print_message(f"🔍 検証 🦶 Step: {st['step']} | 📊 Status: {st['status']}", "muted")
             except Exception:
                 pass
             
@@ -993,15 +1011,24 @@ class EnhancedTaskLoop(TaskLoop):
             error_msg = f"❌ 検証必須実行エラー: {str(e)}"
             self._send_status(error_msg)
             self.logger.error(f"検証必須実行タスクエラー: {e}")
-            try:
-                # エラー時の特別遷移: 現在ステップからPLANNINGへ
-                recovery = self.dual_loop_system.transition_controller.get_error_recovery_step(self.agent_state.step)
-                if self.dual_loop_system._try_transition(recovery):
-                    self.agent_state.set_step_status(recovery, Status.ERROR)
-                    st = self.agent_state
-                    rich_ui.print_message(f"🚨 復旧 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
-            except Exception:
-                pass
+            # エラー時の特別遷移: ステートマシン経由でERROR状態へ
+            if self.dual_loop_system and hasattr(self.dual_loop_system, 'state_machine'):
+                try:
+                    self.dual_loop_system.state_machine.transition_to(Step.ERROR, Status.FAILED, "実行エラー")
+                    st = self.dual_loop_system.state_machine.get_current_state()
+                    rich_ui.print_message(f"🚨 復旧 🦶 Step: {st['step']} | 📊 Status: {st['status']}", "muted")
+                except Exception:
+                    pass
+            else:
+                # フォールバック: 従来の方式
+                try:
+                    recovery = self.dual_loop_system.transition_controller.get_error_recovery_step(self.agent_state.step)
+                    if self.dual_loop_system._try_transition(recovery):
+                        self.agent_state.set_step_status(recovery, Status.ERROR)
+                        st = self.agent_state
+                        rich_ui.print_message(f"🚨 復旧 🦶 Step: {st.step.value} | 📊 Status: {st.status.value}", "muted")
+                except Exception:
+                    pass
         
         finally:
             self.current_task = None
@@ -1881,11 +1908,14 @@ class EnhancedDualLoopSystem:
         # 共有コンテキスト管理
         self.context_manager = SharedContextManager()
 
+        # 状態遷移一元管理（最終リファクタリング）
+        self.state_machine = StateMachine()
+        
         # 遷移制御（Phase 1）
         self.transition_controller = TransitionController()
         # 設定から最大回数を取得
         try:
-            from codecrafter.base.config import config_manager
+            from .config.config_manager import config_manager
             cfg = config_manager.load_config()
             p1 = getattr(cfg, 'phase1', None)
             max_trans = 1
@@ -1957,7 +1987,7 @@ class EnhancedDualLoopSystem:
         self.running = True
         
         # 開始メッセージ
-        from codecrafter.ui.rich_ui import rich_ui
+        from .ui import rich_ui
         rich_ui.print_message("🦆 Enhanced Dual-Loop System v2.0 起動中...", "success")
         rich_ui.print_message(f"📋 セッションID: {self.session_id}", "info")
         rich_ui.print_message("🧠 AgentState統合 | 💾 ConversationMemory | 🎯 PromptCompiler", "info")

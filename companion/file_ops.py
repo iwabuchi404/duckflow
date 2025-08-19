@@ -18,8 +18,8 @@ import hashlib
 import uuid
 import asyncio
 
-from codecrafter.ui.rich_ui import rich_ui
-from codecrafter.base.config import ConfigManager
+from .ui import rich_ui
+from .config.config_manager import ConfigManager
 from companion.security.file_protector import FileProtector
 
 # 新しいシンプル承認システム
@@ -59,7 +59,7 @@ class SimpleFileOps:
         self.llm_enabled = llm_enabled
         try:
             import os as _os
-            from codecrafter.base.config import ConfigManager as _CM
+            from .config.config_manager import ConfigManager as _CM
             self.debug = _os.getenv("FILE_OPS_DEBUG") == "1" or _CM().is_debug_mode()
         except Exception:
             self.debug = False

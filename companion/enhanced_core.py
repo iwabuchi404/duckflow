@@ -10,11 +10,11 @@ from datetime import datetime
 
 # 既存システムとの統合
 from companion.state.agent_state import AgentState
-from codecrafter.memory.conversation_memory import conversation_memory
-from codecrafter.prompts.prompt_compiler import prompt_compiler
-from codecrafter.prompts.context_builder import PromptContextBuilder
-from codecrafter.base.llm_client import llm_manager
-from codecrafter.ui.rich_ui import rich_ui
+from .memory.conversation_memory import conversation_memory
+from .prompts.prompt_compiler import prompt_compiler
+from .prompts.context_builder import PromptContextBuilder
+from .base.llm_client import llm_manager
+from .ui import rich_ui
 from companion.validators.llm_output import LLMOutputFormatter, MainLLMOutput
 from companion.state.agent_state import Step
 from companion.prompts.context_assembler import ContextAssembler
@@ -392,12 +392,8 @@ class EnhancedCompanionCore:
         rag_results = None  # 現在は未実装
         
         # PromptContextを構築
-        context = self.context_builder.from_agent_state(
-            state=self.state,
-            template_name=template_name,
-            rag_results=rag_results,
-            file_context_dict=file_context
-        ).with_token_budget(8000).build()
+        context_id = self.context_builder.from_agent_state(self.state)
+        context = self.context_builder.build_prompt(context_id, "text")
         
         return context
     
@@ -829,7 +825,7 @@ class EnhancedCompanionCore:
 要求が不明確な場合は、一般的なテンプレートを提供してください。
 """
                 
-                from codecrafter.base.llm_client import llm_manager
+                from .base.llm_client import llm_manager
                 generated_content = llm_manager.chat_with_history([
                     {"role": "system", "content": "ユーザーの要求に基づいて適切なファイル内容を生成してください。"},
                     {"role": "user", "content": content_prompt}
@@ -911,7 +907,7 @@ class EnhancedCompanionCore:
     async def _extract_filename_with_llm(self, user_message: str) -> Optional[str]:
         """LLMを使用してファイル名を抽出"""
         try:
-            from codecrafter.base.llm_client import llm_manager
+            from .base.llm_client import llm_manager
             
             extraction_prompt = f"""
 ユーザーのメッセージから、作成・編集・読み込みしたいファイル名を抽出してください。
@@ -1003,7 +999,7 @@ class EnhancedCompanionCore:
             str: 処理結果
         """
         try:
-            from codecrafter.base.llm_client import llm_manager
+            from .base.llm_client import llm_manager
             
             # LLMを使って汎用的な応答を生成
             messages = [
@@ -1029,7 +1025,7 @@ class EnhancedCompanionCore:
             str: 要約
         """
         try:
-            from codecrafter.base.llm_client import llm_manager
+            from .base.llm_client import llm_manager
             
             # 内容が短い場合は要約を省略
             if len(content) < 500:

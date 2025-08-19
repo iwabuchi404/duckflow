@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, List
 
 from .choice_models import ChoiceContext, ChoiceResult
-from codecrafter.base.llm_client import llm_manager
+from ..base.llm_client import llm_manager
 
 
 class LLMChoiceParser:

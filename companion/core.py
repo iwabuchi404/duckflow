@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from typing import Optional, List
 
 # 既存コンポーネントを活用
-from codecrafter.ui.rich_ui import rich_ui
-from codecrafter.base.llm_client import llm_manager
+from .ui import rich_ui
+from .base.llm_client import llm_manager
 
 # Phase 1.5: ファイル操作機能
 from .file_ops import SimpleFileOps, FileOperationError

@@ -238,7 +238,7 @@ class LLMApprovalResponseHandler:
         Returns:
             Optional[str]: 選択された代替案
         """
-        from codecrafter.ui.rich_ui import rich_ui
+        from ..ui import rich_ui
         
         if not alternatives:
             return None

@@ -61,7 +61,7 @@ class SimpleApprovalGate:
         
         # Rich UI統合
         try:
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             self.ui = rich_ui
             logger.info("Rich UI統合成功")
         except ImportError as e:
@@ -82,10 +82,12 @@ class SimpleApprovalGate:
     def _load_config(self) -> Dict[str, Any]:
         """config.yamlから承認設定を読み込み"""
         try:
-            from codecrafter.base.config import config_manager
-            config = config_manager.config.get('approval', {})
-            logger.info(f"承認設定読み込み成功: {config}")
-            return config
+            from .config.config_manager import ConfigManager
+            config_manager = ConfigManager()
+            config = config_manager.get_config()
+            approval_config = getattr(config, 'approval', {})
+            logger.info(f"承認設定読み込み成功: {approval_config}")
+            return approval_config
         except Exception as e:
             logger.warning(f"設定読み込み失敗、フォールバック設定使用: {e}")
             # フォールバック設定

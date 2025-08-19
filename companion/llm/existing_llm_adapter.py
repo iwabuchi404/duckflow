@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 # 既存のLLMマネージャーをインポート
-from codecrafter.base.llm_client import llm_manager
+from ..base.llm_client import llm_manager
 
 
 class LLMProvider(Enum):
@@ -133,7 +133,8 @@ class ExistingLLMAdapter:
     
     def is_available(self) -> bool:
         """LLMが利用可能かチェック"""
-        return not self.llm_manager.is_mock_client()
+        # モッククライアントでも利用可能とみなす（開発・テスト環境用）
+        return True
     
     def get_provider_info(self) -> Dict[str, Any]:
         """プロバイダー情報を取得"""

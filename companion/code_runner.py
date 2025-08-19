@@ -265,7 +265,7 @@ class SimpleCodeRunner:
     def _get_execution_approval(self, file_path: Path) -> bool:
         """ファイル実行の承認を取得"""
         try:
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             
             rich_ui.print_message(f"⚠️  Pythonファイルの実行を要求されました", "warning")
             rich_ui.print_message(f"📁 ファイル: {file_path}", "info")
@@ -290,7 +290,7 @@ class SimpleCodeRunner:
     def _get_command_approval(self, command: str) -> bool:
         """コマンド実行の承認を取得"""
         try:
-            from codecrafter.ui.rich_ui import rich_ui
+            from .ui import rich_ui
             
             rich_ui.print_message(f"⚠️  コマンドの実行を要求されました", "warning")
             rich_ui.print_message(f"💻 コマンド: {command}", "info")
