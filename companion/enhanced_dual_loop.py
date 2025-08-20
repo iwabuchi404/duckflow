@@ -1,5 +1,5 @@
 """
-EnhancedDualLoopSystem - Final Refactored Version
+EnhancedDualLoopSystem - v3a Implementation
 """
 
 import threading
@@ -13,6 +13,8 @@ from .enhanced.chat_loop import EnhancedChatLoop
 from .enhanced.task_loop import EnhancedTaskLoop
 from .simple_approval import ApprovalMode
 from .ui import rich_ui
+from .state_machine import StateMachine
+from .state.enums import Step, Status
 
 
 class EnhancedDualLoopSystem:
@@ -30,6 +32,10 @@ class EnhancedDualLoopSystem:
         self.enhanced_companion = EnhancedCompanionCore(self.session_id, approval_mode)
         self.agent_state = self.enhanced_companion.get_agent_state()
 
+        # StateMachine for centralized state management (v3a)
+        self.state_machine = StateMachine()
+        self.state_machine.add_state_change_callback(self._sync_state_to_agent_state)
+        
         # Initialize Enhanced v2.0 loops with a reference to the parent system
         self.chat_loop = EnhancedChatLoop(self.task_queue, self.status_queue, self.enhanced_companion, self)
         self.task_loop = EnhancedTaskLoop(self.task_queue, self.status_queue, self.enhanced_companion, self)
@@ -47,6 +53,31 @@ class EnhancedDualLoopSystem:
             return "UNKNOWN"
         except Exception:
             return "UNKNOWN"
+    
+    def _sync_state_to_agent_state(self, step: Step, status: Status):
+        """StateMachineの状態変更をAgentStateに同期（v3a）"""
+        try:
+            if self.agent_state:
+                self.agent_state.set_step_status(step, status)
+                self.logger.info(f"StateMachine状態同期: {step.value}.{status.value}")
+            else:
+                self.logger.warning("AgentStateが利用できません")
+        except Exception as e:
+            self.logger.error(f"状態同期エラー: {e}")
+    
+    def update_state(self, new_step: Step, new_status: Status) -> bool:
+        """外部からの状態遷移要求を処理（v3a）"""
+        try:
+            # StateMachineを通じて状態遷移を実行
+            success = self.state_machine.set_state(new_step, new_status)
+            if success:
+                self.logger.info(f"状態遷移成功: {new_step.value}.{new_status.value}")
+            else:
+                self.logger.warning(f"状態遷移失敗: {new_step.value}.{new_status.value}")
+            return success
+        except Exception as e:
+            self.logger.error(f"状態遷移エラー: {e}")
+            return False
 
     def start(self):
         if self.running:

@@ -117,6 +117,10 @@ class AgentState(BaseModel):
     # 行動と結果（分離）
     step: Step = Field(default=Step.IDLE, description="現在のステップ")
     status: Status = Field(default=Status.PENDING, description="現在のステータス")
+    
+    # タスク結果管理（v3a）
+    last_task_result: Optional[Dict[str, Any]] = Field(default=None, description="最新のタスク実行結果")
+    last_task_timestamp: Optional[datetime] = Field(default=None, description="最新タスク結果のタイムスタンプ")
 
     # 既存フィールド（互換性維持）
     conversation_history: List[ConversationMessage] = Field(default_factory=list, description="対話履歴")
@@ -162,6 +166,18 @@ class AgentState(BaseModel):
         self.step = step
         self.status = status
         self.last_delta = f"step={step.value}, status={status.value}"
+    
+    def set_task_result(self, result: Dict[str, Any]) -> None:
+        """タスク結果を設定（v3a）"""
+        self.last_task_result = result
+        self.last_task_timestamp = datetime.now()
+        self.last_delta = "task_result_updated"
+    
+    def clear_task_result(self) -> None:
+        """タスク結果をクリア（v3a）"""
+        self.last_task_result = None
+        self.last_task_timestamp = None
+        self.last_delta = "task_result_cleared"
 
     def get_context_summary(self) -> Dict[str, Any]:
         """コンテキストサマリーを取得"""
