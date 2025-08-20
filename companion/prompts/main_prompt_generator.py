@@ -1,155 +1,187 @@
 """
-MainPromptGenerator - Phase 2: 固定5項目と会話状況の生成
-DuckFlowのMain Prompt（司令塔）を生成する
+Main Prompt Generator for Duckflow v3
+
+設計ドキュメント 3.2 Main Prompt（司令塔）の実装
+- 現在の状況、短期記憶、固定5項目
+- 期待するJSONフォーマットの明記
 """
 
-from typing import Dict, Any, List, Optional
-from datetime import datetime
+from typing import Dict, Any, List
+from companion.state.agent_state import AgentState, Step, Status
 
 
 class MainPromptGenerator:
-    """固定5項目と会話状況の生成器"""
+    """Main Prompt（司令塔）を生成するクラス"""
     
     def __init__(self):
-        self.fixed_five_items = {
-            "goal": "",
-            "why_now": "",
-            "constraints": [],
-            "plan_brief": [],
-            "open_questions": []
-        }
-        
-        self.current_situation = {
-            "step": "PLANNING",
-            "status": "IN_PROGRESS",
-            "ongoing_task": ""
-        }
-        
-        self.recent_conversations = []
-        self.max_conversations = 3
-        self.max_conversation_length = 100
-    
-    def generate(self, agent_state: Optional[Dict[str, Any]] = None) -> str:
-        """Main Promptを生成"""
-        # AgentStateから固定5項目を更新
-        if agent_state:
-            self._update_from_agent_state(agent_state)
-        
-        # プロンプトを構築
-        prompt = self._build_main_prompt()
-        
-        return prompt
-    
-    def _update_from_agent_state(self, agent_state: Dict[str, Any]):
-        """AgentStateから固定5項目を更新"""
-        # 固定5項目の更新
-        for key in self.fixed_five_items.keys():
-            if key in agent_state:
-                if isinstance(agent_state[key], list):
-                    # リストの場合は文字数制限を適用
-                    self.fixed_five_items[key] = [
-                        str(item)[:100] for item in agent_state[key][:3]  # 最大3個
-                    ]
-                else:
-                    # 文字列の場合は文字数制限を適用
-                    self.fixed_five_items[key] = str(agent_state[key])[:200]
-        
-        # 現在の状況の更新
-        if 'step' in agent_state:
-            self.current_situation['step'] = agent_state['step']
-        if 'status' in agent_state:
-            self.current_situation['status'] = agent_state['status']
-        if 'ongoing_task' in agent_state:
-            self.current_situation['ongoing_task'] = str(agent_state['ongoing_task'])[:200]
-    
-    def _build_main_prompt(self) -> str:
-        """Main Promptを構築"""
-        prompt = f"""# 現在の対話状況（ワーキングメモリ）
-
-現在のステップ: {self.current_situation['step']}
-現在のステータス: {self.current_situation['status']}
-進行中のタスク: {self.current_situation['ongoing_task']}
-
-# 固定5項目（文脈の核）
-目標: {self.fixed_five_items['goal']}
-なぜ今やるのか: {self.fixed_five_items['why_now']}
-制約: {', '.join(self.fixed_five_items['constraints']) if self.fixed_five_items['constraints'] else 'なし'}
-直近の計画: {', '.join(self.fixed_five_items['plan_brief']) if self.fixed_five_items['plan_brief'] else 'なし'}
-未解決の問い: {', '.join(self.fixed_five_items['open_questions']) if self.fixed_five_items['open_questions'] else 'なし'}
-
-# 直近の会話の流れ（短期記憶）
-{self._format_recent_conversations()}
-
-# 次のステップの指示
-必ず以下のJSON形式で出力してください:
-{{
+        self.json_format = """{
   "rationale": "操作の理由（1行）",
   "goal_consistency": "目標との整合性（yes/no + 理由）",
   "constraint_check": "制約チェック（yes/no + 理由）",
   "next_step": "次のステップ（done/pending_user/defer/continue）",
   "step": "ステップ（PLANNING/EXECUTION/REVIEW/AWAITING_APPROVAL）",
   "state_delta": "状態変化（あれば）"
-}}"""
-        
-        return prompt
+}"""
     
-    def _format_recent_conversations(self) -> str:
-        """直近の会話をフォーマット"""
-        if not self.recent_conversations:
-            return "- 直近の会話はありません"
+    def generate(self, agent_state: AgentState) -> str:
+        """Main Promptを生成
         
-        formatted = []
-        for i, conv in enumerate(self.recent_conversations, 1):
-            user_msg = conv.get('user', '')[:self.max_conversation_length]
-            assistant_msg = conv.get('assistant', '')[:self.max_conversation_length]
+        Args:
+            agent_state: エージェントの状態
             
-            formatted.append(f"{i}. ユーザー: {user_msg}")
-            formatted.append(f"   アシスタント: {assistant_msg}")
+        Returns:
+            str: 生成されたMain Prompt
+        """
+        # 現在の状況を構築
+        current_situation = self._build_current_situation(agent_state)
         
-        return "\n".join(formatted)
-    
-    def add_conversation(self, user_message: str, assistant_message: str):
-        """会話を追加"""
-        self.recent_conversations.append({
-            'user': user_message,
-            'assistant': assistant_message,
-            'timestamp': datetime.now().isoformat()
-        })
+        # 固定5項目を構築
+        fixed_five_items = self._build_fixed_five_items(agent_state)
         
-        # 最大件数を制限
-        if len(self.recent_conversations) > self.max_conversations:
-            self.recent_conversations = self.recent_conversations[-self.max_conversations:]
+        # 短期記憶（直近の会話）を構築
+        recent_conversation_flow = self._build_recent_conversation_flow(agent_state)
+        
+        # Main Promptを構築
+        main_prompt = f"""# 現在の対話状況（ワーキングメモリ）
+
+{current_situation}
+
+# 固定5項目（文脈の核）
+{fixed_five_items}
+
+# 直近の会話の流れ（短期記憶）
+{recent_conversation_flow}
+
+# 次のステップの指示
+必ず以下のJSON形式で出力してください:
+
+{self.json_format}
+
+# ファイル操作の場合の追加指示
+もしファイルの読み込み、書き込み、分析などの操作が必要な場合は、以下のフィールドも含めてください:
+- "file_target": "対象ファイル名（例: game_doc.md）"
+- "action": "実行するアクション（例: read_file, write_file, analyze_file）"
+- "file_operation_details": "ファイル操作の詳細説明" """
+        
+        return main_prompt
     
-    def update_current_situation(self, step: str = None, status: str = None, ongoing_task: str = None):
-        """現在の状況を更新"""
-        if step:
-            self.current_situation['step'] = step
-        if status:
-            self.current_situation['status'] = status
-        if ongoing_task:
-            self.current_situation['ongoing_task'] = ongoing_task
+    def _build_current_situation(self, agent_state: AgentState) -> str:
+        """現在の状況を構築"""
+        situation_parts = []
+        
+        # 現在のステップ
+        if hasattr(agent_state, 'step'):
+            current_step = agent_state.step.value if isinstance(agent_state.step, Step) else str(agent_state.step)
+            situation_parts.append(f"現在のステップ: {current_step}")
+        
+        # 現在のステータス
+        if hasattr(agent_state, 'status'):
+            current_status = agent_state.status.value if isinstance(agent_state.status, Status) else str(agent_state.status)
+            situation_parts.append(f"現在のステータス: {current_status}")
+        
+        # 進行中のタスク
+        if hasattr(agent_state, 'current_task') and agent_state.current_task:
+            situation_parts.append(f"進行中のタスク: {agent_state.current_task}")
+        else:
+            situation_parts.append("進行中のタスク: なし")
+        
+        if not situation_parts:
+            situation_parts.append("現在の状況: 初期化中")
+        
+        return "\n".join(situation_parts)
     
-    def update_fixed_five_items(self, **kwargs):
-        """固定5項目を更新"""
-        for key, value in kwargs.items():
-            if key in self.fixed_five_items:
-                if isinstance(value, list):
-                    # リストの場合は文字数制限を適用
-                    self.fixed_five_items[key] = [
-                        str(item)[:100] for item in value[:3]  # 最大3個
-                    ]
-                else:
-                    # 文字列の場合は文字数制限を適用
-                    self.fixed_five_items[key] = str(value)[:200]
+    def _build_fixed_five_items(self, agent_state: AgentState) -> str:
+        """固定5項目を構築"""
+        items = []
+        
+        # 目標
+        goal = getattr(agent_state, 'goal', '') or '未設定'
+        items.append(f"目標: {goal}")
+        
+        # なぜ今やるのか
+        why_now = getattr(agent_state, 'why_now', '') or '未設定'
+        items.append(f"なぜ今やるのか: {why_now}")
+        
+        # 制約
+        constraints = getattr(agent_state, 'constraints', []) or []
+        if constraints:
+            constraints_str = "; ".join(constraints)
+        else:
+            constraints_str = "制約なし"
+        items.append(f"制約: {constraints_str}")
+        
+        # 直近の計画
+        plan_brief = getattr(agent_state, 'plan_brief', []) or []
+        if plan_brief:
+            plan_str = "; ".join(plan_brief)
+        else:
+            plan_str = "計画なし"
+        items.append(f"直近の計画: {plan_str}")
+        
+        # 未解決の問い
+        open_questions = getattr(agent_state, 'open_questions', []) or []
+        if open_questions:
+            questions_str = "; ".join(open_questions)
+        else:
+            questions_str = "未解決の問いなし"
+        items.append(f"未解決の問い: {questions_str}")
+        
+        return "\n".join(items)
     
-    def get_prompt_length(self) -> int:
+    def _build_recent_conversation_flow(self, agent_state: AgentState) -> str:
+        """直近の会話の流れを構築"""
+        if not hasattr(agent_state, 'conversation_history') or not agent_state.conversation_history:
+            return "まだ会話履歴がありません"
+        
+        # 最新3件の会話を取得
+        recent_messages = agent_state.conversation_history[-3:]
+        flow_parts = []
+        
+        for i, msg in enumerate(recent_messages, 1):
+            role = msg.role if hasattr(msg, 'role') else 'unknown'
+            content = msg.content if hasattr(msg, 'content') else ''
+            
+            # 内容を100文字以内に制限
+            if len(content) > 100:
+                content = content[:97] + "..."
+            
+            flow_parts.append(f"{i}. {role}: {content}")
+        
+        return "\n".join(flow_parts)
+    
+    def update_fixed_five(self, agent_state: AgentState, 
+                          goal: str = None, why_now: str = None,
+                          constraints: List[str] = None,
+                          plan_brief: List[str] = None,
+                          open_questions: List[str] = None) -> None:
+        """固定5項目を更新
+        
+        Args:
+            agent_state: エージェントの状態
+            goal: 新しい目標
+            why_now: 新しい理由
+            constraints: 新しい制約
+            plan_brief: 新しい計画
+            open_questions: 新しい未解決の問い
+        """
+        if goal is not None:
+            agent_state.goal = goal[:200]
+        
+        if why_now is not None:
+            agent_state.why_now = why_now[:200]
+        
+        if constraints is not None:
+            agent_state.constraints = constraints[:2]  # 最大2個
+        
+        if plan_brief is not None:
+            agent_state.plan_brief = plan_brief[:3]  # 最大3個
+        
+        if open_questions is not None:
+            agent_state.open_questions = open_questions[:2]  # 最大2個
+        
+        # 最後の変更を記録
+        agent_state.last_delta = "fixed_five_updated"
+    
+    def get_prompt_length(self, agent_state: AgentState) -> int:
         """プロンプトの長さを取得"""
-        return len(self.generate())
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """設定を辞書形式で取得"""
-        return {
-            'fixed_five_items': self.fixed_five_items,
-            'current_situation': self.current_situation,
-            'recent_conversations': self.recent_conversations
-        }
+        return len(self.generate(agent_state))

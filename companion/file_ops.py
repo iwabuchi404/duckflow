@@ -263,7 +263,22 @@ class SimpleFileOps:
         if not path.is_file():
             raise FileOperationError(f"ファイルが見つからないか、ファイルではありません: {file_path}")
         try:
-            return path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8")
+            
+            # ファイル読み取りコンテキストを記録（EnhancedCompanionCore用）
+            try:
+                from companion.enhanced_core import EnhancedCompanionCore
+                if hasattr(self, 'enhanced_core') and self.enhanced_core:
+                    self.enhanced_core._record_file_operation("read", file_path, content[:200])
+                elif hasattr(self, 'state') and hasattr(self.state, 'collected_context'):
+                    # AgentStateに直接記録
+                    if 'file_contents' not in self.state.collected_context:
+                        self.state.collected_context['file_contents'] = {}
+                    self.state.collected_context['file_contents'][file_path] = content[:1000]
+            except Exception:
+                pass  # コンテキスト記録に失敗しても読み取りは継続
+            
+            return content
         except Exception as e:
             raise FileOperationError(f"ファイル読み取り失敗: {e}")
 

@@ -18,14 +18,27 @@ class LLMCallManager:
         self.timeout_seconds = 30
         self.call_history = []
         self.max_history = 10
+        try:
+            # 設定反映（存在すれば）
+            from ..config.config_manager import config_manager
+            cfg = config_manager.get_config()
+            # LLM関連の設定
+            self.timeout_seconds = int(getattr(cfg, 'llm_timeout_seconds', self.timeout_seconds))
+            self.max_retries = int(getattr(cfg, 'llm_max_retries', self.max_retries))
+        except Exception:
+            pass
     
     def call_llm(self, prompt: str, 
                   expected_format: str = "json",
                   temperature: float = 0.7,
-                  max_tokens: int = 1000) -> Dict[str, Any]:
+                  max_tokens: int = 1000,
+                  retries: Optional[int] = None,
+                  timeout_seconds: Optional[int] = None) -> Dict[str, Any]:
         """LLMを呼び出し"""
         try:
             self.logger.info(f"LLM呼び出し開始: {len(prompt)}文字, 形式: {expected_format}")
+            max_retries = self.max_retries if retries is None else retries
+            timeout = self.timeout_seconds if timeout_seconds is None else timeout_seconds
             
             # 呼び出し履歴に記録
             call_record = {
@@ -36,22 +49,50 @@ class LLMCallManager:
                 'max_tokens': max_tokens
             }
             
-            # 実際のLLM呼び出し（現在はモック）
-            response = self._mock_llm_call(prompt, expected_format, temperature, max_tokens)
-            
-            # 呼び出し結果を記録
-            call_record['success'] = response.get('success', False)
-            call_record['response_length'] = len(str(response.get('content', '')))
-            call_record['processing_time'] = response.get('processing_time', 0)
-            
-            self._add_to_history(call_record)
-            
-            if response.get('success'):
+            # リトライ付き呼び出し
+            last_error: Optional[str] = None
+            import time
+            for attempt in range(1, max_retries + 1):
+                # 実際のLLM呼び出し（現在はモック）
+                response = self._mock_llm_call(prompt, expected_format, temperature, max_tokens)
+                
+                # タイムアウト判定（モックなので処理時間基準）
+                if response.get('processing_time', 0) > timeout * 1000:
+                    last_error = f"timeout ({response.get('processing_time')}ms > {timeout*1000}ms)"
+                    self.logger.warning(f"LLM呼び出しタイムアウト: 試行{attempt}/{max_retries}")
+                    if attempt < max_retries:
+                        time.sleep(min(2 ** (attempt - 1), 5))
+                    continue
+                
+                # 形式検証
+                content = response.get('content', '') or ''
+                if not self.validate_response_format(content, expected_format):
+                    last_error = "format_validation_failed"
+                    self.logger.warning(f"応答形式検証失敗: 試行{attempt}/{max_retries}")
+                    if attempt < max_retries:
+                        time.sleep(min(2 ** (attempt - 1), 5))
+                    continue
+                
+                # 呼び出し結果を記録
+                call_record['success'] = True
+                call_record['response_length'] = len(str(content))
+                call_record['processing_time'] = response.get('processing_time', 0)
+                self._add_to_history(call_record)
                 self.logger.info(f"LLM呼び出し成功: {response.get('processing_time', 0)}ms")
-            else:
-                self.logger.error(f"LLM呼び出し失敗: {response.get('error', 'Unknown error')}")
+                return response
             
-            return response
+            # すべて失敗
+            call_record['success'] = False
+            call_record['response_length'] = 0
+            call_record['processing_time'] = 0
+            self._add_to_history(call_record)
+            self.logger.error(f"LLM呼び出し失敗: {last_error or 'Unknown error'}")
+            return {
+                'success': False,
+                'error': last_error or 'Unknown error',
+                'content': None,
+                'processing_time': 0
+            }
             
         except Exception as e:
             self.logger.error(f"LLM呼び出しエラー: {e}")

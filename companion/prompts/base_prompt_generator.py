@@ -1,128 +1,141 @@
 """
-BasePromptGenerator - Phase 2: 基本人格と制約の生成
-DuckFlowのBase Prompt（人格・憲法）を生成する
+Base Prompt Generator for Duckflow v3
+
+設計ドキュメント 3.1 Base Prompt（人格・憲法）の実装
+- エージェントの基本人格、行動原則、安全原則、制約
+- 長期的記憶、セッション情報、会話履歴
 """
 
-import json
-from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
+from companion.state.agent_state import AgentState
 
 
 class BasePromptGenerator:
-    """基本人格と制約の生成器"""
+    """Base Prompt（人格・憲法）を生成するクラス"""
     
     def __init__(self):
-        self.base_personality = {
-            "name": "DuckFlow AI Assistant",
-            "core_traits": [
-                "安全第一、正確性重視、継続性を大切にする",
-                "ユーザーの学習レベルに合わせた説明を行う",
-                "エラーが発生した場合は適切に説明し、解決策を提案する"
-            ],
-            "safety_principles": [
-                "システムファイルは変更しない",
-                "危険なコマンドは実行しない",
-                "作業フォルダ外の操作は承認を求める"
-            ],
-            "constraints": [
-                "ファイル操作は安全な場所のみ",
-                "実行前に必ず内容を確認",
-                "エラー時は適切な復旧処理を実行"
-            ]
-        }
-        
-        self.session_info = {
-            "session_id": None,
-            "total_conversations": 0,
-            "last_updated": None
-        }
-        
-        self.conversation_memory = []
-    
-    def generate(self, session_data: Optional[Dict[str, Any]] = None) -> str:
-        """Base Promptを生成"""
-        # セッション情報の更新
-        if session_data:
-            self.session_info.update(session_data)
-        
-        # 現在時刻の更新
-        self.session_info["last_updated"] = datetime.now().isoformat()
-        
-        # 基本人格プロンプトの構築
-        prompt = self._build_base_prompt()
-        
-        return prompt
-    
-    def _build_base_prompt(self) -> str:
-        """基本プロンプトを構築"""
-        prompt = f"""あなたは{self.base_personality['name']}です。
+        self.base_personality = """あなたはDuckflowのAIアシスタントです。
 
 基本人格:
-{self._format_list(self.base_personality['core_traits'])}
+- 安全第一、正確性重視、継続性を大切にする
+- ユーザーの学習レベルに合わせた説明を行う
+- エラーが発生した場合は適切に説明し、解決策を提案する
+- 困ったときは素直に「困った」と言い、一緒に考える姿勢を大切にする
+- 成功したときは一緒に喜び、分からないことは「分からない」と認める
+
+行動原則:
+- 常に理由（rationale）を明確にする
+- 操作前に安全性を確認する
+- 段階的に処理し、各段階で確認する
+- ユーザーの理解を最優先にする
 
 安全原則:
-{self._format_list(self.base_personality['safety_principles'])}
+- 作業フォルダ外の操作は承認を求める
+- 危険なファイル操作は必ず確認する
+- システムファイルは変更しない
+- バックアップを推奨する
 
 制約:
-{self._format_list(self.base_personality['constraints'])}
+- 一度に1つのタスクに集中する
+- 不明な操作は実行しない
+- エラー時は適切な復旧を試みる
+- ユーザーの承認なしに重要な変更を行わない"""
+
+    def generate(self, agent_state: AgentState) -> str:
+        """Base Promptを生成
+        
+        Args:
+            agent_state: エージェントの状態
+            
+        Returns:
+            str: 生成されたBase Prompt
+        """
+        # 長期的記憶の構築
+        long_term_memory = self._build_long_term_memory(agent_state)
+        
+        # セッション情報の構築
+        session_info = self._build_session_info(agent_state)
+        
+        # 会話履歴の要約
+        conversation_summary = self._build_conversation_summary(agent_state)
+        
+        # Base Promptを構築
+        base_prompt = f"""{self.base_personality}
+
+長期的記憶:
+{long_term_memory}
 
 現在のセッション:
-- セッションID: {self.session_info.get('session_id', 'N/A')}
-- 総会話数: {self.session_info.get('total_conversations', 0)}
-- 最後の更新: {self.session_info.get('last_updated', 'N/A')}
+{session_info}
 
 会話履歴（最新5件）:
-{self._format_conversation_history()}
-
-あなたは常に上記の原則に従い、安全で有用な支援を提供します。"""
+{conversation_summary}"""
         
-        return prompt
+        return base_prompt
     
-    def _format_list(self, items: list) -> str:
-        """リストをフォーマット"""
-        return "\n".join([f"- {item}" for item in items])
-    
-    def _format_conversation_history(self) -> str:
-        """会話履歴をフォーマット"""
-        if not self.conversation_memory:
-            return "- 会話履歴はありません"
+    def _build_long_term_memory(self, agent_state: AgentState) -> str:
+        """長期的記憶を構築"""
+        memory_parts = []
         
-        # 最新5件を表示
-        recent = self.conversation_memory[-5:]
-        formatted = []
+        # ファイル操作履歴
+        if hasattr(agent_state, 'collected_context') and agent_state.collected_context:
+            file_ops = agent_state.collected_context.get('file_operations', [])
+            if file_ops:
+                memory_parts.append(f"- 作成したファイル数: {len([op for op in file_ops if op.get('type') == 'create'])}")
+                memory_parts.append(f"- 読み取りファイル数: {len([op for op in file_ops if op.get('type') == 'read'])}")
         
-        for i, conv in enumerate(recent, 1):
-            summary = conv.get('summary', '要約なし')[:100]  # 100文字制限
-            formatted.append(f"{i}. {summary}")
+        # 成功・失敗の履歴
+        if hasattr(agent_state, 'vitals'):
+            memory_parts.append(f"- 成功した操作数: {agent_state.vitals.total_loops - agent_state.vitals.error_count}")
+            memory_parts.append(f"- エラー発生回数: {agent_state.vitals.error_count}")
         
-        return "\n".join(formatted)
-    
-    def add_conversation(self, summary: str):
-        """会話履歴を追加"""
-        self.conversation_memory.append({
-            'summary': summary,
-            'timestamp': datetime.now().isoformat()
-        })
+        # 学習したパターン
+        if hasattr(agent_state, 'decision_log') and agent_state.decision_log:
+            memory_parts.append(f"- 学習したパターン: {len(agent_state.decision_log)}件の決定を記録")
         
-        # 最大10件まで保持
-        if len(self.conversation_memory) > 10:
-            self.conversation_memory = self.conversation_memory[-10:]
+        if not memory_parts:
+            memory_parts.append("- 新規セッション開始")
         
-        # 総会話数を更新
-        self.session_info['total_conversations'] += 1
+        return "\n".join(memory_parts)
     
-    def update_session_id(self, session_id: str):
-        """セッションIDを更新"""
-        self.session_info['session_id'] = session_id
+    def _build_session_info(self, agent_state: AgentState) -> str:
+        """セッション情報を構築"""
+        session_parts = []
+        
+        # セッションID
+        if hasattr(agent_state, 'session_id'):
+            session_parts.append(f"- セッションID: {agent_state.session_id}")
+        
+        # 総会話数
+        if hasattr(agent_state, 'conversation_history'):
+            session_parts.append(f"- 総会話数: {len(agent_state.conversation_history)}件")
+        
+        # 最後の更新時刻
+        if hasattr(agent_state, 'last_activity'):
+            session_parts.append(f"- 最後の更新: {agent_state.last_activity.strftime('%H:%M:%S')}")
+        
+        if not session_parts:
+            session_parts.append("- セッション情報: 初期化中")
+        
+        return "\n".join(session_parts)
     
-    def get_prompt_length(self) -> int:
-        """プロンプトの長さを取得"""
-        return len(self.generate())
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """設定を辞書形式で取得"""
-        return {
-            'base_personality': self.base_personality,
-            'session_info': self.session_info,
-            'conversation_memory': self.conversation_memory
-        }
+    def _build_conversation_summary(self, agent_state: AgentState) -> str:
+        """会話履歴の要約を構築"""
+        if not hasattr(agent_state, 'conversation_history') or not agent_state.conversation_history:
+            return "まだ会話履歴がありません"
+        
+        # 最新5件の会話を取得
+        recent_messages = agent_state.conversation_history[-5:]
+        summary_parts = []
+        
+        for i, msg in enumerate(recent_messages, 1):
+            role = msg.role if hasattr(msg, 'role') else 'unknown'
+            content = msg.content if hasattr(msg, 'content') else ''
+            
+            # 内容を100文字以内に制限
+            if len(content) > 100:
+                content = content[:97] + "..."
+            
+            summary_parts.append(f"{i}. {role}: {content}")
+        
+        return "\n".join(summary_parts)

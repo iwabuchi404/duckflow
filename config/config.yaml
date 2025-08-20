@@ -413,3 +413,11 @@ approval:
     auto_approve_all: false   # 全自動承認（非推奨）
 
 
+# Phase 4 / LLM 呼び出し制御・観測設定
+llm_max_retries: 3
+llm_timeout_seconds: 30
+gate_auto_stats: true
+health_logging_enabled: true
+health_logging_interval: 60
+
+

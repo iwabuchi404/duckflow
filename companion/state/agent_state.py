@@ -120,6 +120,7 @@ class AgentState(BaseModel):
     open_questions: List[str] = Field(default_factory=list, description="未解決の問い（最大2個）")
 
     # 追加フィールド
+    short_term_memory: Dict[str, Any] = Field(default_factory=dict, description="タスクをまたいで引き継がれる短期記憶")
     context_refs: List[str] = Field(default_factory=list, description="関連参照")
     decision_log: List[str] = Field(default_factory=list, description="採択済みの方針ログ")
     pending_gate: bool = Field(default=False, description="承認待ちの有無")

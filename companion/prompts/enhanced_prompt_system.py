@@ -14,6 +14,8 @@ from .prompt_router import PromptRouter
 from .llm_call_manager import LLMCallManager
 from .conversation_gate import ConversationGate
 from ..tools.tool_router import ToolRouter
+from ..ui import print_table
+from ..config.config_manager import config_manager
 
 
 class EnhancedPromptSystem:
@@ -37,6 +39,9 @@ class EnhancedPromptSystem:
         self.enable_tool_routing = True
         self.enable_llm_calls = True
         self.enable_conversation_gate = True
+        # 設定反映
+        cfg = config_manager.get_config()
+        self.enable_gate_auto_stats = bool(getattr(cfg, 'gate_auto_stats', False))
         
         # 使用統計
         self.prompt_usage = {
@@ -87,6 +92,19 @@ class EnhancedPromptSystem:
             
             # 5. 統計更新
             self.prompt_usage[selected_pattern] += 1
+
+            # 5b. 会話ゲート統計の自動表示（任意）
+            if self.enable_conversation_gate and self.enable_gate_auto_stats:
+                try:
+                    stats = self.get_approval_statistics()
+                    cg = stats.get('conversation_gate', {})
+                    rows = [["総リクエスト", cg.get('total_requests', 0)],
+                            ["承認率(%)", cg.get('approval_rate', 0.0)],
+                            ["平均処理時間(s)", cg.get('average_processing_time', 0.0)],
+                            ["保留中", cg.get('pending_requests', 0)]]
+                    print_table(["項目", "値"], rows, title="ConversationGate 統計 (Auto)")
+                except Exception:
+                    pass
             
             # 6. 結果の構築
             result = {

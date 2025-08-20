@@ -171,7 +171,7 @@ class ChatLoop:
         try:
             # CompanionCoreで直接応答を生成
             response = await self.companion.process_with_intent_result(intent_result)
-            rich_ui.print_conversation_message("Duckflow", response)
+            rich_ui.print_conversation_message(response, "assistant")
             
             # コンテキスト更新
             if self.context_manager:
@@ -217,7 +217,7 @@ class ChatLoop:
         try:
             # 既存のCompanionCoreを使用（非同期対応）
             response = await self.companion.process_message(user_input)
-            rich_ui.print_conversation_message("Duckflow", response)
+            rich_ui.print_conversation_message(response, "assistant")
             
         except Exception as e:
             self.logger.error(f"対話処理エラー: {e}")
