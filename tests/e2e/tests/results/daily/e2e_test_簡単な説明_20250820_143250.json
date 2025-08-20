@@ -1,0 +1,47 @@
+{
+  "session_id": "8f366d71-34fd-4d40-a4ec-138a687564db",
+  "scenario_name": "簡単な説明",
+  "start_time": "2025-08-20T14:32:49.237756",
+  "end_time": "2025-08-20T14:32:50.560514",
+  "exchanges": [
+    {
+      "exchange_id": 1,
+      "timestamp": "2025-08-20T14:32:49.844201",
+      "user": "hello.pyファイルを作ってHello Worldを出力してください",
+      "duckflow": "hello.pyファイルを作成します。以下の内容で作成してよろしいですか？\\n\\n```python\\nprint('Hello World')\\n```\\n\\n承認してください。",
+      "user_length": 36,
+      "duckflow_length": 90,
+      "system_state": {}
+    },
+    {
+      "exchange_id": 2,
+      "timestamp": "2025-08-20T14:32:50.459460",
+      "user": "ありがとうございます。具体例も見せてもらえますか？",
+      "duckflow": "申し訳ありませんが、「ありがとうございます。具体例も見せてもらえますか？」についてはよく理解できませんでした。もう少し具体的に教えてください。",
+      "user_length": 25,
+      "duckflow_length": 71,
+      "system_state": {}
+    }
+  ],
+  "system_states": [],
+  "files_created": [],
+  "completion_status": "completed",
+  "test_config": {
+    "max_exchanges": 4,
+    "timeout_minutes": 3,
+    "min_score": 3.0
+  },
+  "error_messages": [],
+  "completion_reason": "テスト終了要求",
+  "statistics": {
+    "total_exchanges": 2,
+    "total_user_characters": 61,
+    "total_duckflow_characters": 161,
+    "average_user_length": 30.5,
+    "average_duckflow_length": 80.5,
+    "duration_seconds": 1.322758,
+    "exchanges_per_minute": 90.71954204775173,
+    "total_files_created": 0,
+    "total_errors": 0
+  }
+}

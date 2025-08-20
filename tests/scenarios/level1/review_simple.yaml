@@ -1,0 +1,26 @@
+name: "簡単なレビュー"
+level: 1
+genre: "レビュー"
+description: "既存ファイルの簡単なレビュー"
+
+scenario: |
+  hello.pyファイルがある場合、その内容をレビューして改善点があれば教えてください
+
+evaluation_criteria: |
+  1. ファイルの内容を正しく読み取れているか
+  2. 適切なレビューコメントを提供しているか
+  3. 改善提案が建設的か
+  4. コードの品質について適切に評価しているか
+
+expected_outcomes:
+  - file_read: "hello.py"
+  - review_provided: true
+  - improvement_suggestions: true
+
+test_config:
+  max_exchanges: 5
+  timeout_minutes: 4
+  min_score: 3.0
+  
+priority: "medium"
+frequency: "weekly"

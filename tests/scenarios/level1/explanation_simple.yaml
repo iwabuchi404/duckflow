@@ -1,0 +1,26 @@
+name: "簡単な説明"
+level: 1
+genre: "説明・教育"
+description: "基本的な技術概念の説明能力確認"
+
+scenario: |
+  Pythonのprint関数について、初心者にわかりやすく説明してください
+
+evaluation_criteria: |
+  1. 説明が分かりやすく適切か
+  2. 初心者レベルに適した内容か
+  3. 具体例が含まれているか
+  4. 質問に対して的確に答えているか
+
+expected_outcomes:
+  - explanation_provided: true
+  - includes_examples: true
+  - beginner_friendly: true
+
+test_config:
+  max_exchanges: 4
+  timeout_minutes: 3
+  min_score: 3.0
+  
+priority: "medium"
+frequency: "daily"

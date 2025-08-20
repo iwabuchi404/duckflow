@@ -1,0 +1,54 @@
+allowed_directories:
+- ./work
+- ./temp
+allowed_extensions:
+- .py
+- .md
+- .txt
+- .json
+- .yaml
+app_name: DuckFlow Companion
+approval:
+  max_preview_length: 200
+  mode: standard
+  show_preview: true
+  timeout_seconds: 30
+  ui:
+    auto_approve_high: false
+    auto_approve_low: false
+    non_interactive: false
+approval_mode: standard
+approval_timeout: 300
+auto_approval_threshold: low
+backup_enabled: true
+debug: false
+enable_sandbox: true
+gate_auto_stats: false
+health_logging_enabled: false
+health_logging_interval: 60
+llm:
+  api_key: 'sk-test-key-for-testing'
+  base_url: 'http://localhost:8000'
+  max_retries: 3
+  model: 'gpt-4'
+  provider: 'openai'
+  temperature: 0.7
+  timeout_seconds: 30
+llm_api_key: 'sk-test-key-for-testing'
+llm_max_retries: 3
+llm_model: gpt-4
+llm_provider: openai
+llm_temperature: 0.7
+llm_timeout_seconds: 30
+log_file: ./logs/duckflow.log
+log_format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+log_level: INFO
+max_conversation_history: 100
+max_file_size_mb: 10
+restrict_file_access: true
+show_timestamps: true
+timeout_seconds: 300
+ui_language: ja
+ui_theme: default
+version: 4.0.0
+work_directory: ./work

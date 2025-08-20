@@ -1,0 +1,64 @@
+{
+  "session_id": "58a2c2d8-c840-41fe-acbe-cfbe05ca84e2",
+  "scenario_name": "簡単なレビュー",
+  "start_time": "2025-08-20T09:59:29.733220",
+  "end_time": "2025-08-20T09:59:31.643747",
+  "exchanges": [
+    {
+      "exchange_id": 1,
+      "timestamp": "2025-08-20T09:59:30.334361",
+      "user": "hello.pyファイルを作ってHello Worldを出力してください",
+      "duckflow": "hello.pyファイルを作成します。以下の内容で作成してよろしいですか？\\n\\n```python\\nprint('Hello World')\\n```\\n\\n承認してください。",
+      "user_length": 36,
+      "duckflow_length": 90,
+      "system_state": {}
+    },
+    {
+      "exchange_id": 2,
+      "timestamp": "2025-08-20T09:59:30.938091",
+      "user": "はい、お願いします",
+      "duckflow": "hello.pyファイルを作成しました。ファイルにはHello Worldを出力するコードが含まれています。",
+      "user_length": 9,
+      "duckflow_length": 54,
+      "system_state": {}
+    },
+    {
+      "exchange_id": 3,
+      "timestamp": "2025-08-20T09:59:31.542503",
+      "user": "ファイルの内容を確認できますか？",
+      "duckflow": "hello.pyファイルの内容:\\n```python\\nprint('Hello World')\\n```\\n\\nファイルは正常に作成されています。",
+      "user_length": 16,
+      "duckflow_length": 75,
+      "system_state": {}
+    }
+  ],
+  "system_states": [],
+  "files_created": [
+    {
+      "timestamp": "2025-08-20T09:59:30.937754",
+      "operation": "create",
+      "file_path": "hello.py",
+      "content_preview": "print('Hello World')",
+      "content_length": 20
+    }
+  ],
+  "completion_status": "completed",
+  "test_config": {
+    "max_exchanges": 5,
+    "timeout_minutes": 4,
+    "min_score": 3.0
+  },
+  "error_messages": [],
+  "completion_reason": "テスト終了要求",
+  "statistics": {
+    "total_exchanges": 3,
+    "total_user_characters": 61,
+    "total_duckflow_characters": 219,
+    "average_user_length": 20.333333333333332,
+    "average_duckflow_length": 73.0,
+    "duration_seconds": 1.910527,
+    "exchanges_per_minute": 94.21484229220523,
+    "total_files_created": 1,
+    "total_errors": 0
+  }
+}
