@@ -19,11 +19,8 @@ from companion.validators.llm_output import LLMOutputFormatter, MainLLMOutput
 from companion.state.agent_state import Step
 from companion.prompts.context_assembler import ContextAssembler
 
-# 既存のCompanionCore機能
-from .core import CompanionCore, ActionType
+# Enhanced v2.0では最小限の依存のみ残す
 from .simple_approval import ApprovalMode
-from .shared_context_manager import SharedContextManager
-from .plan_tool import PlanTool, MessageRef
 
 
 class EnhancedCompanionCore:
@@ -66,15 +63,23 @@ class EnhancedCompanionCore:
         self.prompt_compiler = prompt_compiler
         self.context_builder = PromptContextBuilder()
         
-        # 既存のCompanionCoreも保持（フォールバック用）
-        self.legacy_companion = CompanionCore(approval_mode=approval_mode)
+        # Enhanced v2.0では独立したコア機能を提供
+        self.approval_mode = approval_mode
         
         # ファイル操作統合
         from .file_ops import SimpleFileOps
         self.file_ops = SimpleFileOps(approval_mode=approval_mode)
         
-        # PlanTool統合
-        self.plan_tool = PlanTool()
+        # Enhanced v2.0では簡易プラン管理
+        self.current_plan = None
+        
+        # PlanTool統合（Enhanced v2.0用に簡略化）
+        try:
+            from .plan_tool import PlanTool
+            self.plan_tool = PlanTool()
+        except ImportError:
+            self.logger.warning("PlanToolが利用できません。簡易プラン管理モードで動作します。")
+            self.plan_tool = None
         
         # Phase 1.6: コード実行機能統合
         from .code_runner import SimpleCodeRunner
@@ -122,15 +127,25 @@ class EnhancedCompanionCore:
             sources = [MessageRef(message_id="user_request", timestamp=datetime.now().isoformat())]
             tags = ["user_request", "auto_generated", "context_aware"]
 
-            # プラン作成
-            plan_id = self.plan_tool.propose(plan_generation_prompt, sources, rationale, tags)
+            # プラン作成（PlanToolが利用可能な場合のみ）
+            if self.plan_tool:
+                plan_id = self.plan_tool.propose(plan_generation_prompt, sources, rationale, tags)
 
-            # ActionSpec保証（ActionSpecの生成は元の入力で行う）
-            self._ensure_action_specs(plan_id, user_input)
+                # ActionSpec保証（ActionSpecの生成は元の入力で行う）
+                self._ensure_action_specs(plan_id, user_input)
 
-            # 承認要求
-            from .plan_tool import SpecSelection
-            self.plan_tool.request_approval(plan_id, SpecSelection(all=True))
+                # 承認要求
+                from .plan_tool import SpecSelection
+                self.plan_tool.request_approval(plan_id, SpecSelection(all=True))
+            else:
+                # PlanToolが利用できない場合は簡易プラン管理
+                plan_id = str(uuid.uuid4())
+                self.current_plan = {
+                    'id': plan_id,
+                    'content': plan_generation_prompt,
+                    'created_at': datetime.now().isoformat()
+                }
+                self.logger.info(f"簡易プラン作成: {plan_id}")
 
             return plan_id
 
@@ -139,22 +154,30 @@ class EnhancedCompanionCore:
             raise
     
     def _ensure_action_specs(self, plan_id: str, content: str):
-        """ActionSpec保証（フォールバックなし）"""
-        from .collaborative_planner import ActionSpec
-        
-        # 動的なファイルパスと説明の生成
-        file_path = self._generate_dynamic_file_path(content)
-        description = self._generate_dynamic_description(content)
-        
-        action_spec = ActionSpec(
-            kind='implement',
-            path=file_path,
-            description=description,
-            optional=False
-        )
-        
-        # エラー時は例外を投げる（フォールバックなし）
-        self.plan_tool.set_action_specs(plan_id, [action_spec])
+        """ActionSpec保証（PlanToolが利用可能な場合のみ）"""
+        if not self.plan_tool:
+            self.logger.warning("PlanToolが利用できないため、ActionSpec設定をスキップします")
+            return
+            
+        try:
+            from .collaborative_planner import ActionSpec
+            
+            # 動的なファイルパスと説明の生成
+            file_path = self._generate_dynamic_file_path(content)
+            description = self._generate_dynamic_description(content)
+            
+            action_spec = ActionSpec(
+                kind='implement',
+                path=file_path,
+                description=description,
+                optional=False
+            )
+            
+            # ActionSpec設定
+            self.plan_tool.set_action_specs(plan_id, [action_spec])
+        except Exception as e:
+            self.logger.error(f"ActionSpec設定エラー: {e}")
+            # エラー時はログ出力のみ（システム停止は回避）
     
     def _generate_dynamic_file_path(self, content: str) -> str:
         """動的なファイルパスを生成"""
@@ -410,21 +433,33 @@ class EnhancedCompanionCore:
     def set_plan_state(self, plan_content: str, plan_type: str = "execution_plan"):
         """プラン状態を設定（PlanTool統合版）"""
         try:
-            plan_id = self.plan_tool.propose(
-                content=plan_content,
-                sources=[MessageRef(message_id=str(uuid.uuid4()), timestamp=datetime.now().isoformat())],
-                rationale=f"AI生成プラン: {plan_type}",
-                tags=[plan_type, "ai_generated"]
-            )
-            self.current_plan_state = {
-                "pending": True,
-                "plan_content": plan_content,
-                "plan_type": plan_type,
-                "created_at": datetime.now(),
-                "plan_id": plan_id
-            }
+            if self.plan_tool:
+                plan_id = self.plan_tool.propose(
+                    content=plan_content,
+                    sources=[MessageRef(message_id=str(uuid.uuid4()), timestamp=datetime.now().isoformat())],
+                    rationale=f"AI生成プラン: {plan_type}",
+                    tags=[plan_type, "ai_generated"]
+                )
+                self.current_plan_state = {
+                    "pending": True,
+                    "plan_content": plan_content,
+                    "plan_type": plan_type,
+                    "created_at": datetime.now(),
+                    "plan_id": plan_id
+                }
+            else:
+                # PlanToolが利用できない場合は簡易プラン管理
+                plan_id = str(uuid.uuid4())
+                self.current_plan_state = {
+                    "pending": True,
+                    "plan_content": plan_content,
+                    "plan_type": plan_type,
+                    "created_at": datetime.now(),
+                    "plan_id": plan_id
+                }
+                self.logger.info(f"簡易プラン状態設定: {plan_id}")
         except Exception as e:
-            self.logger.error(f"PlanTool統合エラー: {e}")
+            self.logger.error(f"プラン状態設定エラー: {e}")
             self.current_plan_state = {"pending": True, "plan_content": plan_content, "plan_type": plan_type, "created_at": datetime.now()}
         
         self.state.short_term_memory["current_plan_state"] = self.current_plan_state
@@ -436,7 +471,8 @@ class EnhancedCompanionCore:
     
     def clear_plan_state(self):
         """プラン状態をクリア"""
-        self.plan_tool.clear_current()
+        if self.plan_tool:
+            self.plan_tool.clear_current()
         self.current_plan_state = {"pending": False, "plan_content": None, "plan_type": None, "created_at": None}
         if "current_plan_state" in self.state.short_term_memory:
             del self.state.short_term_memory["current_plan_state"]

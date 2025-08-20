@@ -17,10 +17,13 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+# .env ファイルをロードして環境変数を設定
+from dotenv import load_dotenv
+load_dotenv()
+
 try:
     # Enhanced Dual-Loop System (実行阻害改善機能統合版) を優先使用
     from companion.enhanced_dual_loop import EnhancedDualLoopSystem
-    from companion.dual_loop import DualLoopSystem  # フォールバック用
     from codecrafter.ui.rich_ui import rich_ui
     from codecrafter.base.config import config_manager
     
@@ -62,12 +65,10 @@ class DuckflowCompanion:
                 else:
                     raise ImportError("Enhanced版が利用できません")
             except Exception as e:
-                # フォールバック: 標準版を使用
-                rich_ui.print_message(f"Enhanced版の初期化に失敗: {e}", "warning")
-                rich_ui.print_message("📋 標準版Dual-Loop Systemを使用します", "info")
-                self.dual_loop_system = DualLoopSystem()
-                self.system_version = "Standard v1.0"
-                rich_ui.print_success("✅ Standard Dual-Loop System (v1.0) が準備できました！")
+                # Enhanced版のみ使用、フォールバックなし
+                rich_ui.print_error(f"Enhanced v2.0の初期化に失敗しました: {e}")
+                rich_ui.print_message("システムを終了します。エラーを確認してください。", "error")
+                raise
             
             # ログ設定
             logging.basicConfig(
