@@ -14,6 +14,7 @@ from typing import Optional
 
 from .chat_loop import ChatLoop
 from .task_loop import TaskLoop
+from .state_machine import StateMachine
 
 
 class DualLoopSystem:
@@ -29,6 +30,9 @@ class DualLoopSystem:
         self.task_queue = queue.Queue()      # ChatLoop → TaskLoop
         self.status_queue = queue.Queue()    # TaskLoop → ChatLoop
         
+        # 状態管理（新しいChatLoopとの互換性のため）
+        self.state_machine = StateMachine()
+        
         # 共有のCompanionCoreインスタンス
         from .core import CompanionCore
         self.shared_companion = CompanionCore()
@@ -42,17 +46,14 @@ class DualLoopSystem:
             self.task_queue, 
             self.status_queue, 
             self.shared_companion,
-            self.context_manager
+            self
         )
         self.task_loop = TaskLoop(
             self.task_queue, 
             self.status_queue, 
             self.shared_companion,
-            self.context_manager
+            self
         )
-        
-        # 相互参照を設定（Step 3: 協調的計画のため）
-        self.chat_loop.set_task_loop(self.task_loop)
         
         # スレッド管理
         self.task_thread: Optional[threading.Thread] = None
@@ -123,5 +124,5 @@ class DualLoopSystem:
         return hasattr(self.task_loop, 'current_task') and self.task_loop.current_task is not None
 
 
-# デフォルトインスタンス
-dual_loop_system = DualLoopSystem()
+# デフォルトインスタンス（import-time initializationを避けるためコメントアウト）
+# dual_loop_system = DualLoopSystem()

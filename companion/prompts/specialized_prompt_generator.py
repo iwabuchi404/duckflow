@@ -88,21 +88,38 @@ class SpecializedPromptGenerator:
 承認可否: [承認/要修正/拒否]
 ```"""
 
-    def generate(self, step: Step, agent_state: Optional[AgentState] = None) -> str:
+    def generate(self, step, agent_state: Optional[AgentState] = None) -> str:
         """Specialized Promptを生成
         
         Args:
-            step: 現在のステップ
+            step: 現在のステップ（Step型または文字列）
             agent_state: エージェントの状態（オプション）
             
         Returns:
             str: 生成されたSpecialized Prompt
         """
-        if step == Step.PLANNING:
+        # Stepの値を安全に取得
+        def get_step_value(step_obj):
+            if hasattr(step_obj, 'value'):
+                return step_obj.value
+            elif isinstance(step_obj, str):
+                return step_obj
+            else:
+                return str(step_obj)
+        
+        step_value = get_step_value(step)
+        
+        # Stepの比較を安全に行う
+        def is_step_type(step_obj, target_step):
+            step_val = get_step_value(step_obj)
+            target_val = get_step_value(target_step)
+            return step_val == target_val
+        
+        if is_step_type(step, Step.PLANNING):
             return self._generate_planning_prompt(agent_state)
-        elif step == Step.EXECUTION:
+        elif is_step_type(step, Step.EXECUTION):
             return self._generate_execution_prompt(agent_state)
-        elif step == Step.REVIEW:
+        elif is_step_type(step, Step.REVIEW):
             return self._generate_review_prompt(agent_state)
         else:
             return self._generate_generic_prompt(step, agent_state)

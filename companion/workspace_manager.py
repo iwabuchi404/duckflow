@@ -202,6 +202,79 @@ class WorkspaceManager:
         """フォルダ名を取得"""
         return Path(path).name or str(Path(path))
     
+    def get_current_directory_name(self) -> str:
+        """現在のディレクトリ名を取得（ChatLoopとの互換性用）"""
+        return self._get_folder_name(self.current_workspace)
+    
+    def cd(self, path: str) -> str:
+        """ディレクトリを変更（ChatLoopとの互換性用）
+        
+        Args:
+            path: 移動先のパス
+            
+        Returns:
+            str: 結果メッセージ
+            
+        Raises:
+            Exception: 移動に失敗した場合
+        """
+        success, message = self.change_workspace(path)
+        if success:
+            return message
+        else:
+            raise Exception(message.replace("❌ ", ""))
+    
+    def pwd(self) -> str:
+        """現在のディレクトリパスを取得（ChatLoopとの互換性用）
+        
+        Returns:
+            str: 現在のディレクトリパス
+        """
+        return str(Path(self.current_workspace).resolve())
+    
+    def ls(self, path: str = ".") -> str:
+        """ディレクトリの内容を一覧表示（ChatLoopとの互換性用）
+        
+        Args:
+            path: 一覧表示するパス（デフォルト: 現在のディレクトリ）
+            
+        Returns:
+            str: ディレクトリの内容
+        """
+        try:
+            # パスが相対パスの場合は現在のワークスペースからの相対パスとして解釈
+            if not Path(path).is_absolute():
+                target_path = Path(self.current_workspace) / path
+            else:
+                target_path = Path(path)
+            
+            target_path = target_path.resolve()
+            
+            if not target_path.exists():
+                return f"パスが存在しません: {target_path}"
+            
+            if not target_path.is_dir():
+                return f"ディレクトリではありません: {target_path}"
+            
+            # ディレクトリの内容を取得
+            items = []
+            try:
+                for item in target_path.iterdir():
+                    if item.is_dir():
+                        items.append(f"📁 {item.name}/")
+                    else:
+                        items.append(f"📄 {item.name}")
+            except PermissionError:
+                return f"アクセス権限がありません: {target_path}"
+            
+            if not items:
+                return "空のディレクトリです"
+            
+            return "\n".join(sorted(items))
+            
+        except Exception as e:
+            return f"エラー: {e}"
+    
     def _detect_project_type(self, path: Path) -> Optional[str]:
         """プロジェクトの種類を検出"""
         try:

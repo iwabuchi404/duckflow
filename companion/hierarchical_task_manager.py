@@ -180,6 +180,12 @@ class HierarchicalTaskManager:
         Returns:
             str: 作成された親タスクID
         """
+        # デバッグ情報を追加
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"create_parent_task 呼び出し: name={name}, description={description[:50]}...")
+        logger.info(f"作成前の親タスク数: {len(self.parent_tasks)}")
+        
         task_id = str(uuid.uuid4())[:8]
         
         parent_task = ParentTask(
@@ -191,6 +197,9 @@ class HierarchicalTaskManager:
         
         self.parent_tasks[task_id] = parent_task
         self.current_parent_task = parent_task
+        
+        logger.info(f"親タスク作成完了: task_id={task_id}, 作成後の親タスク数: {len(self.parent_tasks)}")
+        logger.info(f"親タスクID一覧: {list(self.parent_tasks.keys())}")
         
         return task_id
     
@@ -236,10 +245,19 @@ class HierarchicalTaskManager:
         Returns:
             bool: 開始に成功した場合True
         """
+        # デバッグ情報を追加
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"start_parent_task 呼び出し: parent_task_id={parent_task_id}")
+        logger.info(f"現在の親タスク数: {len(self.parent_tasks)}")
+        logger.info(f"親タスクID一覧: {list(self.parent_tasks.keys())}")
+        
         parent_task = self.parent_tasks.get(parent_task_id)
         if not parent_task:
+            logger.error(f"親タスクが見つかりません: {parent_task_id}")
             return False
         
+        logger.info(f"親タスク開始: {parent_task.name} (ID: {parent_task_id})")
         parent_task.status = TaskStatus.RUNNING
         parent_task.started_at = datetime.now()
         self.current_parent_task = parent_task
@@ -330,11 +348,19 @@ class HierarchicalTaskManager:
         Returns:
             Optional[str]: 作成された親タスクID
         """
+        # デバッグ情報を追加
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"decompose_task 呼び出し: task_description={task_description}")
+        
         # シンプルな分解ロジック（実際のプロジェクトではLLMを使用）
         parent_task_id = self.create_parent_task(
             name=f"分解タスク: {task_description[:30]}...",
             description=task_description
         )
+        
+        logger.info(f"親タスク作成完了: parent_task_id={parent_task_id}")
+        logger.info(f"作成後の親タスク数: {len(self.parent_tasks)}")
         
         # 基本的な分解パターン
         if "ファイル" in task_description and ("作成" in task_description or "書く" in task_description):
@@ -345,7 +371,7 @@ class HierarchicalTaskManager:
             
         elif "レビュー" in task_description or "確認" in task_description:
             # レビュータスクの分解
-            self.add_sub_task(parent_task_id, "ファイル一覧取得", "レビュー対象ファイルをリストアップ")
+            self.add_sub_task(parent_task_id, "要件分析", "レビュー対象と要件を分析")
             self.add_sub_task(parent_task_id, "コード解析", "各ファイルのコードを解析", depends_on=[f"{parent_task_id}_sub_1"])
             self.add_sub_task(parent_task_id, "レポート作成", "レビュー結果のレポートを作成", depends_on=[f"{parent_task_id}_sub_2"])
             
@@ -361,6 +387,7 @@ class HierarchicalTaskManager:
             self.add_sub_task(parent_task_id, "実行", "タスクを実行", depends_on=[f"{parent_task_id}_sub_1"])
             self.add_sub_task(parent_task_id, "確認", "実行結果を確認", depends_on=[f"{parent_task_id}_sub_2"])
         
+        logger.info(f"子タスク追加完了: 親タスクID={parent_task_id}, 子タスク数={len(self.parent_tasks[parent_task_id].sub_tasks)}")
         return parent_task_id
     
     def get_task_status_summary(self, parent_task_id: Optional[str] = None) -> Dict[str, Any]:

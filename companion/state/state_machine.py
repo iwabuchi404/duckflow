@@ -21,6 +21,7 @@ class Step(Enum):
     PLANNING = "PLANNING"   # 計画立案
     EXECUTION = "EXECUTION" # 実行
     REVIEW = "REVIEW"       # レビュー
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"  # 承認待ち
     COMPLETED = "COMPLETED" # 完了
     ERROR = "ERROR"         # エラー
 

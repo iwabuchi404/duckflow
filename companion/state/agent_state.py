@@ -13,19 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 from enum import Enum
 from pydantic import BaseModel, Field
 
-
-class Step(Enum):
-    PLANNING = "PLANNING"
-    EXECUTION = "EXECUTION"
-    REVIEW = "REVIEW"
-    AWAITING_APPROVAL = "AWAITING_APPROVAL"
-
-
-class Status(Enum):
-    IN_PROGRESS = "IN_PROGRESS"
-    SUCCESS = "SUCCESS"
-    ERROR = "ERROR"
-    REQUIRES_USER_INPUT = "REQUIRES_USER_INPUT"
+from .enums import Step, Status
 
 
 class ConversationMessage(BaseModel):
@@ -127,8 +115,8 @@ class AgentState(BaseModel):
     last_delta: str = Field(default="", description="直近の変更の要約")
 
     # 行動と結果（分離）
-    step: Step = Field(default=Step.PLANNING, description="現在のステップ")
-    status: Status = Field(default=Status.IN_PROGRESS, description="現在のステータス")
+    step: Step = Field(default=Step.IDLE, description="現在のステップ")
+    status: Status = Field(default=Status.PENDING, description="現在のステータス")
 
     # 既存フィールド（互換性維持）
     conversation_history: List[ConversationMessage] = Field(default_factory=list, description="対話履歴")
@@ -201,21 +189,18 @@ class AgentState(BaseModel):
 
     def needs_memory_management(self) -> bool:
         """記憶管理が必要かチェック"""
-        # 会話履歴が20件を超えた場合
         return len(self.conversation_history) > 20
 
     def create_memory_summary(self) -> bool:
         """記憶要約を作成"""
         try:
             if len(self.conversation_history) <= 10:
-                return False  # 要約不要
+                return False
             
-            # 最新の10件を保持し、残りを要約
             recent_messages = self.conversation_history[-10:]
             old_messages = self.conversation_history[:-10]
             
             if old_messages:
-                # 古いメッセージを要約（簡易版）
                 summary_content = f"過去{len(old_messages)}件のメッセージを要約"
                 summary_message = ConversationMessage(
                     role="system",
@@ -223,7 +208,6 @@ class AgentState(BaseModel):
                     metadata={"type": "memory_summary", "count": len(old_messages)}
                 )
                 
-                # 要約を履歴の先頭に挿入
                 self.conversation_history = [summary_message] + recent_messages
                 self.history_summary = summary_content
                 self.summary_created_at = datetime.now()
@@ -253,5 +237,3 @@ class AgentState(BaseModel):
         if count <= 0:
             return []
         return self.conversation_history[-count:] if len(self.conversation_history) > count else self.conversation_history
-
-

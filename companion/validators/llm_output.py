@@ -1,19 +1,11 @@
 """
-Phase 1 LLM Output Validator for Main LLM JSON
-
-Expected fields:
-- rationale: str
-- goal_consistency: str
-- constraint_check: str
-- next_step: str
-- step: str
-- state_delta: str | None
-
-Behavior:
-- validate JSON shape; if invalid, allow one repair attempt via simple heuristics
+Phase 1 LLM Output Validator for Main LLM JSON (Corrected)
 """
 from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, ValidationError
+
+# 統一されたEnum定義をインポート
+from companion.state.enums import Step, Status
 
 
 class MainLLMOutput(BaseModel):
@@ -21,7 +13,9 @@ class MainLLMOutput(BaseModel):
     goal_consistency: str = Field(...)
     constraint_check: str = Field(...)
     next_step: str = Field(...)
-    step: str = Field(...)
+    # 型定義をstrからEnumに修正
+    step: Step = Field(...)
+    status: Status = Field(...)
     state_delta: Optional[str] = Field(default=None)
 
 
@@ -33,12 +27,18 @@ class LLMOutputFormatter:
         return MainLLMOutput(**data)
 
     def try_repair(self, data: Dict[str, Any]) -> Optional[MainLLMOutput]:
-        # Best-effort repair: coerce missing keys to empty strings
-        keys = ["rationale", "goal_consistency", "constraint_check", "next_step", "step", "state_delta"]
-        patched = {k: data.get(k, "") for k in keys}
+        # Best-effort repair
+        keys = ["rationale", "goal_consistency", "constraint_check", "next_step", "step", "status", "state_delta"]
+        patched = {
+            "rationale": data.get("rationale", ""),
+            "goal_consistency": data.get("goal_consistency", ""),
+            "constraint_check": data.get("constraint_check", ""),
+            "next_step": data.get("next_step", ""),
+            "step": data.get("step", Step.IDLE),
+            "status": data.get("status", Status.PENDING),
+            "state_delta": data.get("state_delta", "")
+        }
         try:
             return MainLLMOutput(**patched)
         except ValidationError:
             return None
-
-

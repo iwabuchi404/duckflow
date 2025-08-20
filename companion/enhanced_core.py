@@ -268,18 +268,47 @@ class EnhancedCompanionCore:
             main_context_prompt = self.context_builder.build_prompt(main_context_id, "text")
 
             specialized_prompt = ""
-            prompt_pattern = getattr(understanding_result, 'prompt_pattern', 'base_main')
-            self.logger.info(f"LLMによるプロンプトパターン選択: {prompt_pattern}")
+            # 現在のステップに基づいてプロンプトパターンを選択
+            current_step = self.state.step
+            
+            # Stepの値を安全に取得
+            def get_step_value(step):
+                if hasattr(step, 'value'):
+                    return step.value
+                elif isinstance(step, str):
+                    return step
+                else:
+                    return str(step)
+            
+            current_step_value = get_step_value(current_step)
+            
+            # Stepの比較を安全に行う
+            def is_step_type(step, target_step):
+                step_value = get_step_value(step)
+                target_value = get_step_value(target_step)
+                return step_value == target_value
+            
+            if is_step_type(current_step, Step.PLANNING) or is_step_type(current_step, Step.EXECUTION) or is_step_type(current_step, Step.REVIEW):
+                prompt_pattern = 'base_main_specialized'
+            else:
+                prompt_pattern = getattr(understanding_result, 'prompt_pattern', 'base_main')
+            
+            self.logger.info(f"LLMによるプロンプトパターン選択: {prompt_pattern} (ステップ: {current_step_value})")
 
             if prompt_pattern == 'base_main_specialized':
                 try:
                     from .prompts.specialized_prompt_generator import SpecializedPromptGenerator
                     specialized_generator = SpecializedPromptGenerator()
-                    current_step = self.state.step
-                    if current_step in [Step.PLANNING, Step.EXECUTION, Step.REVIEW]:
-                        specialized_prompt = specialized_generator.generate(current_step.value, self.state.model_dump())
+                    if is_step_type(current_step, Step.PLANNING) or is_step_type(current_step, Step.EXECUTION) or is_step_type(current_step, Step.REVIEW):
+                        specialized_prompt = specialized_generator.generate(current_step_value, self.state.model_dump())
                 except Exception as e:
                     self.logger.error(f"Specializedプロンプト生成エラー: {e}")
+                    # エラー時はbase_mainにフォールバック
+                    prompt_pattern = 'base_main'
+                    # デバッグ情報を追加
+                    self.logger.debug(f"フォールバック理由: current_step={current_step}, type={type(current_step)}")
+                    if hasattr(current_step, '__dict__'):
+                        self.logger.debug(f"current_step attributes: {current_step.__dict__}")
 
             system_prompt = f"{main_context_prompt}\n\n{specialized_prompt}".strip()
             
@@ -447,19 +476,40 @@ class EnhancedCompanionCore:
         """拡張版ファイル操作処理"""
         try:
             rich_ui.print_message("📁 ファイル操作タスクとして処理中...", "info")
+            
+            # ファイルパスの抽出を試行
             file_path = await self._extract_file_path_from_llm(user_message)
-
-            if any(kw in user_message for kw in ["読", "確認", "内容", "見て"]):
+            
+            # キーワードベースの判定を改善
+            has_read_keywords = any(kw in user_message for kw in ["読", "確認", "内容", "見て", "把握"])
+            has_write_keywords = any(kw in user_message for kw in ["書", "作成", "作成して", "作って", "出力", "生成"])
+            has_list_keywords = any(kw in user_message for kw in ["一覧", "ls", "dir", "表示"])
+            
+            # ファイル読み込み
+            if has_read_keywords:
                 return await self._handle_file_read_operation(user_message)
+            
+            # ファイル書き込み（ファイルパスが不明でも試行）
+            elif has_write_keywords:
+                if file_path:
+                    return await self._handle_file_write_operation(user_message)
+                else:
+                    # ファイルパスが不明な場合、ユーザーに確認
+                    return "ファイルを作成したいと思いますが、ファイル名が特定できませんでした。\n\n具体的なファイル名を教えてください（例: 'game_doc.md' や 'README.txt' など）。"
+            
+            # ファイル一覧
+            elif has_list_keywords:
+                return await self._handle_file_list_operation(user_message)
+            
+            # プラン生成（ファイル操作以外）
             elif any(kw in user_message for kw in ["プラン", "計画"]) and not file_path:
                 plan = self._generate_plan_unified(user_message)
                 return plan
-            elif any(kw in user_message for kw in ["書", "作成"]) and file_path:
-                return await self._handle_file_write_operation(user_message)
-            elif any(kw in user_message for kw in ["一覧", "ls"]):
-                return await self._handle_file_list_operation(user_message)
+            
+            # その他の場合は通常の応答生成
             else:
                 return await self._generate_enhanced_response(user_message, system_prompt)
+                
         except Exception as e:
             self.logger.error(f"拡張ファイル操作エラー: {e}")
             return self.legacy_companion._handle_file_operation(user_message)
@@ -549,13 +599,92 @@ class EnhancedCompanionCore:
     
     async def _handle_file_write_operation(self, user_message: str) -> str:
         """ファイル書き込み操作を処理"""
-        # ... (Implementation omitted for brevity)
-        return "ファイル書き込みは現在実装中です。"
+        try:
+            file_path = await self._extract_file_path_from_llm(user_message)
+            
+            if not file_path:
+                return "ファイル名を特定できませんでした。具体的なファイル名を指定してください。"
+            
+            # ファイル内容を生成
+            content_prompt = f"""以下の要求に基づいて、ファイル '{file_path}' の内容を生成してください。
+
+要求: {user_message}
+
+ファイル名: {file_path}
+
+適切な内容を生成し、ファイルの種類に応じた形式で出力してください。"""
+
+            content = await llm_manager.generate(content_prompt)
+            
+            # ファイルに書き込み
+            try:
+                self.file_ops.write_file(file_path, content)
+                
+                # 状態を更新
+                self.state.short_term_memory["last_written_file"] = {
+                    "path": file_path,
+                    "length": len(content),
+                    "timestamp": datetime.now().isoformat()
+                }
+                self._record_file_operation("write", file_path, content[:100])
+                self.state.add_message("assistant", f"ファイル '{file_path}' を作成・更新しました")
+                
+                return f"✅ ファイル '{file_path}' を作成・更新しました\n\n📄 内容:\n{content}"
+                
+            except Exception as e:
+                return f"❌ ファイル書き込みエラー: {str(e)}"
+                
+        except Exception as e:
+            self.logger.error(f"ファイル書き込み操作エラー: {e}")
+            return f"ファイル書き込み処理中にエラーが発生しました: {str(e)}"
     
     async def _handle_file_list_operation(self, user_message: str) -> str:
         """ファイル一覧操作を処理"""
-        # ... (Implementation omitted for brevity)
-        return "ファイル一覧は現在実装中です。"
+        try:
+            import os
+            from pathlib import Path
+            
+            # 現在のディレクトリを取得
+            current_dir = Path.cwd()
+            
+            # ファイルとディレクトリを取得
+            items = []
+            for item in current_dir.iterdir():
+                if item.is_file():
+                    # ファイルサイズを取得
+                    try:
+                        size = item.stat().st_size
+                        size_str = f"{size:,} bytes" if size < 1024 else f"{size/1024:.1f} KB"
+                    except:
+                        size_str = "unknown"
+                    items.append(f"📄 {item.name} ({size_str})")
+                elif item.is_dir():
+                    items.append(f"📁 {item.name}/")
+            
+            # ソート
+            items.sort()
+            
+            # 結果を整形
+            if items:
+                result = f"📂 現在のディレクトリ: {current_dir}\n\n"
+                result += "ファイルとディレクトリ:\n"
+                result += "\n".join(items)
+                result += f"\n\n合計: {len(items)} 項目"
+            else:
+                result = f"📂 現在のディレクトリ: {current_dir}\n\nディレクトリは空です。"
+            
+            # 状態を更新
+            self.state.short_term_memory["last_directory_listing"] = {
+                "path": str(current_dir),
+                "count": len(items),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"ファイル一覧操作エラー: {e}")
+            return f"ファイル一覧の取得に失敗しました: {str(e)}"
 
     async def _generate_file_summary(self, file_path: str, content: str) -> str:
         """ファイル内容の要約を生成"""
