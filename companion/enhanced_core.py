@@ -14,11 +14,16 @@ from companion.enhanced.types import ActionType, IntentResult, TaskContext
 from .memory.conversation_memory import conversation_memory
 from .prompts.prompt_compiler import prompt_compiler
 from .prompts.context_builder import PromptContextBuilder
-from .base.llm_client import llm_manager
+# from .base.llm_client import llm_manager  # 削除: 新しいシステムに置き換え
 from .ui import rich_ui
 from companion.validators.llm_output import LLMOutputFormatter, MainLLMOutput
 from companion.prompts.context_assembler import ContextAssembler
 from .simple_approval import ApprovalMode
+
+# 新しいLLM呼び出しシステム
+from companion.prompts.prompt_context_service import PromptContextService, PromptPattern
+from companion.prompts.llm_call_manager import LLMCallManager
+from companion.intent_understanding.intent_analyzer_llm import IntentAnalyzerLLM
 
 
 class EnhancedCompanionCore:
@@ -61,6 +66,9 @@ class EnhancedCompanionCore:
         self.prompt_compiler = prompt_compiler
         self.context_builder = PromptContextBuilder()
         
+        # 遅延初期化用のキャッシュ
+        self._collaborative_planner_cache = None
+        
         # Enhanced v2.0では独立したコア機能を提供
         self.approval_mode = approval_mode
         
@@ -89,6 +97,13 @@ class EnhancedCompanionCore:
         self.llm_output_formatter = LLMOutputFormatter()
         # Phase 2: Context Assembler（Base+Main）
         self.context_assembler = ContextAssembler()
+        
+        # 新しいLLM呼び出しシステム
+        self.prompt_context_service = PromptContextService()
+        self.llm_call_manager = LLMCallManager()
+        
+        # IntentAnalyzerLLMを初期化
+        self.intent_analyzer = IntentAnalyzerLLM()
         
         # ログ設定
         import logging
@@ -201,75 +216,54 @@ class EnhancedCompanionCore:
         else:
             return f"ユーザー要求の処理: {content[:100]}..."
     
+    # 意図検出処理は削除 - IntentAnalyzerLLMを使用するため
+    
+    # 意図検出関連メソッドは削除 - IntentAnalyzerLLMを使用するため
+    # _analyze_intent_enhanced, _determine_action_type, _analyze_intent_simple, _build_main_llm_output
+    
     async def analyze_intent_only(self, user_message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Enhanced v2.0独立版意図理解（AgentState活用）"""
+        """IntentAnalyzerLLMを使用した意図理解"""
         try:
-            return await self._analyze_intent_enhanced(user_message, context)
+            # IntentAnalyzerLLMで意図理解を実行
+            intent_result = await self.intent_analyzer.analyze(user_message, self.state, context)
+            
+            # 結果をEnhancedCompanionCore形式に変換
+            return {
+                "action_type": intent_result.action_type,
+                "understanding_result": intent_result,
+                "message": user_message,
+                "enhanced_mode": True,
+                "session_id": self.state.session_id,
+                "conversation_count": len(self.state.conversation_history),
+                "route_type": "intent_analyzer_llm",
+                "risk_level": "low",
+                "prerequisite_status": "ready"
+            }
         except Exception as e:
-            self.logger.error(f"Enhanced意図理解エラー: {e}")
+            self.logger.error(f"IntentAnalyzerLLM意図理解エラー: {e}")
             # フォールバック: 簡易意図理解
-            return self._analyze_intent_simple(user_message)
+            return await self._analyze_intent_fallback(user_message)
     
-    async def _analyze_intent_enhanced(self, user_message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Enhanced v2.0独立版意図理解"""
-        self.state.add_message("user", user_message)
-        if self.state.needs_memory_management():
-            if self.state.create_memory_summary():
-                rich_ui.print_message("🧠 会話履歴を要約しました", "info")
-        
-        # Enhanced v2.0独立の意図理解ロジック
-        action_type = self._determine_action_type(user_message)
-        
-        result_payload = {
-            "action_type": action_type,
-            "understanding_result": None,
-            "message": user_message,
-            "enhanced_mode": True,
-            "session_id": self.state.session_id,
-            "conversation_count": len(self.state.conversation_history)
-        }
-
-        # Enhanced v2.0では独立した情報を設定
-        result_payload.update({
-            "route_type": "enhanced_v2",
-            "risk_level": "low",
-            "prerequisite_status": "ready",
-            "routing_reason": "enhanced_v2_independent_analysis",
-            "metadata": {"enhanced_mode": True}
-        })
-
+    async def _analyze_intent_fallback(self, user_message: str) -> Dict[str, Any]:
+        """フォールバック用の簡易意図理解"""
+        # LLMによる意図理解を試行
         try:
-            main_json = self._build_main_llm_output(result_payload)
-            validated = self.llm_output_formatter.validate(main_json)
-            result_payload["main_llm_output"] = validated.model_dump()
-        except Exception:
-            repaired = self.llm_output_formatter.try_repair(main_json if 'main_json' in locals() else {})
-            if repaired:
-                result_payload["main_llm_output"] = repaired.model_dump()
+            action_type = await self._determine_action_type_llm(user_message)
+        except Exception as e:
+            self.logger.warning(f"LLM意図理解エラー: {e}, フォールバックキーワード判定を使用")
+            # 基本的なキーワードベースの判定（緊急時のみ）
+            message_lower = user_message.lower()
+            
+            if any(kw in message_lower for kw in ["読", "見て", "確認", "内容", "ファイル", "file", "読み"]):
+                action_type = ActionType.FILE_OPERATION
+            elif any(kw in message_lower for kw in ["作成", "書", "出力", "生成", "create", "write"]):
+                action_type = ActionType.FILE_OPERATION
+            elif any(kw in message_lower for kw in ["実行", "run", "テスト", "test"]):
+                action_type = ActionType.CODE_EXECUTION
+            elif any(kw in message_lower for kw in ["プラン", "計画", "設計", "plan"]):
+                action_type = ActionType.PLAN_GENERATION
             else:
-                result_payload["main_llm_output_error"] = "validation_failed"
-
-        return result_payload
-    
-    def _determine_action_type(self, user_message: str) -> ActionType:
-        """Enhanced v2.0独立のアクションタイプ決定（型安全）"""
-        message_lower = user_message.lower()
-        
-        # ファイル操作の判定
-        if any(kw in message_lower for kw in ["読", "見て", "確認", "内容", "ファイル", "file", "読み"]):
-            return ActionType.FILE_OPERATION
-        elif any(kw in message_lower for kw in ["作成", "書", "出力", "生成", "create", "write"]):
-            return ActionType.FILE_OPERATION
-        elif any(kw in message_lower for kw in ["実行", "run", "テスト", "test"]):
-            return ActionType.CODE_EXECUTION
-        elif any(kw in message_lower for kw in ["プラン", "計画", "設計", "plan"]):
-            return ActionType.PLAN_GENERATION
-        else:
-            return ActionType.DIRECT_RESPONSE
-    
-    def _analyze_intent_simple(self, user_message: str) -> Dict[str, Any]:
-        """簡易意図理解（フォールバック用）"""
-        action_type = self._determine_action_type(user_message)
+                action_type = ActionType.DIRECT_RESPONSE
         
         return {
             "action_type": action_type,
@@ -278,97 +272,76 @@ class EnhancedCompanionCore:
             "enhanced_mode": False,
             "session_id": self.state.session_id,
             "conversation_count": len(self.state.conversation_history),
-            "route_type": "simple_fallback",
-            "risk_level": "low",
+            "route_type": "fallback_keyword",
+            "risk_level": "medium",
             "prerequisite_status": "ready"
-        }
-
-    def _build_main_llm_output(self, intent_result: Dict[str, Any]) -> Dict[str, Any]:
-        """意図理解結果から最小のMain LLM JSONを合成"""
-        action_type = intent_result.get("action_type")
-        action_val = getattr(action_type, 'value', str(action_type))
-        next_step = "continue" if action_val in ["direct_response", "file_operation"] else "defer"
-        
-        return {
-            "rationale": "意図分析に基づく次アクションの決定",
-            "goal_consistency": "yes: 目標と整合" if getattr(self.state, 'goal', '') else "yes: 目標未設定",
-            "constraint_check": "yes: 制約を尊重" if getattr(self.state, 'constraints', []) else "yes: 制約なし",
-            "next_step": next_step,
-            "step": self.state.step.value if isinstance(self.state.step, Step) else str(self.state.step),
-            "state_delta": getattr(self.state, 'last_delta', "")
         }
     
     async def process_with_intent_result(self, intent_result: Dict[str, Any]) -> str:
-        """意図理解結果を再利用してメッセージを処理 (リファクタリング版)"""
-        # Enhanced v2.0では常にEnhanced処理を実行
-
+        """IntentAnalyzerLLMによる意図理解結果を処理"""
         try:
-            user_message = intent_result["message"]
-            action_type = intent_result["action_type"]
-            understanding_result = intent_result.get("understanding_result")
+            # 意図分析結果の構造を確認
+            self.logger.info(f"意図分析結果の構造: {type(intent_result)}")
+            self.logger.info(f"意図分析結果の内容: {intent_result}")
+            
+            # IntentAnalyzerLLMの結果を正しく取り出す
+            if hasattr(intent_result, 'action_type'):
+                # IntentAnalysisResultオブジェクトの場合
+                action_type = intent_result.action_type
+                file_target = intent_result.file_target
+                user_message = getattr(intent_result, 'user_input', '')
+                confidence = intent_result.confidence
+                reasoning = intent_result.reasoning
+            elif isinstance(intent_result, dict):
+                # 辞書形式の場合
+                action_type = intent_result.get("action_type")
+                file_target = intent_result.get("file_target")
+                user_message = intent_result.get("message", "")
+                confidence = intent_result.get("confidence", 0.0)
+                reasoning = intent_result.get("reasoning", "")
+            else:
+                # 不明な形式の場合
+                self.logger.error(f"不明な意図分析結果の形式: {type(intent_result)}")
+                return "申し訳ありません。意図分析結果の形式が不明です。"
+
+            # ユーザーメッセージが空の場合は、元のメッセージを使用
+            if not user_message and hasattr(intent_result, 'user_input'):
+                user_message = intent_result.user_input
 
             self._show_enhanced_thinking_process(user_message)
 
-            # --- 3層プロンプトの構築 ---
-            main_context_id = self.context_builder.from_agent_state(self.state)
-            main_context_prompt = self.context_builder.build_prompt(main_context_id, "text")
-
-            specialized_prompt = ""
-            # 現在のステップに基づいてプロンプトパターンを選択
-            current_step = self.state.step
-            
-            # Stepの値を安全に取得
-            def get_step_value(step):
-                if hasattr(step, 'value'):
-                    return step.value
-                elif isinstance(step, str):
-                    return step
-                else:
-                    return str(step)
-            
-            current_step_value = get_step_value(current_step)
-            
-            # Stepの比較を安全に行う
-            def is_step_type(step, target_step):
-                step_value = get_step_value(step)
-                target_value = get_step_value(target_step)
-                return step_value == target_value
-            
-            if is_step_type(current_step, Step.PLANNING) or is_step_type(current_step, Step.EXECUTION) or is_step_type(current_step, Step.REVIEW):
-                prompt_pattern = 'base_main_specialized'
-            else:
-                prompt_pattern = getattr(understanding_result, 'prompt_pattern', 'base_main')
-            
-            self.logger.info(f"LLMによるプロンプトパターン選択: {prompt_pattern} (ステップ: {current_step_value})")
-
-            if prompt_pattern == 'base_main_specialized':
-                try:
-                    from .prompts.specialized_prompt_generator import SpecializedPromptGenerator
-                    specialized_generator = SpecializedPromptGenerator()
-                    if is_step_type(current_step, Step.PLANNING) or is_step_type(current_step, Step.EXECUTION) or is_step_type(current_step, Step.REVIEW):
-                        specialized_prompt = specialized_generator.generate(current_step_value, self.state.model_dump())
-                except Exception as e:
-                    self.logger.error(f"Specializedプロンプト生成エラー: {e}")
-                    # エラー時はbase_mainにフォールバック
-                    prompt_pattern = 'base_main'
-                    # デバッグ情報を追加
-                    self.logger.debug(f"フォールバック理由: current_step={current_step}, type={type(current_step)}")
-                    if hasattr(current_step, '__dict__'):
-                        self.logger.debug(f"current_step attributes: {current_step.__dict__}")
-
-            system_prompt = f"{main_context_prompt}\n\n{specialized_prompt}".strip()
-            
             # アクション実行（型安全）
-            if action_type == ActionType.DIRECT_RESPONSE:
-                result = await self._generate_enhanced_response(user_message, system_prompt)
-            elif action_type == ActionType.FILE_OPERATION:
-                result = await self._handle_enhanced_file_operation(user_message, system_prompt)
-            elif action_type == ActionType.CODE_EXECUTION:
-                result = await self._handle_enhanced_code_execution(user_message, system_prompt)
-            elif action_type == ActionType.PLAN_GENERATION:
-                result = await self._handle_enhanced_plan_generation(user_message, system_prompt)
+            self.logger.info(f"アクションタイプ: {action_type}")
+            self.logger.info(f"ActionType.SUMMARY_GENERATION: {ActionType.SUMMARY_GENERATION}")
+            self.logger.info(f"比較結果: action_type == ActionType.SUMMARY_GENERATION: {action_type == ActionType.SUMMARY_GENERATION}")
+            
+            # ActionTypeの値を文字列として取得して比較
+            action_type_value = action_type.value if hasattr(action_type, 'value') else str(action_type)
+            self.logger.info(f"アクションタイプの値: {action_type_value}")
+            
+            if action_type_value == "direct_response":
+                self.logger.info("DIRECT_RESPONSE処理を実行")
+                result = await self._generate_enhanced_response(user_message, file_target)
+            elif action_type_value == "file_operation":
+                self.logger.info("FILE_OPERATION処理を実行")
+                result = await self._handle_enhanced_file_operation(user_message, file_target)
+            elif action_type_value == "code_execution":
+                self.logger.info("CODE_EXECUTION処理を実行")
+                result = await self._handle_enhanced_code_execution(user_message, file_target)
+            elif action_type_value == "plan_generation":
+                self.logger.info("PLAN_GENERATION処理を実行")
+                result = await self._handle_enhanced_plan_generation(user_message, file_target)
+            elif action_type_value == "summary_generation":
+                self.logger.info("SUMMARY_GENERATION処理を実行")
+                # summary_generation意図に対する具体的な処理を実装
+                result = await self._handle_enhanced_summary_generation(user_message, file_target)
+            elif action_type_value == "content_extraction":
+                self.logger.info("CONTENT_EXTRACTION処理を実行")
+                result = await self._handle_enhanced_content_extraction(user_message, file_target)
             else:
-                result = await self._handle_enhanced_multi_step_task(user_message, system_prompt)
+                # 不明なアクションタイプの場合
+                self.logger.warning(f"不明なアクションタイプ: {action_type_value}")
+                result = await self._handle_enhanced_multi_step_task(user_message, file_target)
             
             if self._looks_like_plan(result):
                 self.set_plan_state(result, "execution_plan")
@@ -516,72 +489,73 @@ class EnhancedCompanionCore:
         bullets = [l.strip() for l in lines if l.strip().startswith(("- ", "1."))][:5]
         return "\n".join([header] + bullets)
     
-    async def _generate_enhanced_response(self, user_message: str, system_prompt: str) -> str:
-        """拡張版直接応答生成"""
+    async def _generate_enhanced_response(self, user_message: str, file_target: Optional[str] = None) -> str:
+        """拡張版直接応答生成（新しいLLM呼び出しシステム使用）"""
         try:
             rich_ui.print_message("💬 拡張コンテキストで応答を生成中...", "info")
-            messages = [{"role": "system", "content": system_prompt}]
-            if self.state.conversation_history:
-                for msg in self.state.conversation_history[-10:]:
-                    if msg.role in ["user", "assistant"]:
-                        messages.append({"role": msg.role, "content": msg.content})
-            messages.append({"role": "user", "content": user_message})
-            response = await llm_manager.generate(prompt=user_message, metadata={'system_prompt': system_prompt})
+            
+            # 新しいLLM呼び出しシステムを使用
+            # BaseMainSpecializedパターンでプロンプトを合成
+            full_system_prompt = self.prompt_context_service.compose(
+                PromptPattern.BASE_MAIN_SPECIALIZED, 
+                self.state
+            )
+            
+            # LLMCallManagerで統一呼び出し
+            response = await self.llm_call_manager.call(
+                mode="conversation",
+                input_text=user_message,
+                system_prompt=full_system_prompt,
+                pattern=PromptPattern.BASE_MAIN_SPECIALIZED
+            )
+            
             rich_ui.print_message("✨ 拡張応答を生成しました！", "success")
             return response
+            
         except Exception as e:
             self.logger.error(f"拡張応答生成エラー: {e}")
             # Enhanced v2.0独立の直接応答生成
             return await self._generate_enhanced_response_fallback(user_message)
     
-    async def _handle_enhanced_file_operation(self, user_message: str, system_prompt: str) -> str:
+    async def _handle_enhanced_file_operation(self, user_message: str, file_target: Optional[str] = None) -> str:
         """拡張版ファイル操作処理"""
         try:
             rich_ui.print_message("📁 ファイル操作タスクとして処理中...", "info")
             
-            # ファイルパスの抽出を試行
-            file_path = await self._extract_file_path_from_llm(user_message)
+            # ファイルパスの抽出（IntentAnalyzerLLMの結果を優先）
+            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
             
-            # キーワードベースの判定を改善
-            has_read_keywords = any(kw in user_message for kw in ["読", "確認", "内容", "見て", "把握"])
-            has_write_keywords = any(kw in user_message for kw in ["書", "作成", "作成して", "作って", "出力", "生成"])
-            has_list_keywords = any(kw in user_message for kw in ["一覧", "ls", "dir", "表示"])
+            # LLMによるファイル操作タイプ判定
+            operation_type = await self._determine_file_operation_type(user_message, file_path)
             
-            # ファイル読み込み
-            if has_read_keywords:
-                return await self._handle_file_read_operation(user_message)
-            
-            # ファイル書き込み（ファイルパスが不明でも試行）
-            elif has_write_keywords:
+            # ファイル操作タイプに基づく処理
+            if operation_type == "read":
+                return await self._handle_file_read_operation(user_message, file_path)
+            elif operation_type == "write":
                 if file_path:
                     return await self._handle_file_write_operation(user_message)
                 else:
                     # ファイルパスが不明な場合、ユーザーに確認
                     return "ファイルを作成したいと思いますが、ファイル名が特定できませんでした。\n\n具体的なファイル名を教えてください（例: 'game_doc.md' や 'README.txt' など）。"
-            
-            # ファイル一覧
-            elif has_list_keywords:
+            elif operation_type == "list":
                 return await self._handle_file_list_operation(user_message)
-            
-            # プラン生成（ファイル操作以外）
-            elif any(kw in user_message for kw in ["プラン", "計画"]) and not file_path:
+            elif operation_type == "plan":
                 plan = self._generate_plan_unified(user_message)
                 return plan
-            
-            # その他の場合は通常の応答生成
             else:
-                return await self._generate_enhanced_response(user_message, system_prompt)
+                # その他の場合は通常の応答生成
+                return await self._generate_enhanced_response(user_message, file_path)
                 
         except Exception as e:
             self.logger.error(f"拡張ファイル操作エラー: {e}")
             # Enhanced v2.0独立のファイル操作処理
             return await self._handle_file_operation_fallback(user_message)
     
-    async def _handle_file_read_operation(self, user_message: str) -> str:
+    async def _handle_file_read_operation(self, user_message: str, file_target: Optional[str] = None) -> str:
         """ファイル読み込み操作を処理"""
         try:
-            # LLMの出力からファイル名を取得
-            file_path = await self._extract_file_path_from_llm(user_message)
+            # ファイル名の取得（IntentAnalyzerLLMの結果を優先）
+            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
             
             rich_ui.print_message(f"📖 ファイル読み込み: {file_path}", "info")
             content = self.file_ops.read_file(file_path)
@@ -604,9 +578,16 @@ class EnhancedCompanionCore:
             return f"ファイル '{file_path}' の読み込みに失敗しました: {str(e)}"
     
     async def _extract_file_path_from_llm(self, user_message: str) -> str:
-        """LLMの出力からファイルパスを抽出（強化版）"""
+        """LLMの出力からファイルパスを抽出（新しいLLM呼び出しシステム使用）"""
         try:
-            # LLMにファイル名抽出を依頼
+            # 新しいLLM呼び出しシステムを使用
+            # BaseSpecializedパターンで軽量なプロンプトを合成
+            extraction_system_prompt = self.prompt_context_service.compose(
+                PromptPattern.BASE_SPECIALIZED, 
+                self.state
+            )
+            
+            # ファイル抽出用のプロンプトを構築
             extraction_prompt = f"""以下のユーザーメッセージから、操作対象のファイル名を正確に抽出してください。
 
 ユーザーメッセージ: {user_message}
@@ -622,24 +603,39 @@ class EnhancedCompanionCore:
 ファイル名のみを抽出し、余分な文字は含めないでください。
 拡張子が不明な場合は、一般的な拡張子を推測してください。"""
 
-            response = await llm_manager.generate(extraction_prompt)
+            # LLMCallManagerで統一呼び出し
+            response = await self.llm_call_manager.call(
+                mode="extract",
+                input_text=extraction_prompt,
+                system_prompt=extraction_system_prompt,
+                pattern=PromptPattern.BASE_SPECIALIZED
+            )
             
             # JSONレスポンスをパース
             import json
             try:
+                # デバッグ用：LLM応答をログ出力
+                self.logger.info(f"LLM応答: {response}")
+                
                 # JSON部分を抽出
                 json_start = response.find('{')
                 json_end = response.rfind('}') + 1
+                
                 if json_start >= 0 and json_end > json_start:
                     json_str = response[json_start:json_end]
+                    self.logger.info(f"抽出されたJSON文字列: {json_str}")
+                    
                     parsed = json.loads(json_str)
                     file_target = parsed.get('file_target', '')
                     
                     if file_target:
                         self.logger.info(f"LLM抽出成功: {file_target} (信頼度: {parsed.get('confidence', 'unknown')})")
                         return file_target
+                else:
+                    self.logger.warning(f"JSON文字列が見つかりません: response={response}")
+                    
             except Exception as e:
-                self.logger.warning(f"JSONパースエラー: {e}")
+                self.logger.warning(f"JSONパースエラー: {e}, response={response}")
             
             # フォールバック: 既存のCollaborativePlanner機能を使用
             return self._extract_file_path_from_message(user_message) or self._fallback_file_extraction(user_message)
@@ -665,23 +661,30 @@ class EnhancedCompanionCore:
             if re.search(r'\.\w+$', word):
                 return word
         
-        # 最後の手段：既存のCollaborativePlanner機能を使用
-        fallback_result = self._extract_file_path_from_message(user_message)
-        if fallback_result:
-            return fallback_result
+        # 最後の手段：簡易抽出のみ使用（CollaborativePlannerは使用しない）
+        # fallback_result = self._extract_file_path_from_message(user_message)
+        # if fallback_result:
+        #     return fallback_result
         
         # 最終フォールバック：最初の単語
         return words[0] if words else "unknown_file"
     
     async def _handle_file_write_operation(self, user_message: str) -> str:
-        """ファイル書き込み操作を処理"""
+        """ファイル書き込み操作を処理（新しいLLM呼び出しシステム使用）"""
         try:
             file_path = await self._extract_file_path_from_llm(user_message)
             
             if not file_path:
                 return "ファイル名を特定できませんでした。具体的なファイル名を指定してください。"
             
-            # ファイル内容を生成
+            # 新しいLLM呼び出しシステムを使用
+            # BaseMainパターンでプロンプトを合成
+            content_system_prompt = self.prompt_context_service.compose(
+                PromptPattern.BASE_MAIN, 
+                self.state
+            )
+            
+            # ファイル内容生成用のプロンプトを構築
             content_prompt = f"""以下の要求に基づいて、ファイル '{file_path}' の内容を生成してください。
 
 要求: {user_message}
@@ -690,7 +693,13 @@ class EnhancedCompanionCore:
 
 適切な内容を生成し、ファイルの種類に応じた形式で出力してください。"""
 
-            content = await llm_manager.generate(content_prompt)
+            # LLMCallManagerで統一呼び出し
+            content = await self.llm_call_manager.call(
+                mode="generate_content",
+                input_text=content_prompt,
+                system_prompt=content_system_prompt,
+                pattern=PromptPattern.BASE_MAIN
+            )
             
             # ファイルに書き込み
             try:
@@ -763,11 +772,26 @@ class EnhancedCompanionCore:
             return f"ファイル一覧の取得に失敗しました: {str(e)}"
 
     async def _generate_file_summary(self, file_path: str, content: str) -> str:
-        """ファイル内容の要約を生成"""
+        """ファイル内容の要約を生成（新しいLLM呼び出しシステム使用）"""
         if len(content) < 200: return "(内容が短いため要約省略)"
         try:
+            # 新しいLLM呼び出しシステムを使用
+            # BaseSpecializedパターンで軽量なプロンプトを合成
+            summary_system_prompt = self.prompt_context_service.compose(
+                PromptPattern.BASE_SPECIALIZED, 
+                self.state
+            )
+            
+            # 要約生成用のプロンプトを構築
             summary_prompt = f"以下のファイル内容を3-5行で簡潔に要約してください。\n\nファイル: {file_path}\n\n内容:{content[:3000]}"
-            summary = await llm_manager.generate(summary_prompt)
+            
+            # LLMCallManagerで統一呼び出し
+            summary = await self.llm_call_manager.call(
+                mode="summarize",
+                input_text=summary_prompt,
+                system_prompt=summary_system_prompt,
+                pattern=PromptPattern.BASE_SPECIALIZED
+            )
             
             # 要約生成完了のログ出力を追加
             self.logger.info(f"ファイル要約生成完了: {file_path}, 要約長: {len(summary)}")
@@ -863,39 +887,232 @@ class EnhancedCompanionCore:
             self.logger.error(f"ファイル操作エラー: {e}")
             return f"ファイル操作中にエラーが発生しました: {str(e)}"
     
-    def _extract_file_path_from_message(self, user_message: str) -> Optional[str]:
-        """メッセージからファイルパスを抽出（既存のCollaborativePlanner機能を使用）"""
+    async def _determine_file_operation_type(self, user_message: str, file_path: Optional[str] = None) -> str:
+        """LLMによるファイル操作タイプ判定"""
         try:
-            from .collaborative_planner import CollaborativePlanner
-            planner = CollaborativePlanner()
-            return planner._extract_file_path(user_message)
-        except ImportError:
-            self.logger.warning("CollaborativePlannerが利用できないため、簡易抽出を使用")
+            # 新しいLLM呼び出しシステムを使用
+            # BaseSpecializedパターンで軽量なプロンプトを合成
+            operation_system_prompt = self.prompt_context_service.compose(
+                PromptPattern.BASE_SPECIALIZED, 
+                self.state
+            )
+            
+            # ファイル操作タイプ判定用のプロンプトを構築
+            operation_prompt = f"""以下のユーザーメッセージから、実行すべきファイル操作のタイプを判定してください。
+
+ユーザーメッセージ: {user_message}
+ファイルパス: {file_path if file_path else "未指定"}
+
+以下のJSON形式で回答してください:
+{{
+    "operation_type": "read|write|list|plan|other",
+    "confidence": 0.95,
+    "reasoning": "なぜこの操作タイプを判定したかの理由"
+}}
+
+操作タイプの説明:
+- read: ファイルの読み込み、内容確認、表示
+- write: ファイルの作成、書き込み、更新
+- list: ファイル一覧、ディレクトリ表示
+- plan: プラン生成、計画作成
+- other: 上記以外の操作"""
+
+            # LLMCallManagerで統一呼び出し
+            response = await self.llm_call_manager.call(
+                mode="extract",
+                input_text=operation_prompt,
+                system_prompt=operation_system_prompt,
+                pattern=PromptPattern.BASE_SPECIALIZED
+            )
+            
+            # JSONレスポンスをパース
+            import json
+            try:
+                # JSON部分を抽出
+                json_start = response.find('{')
+                json_end = response.rfind('}') + 1
+                
+                if json_start >= 0 and json_end > json_start:
+                    json_str = response[json_start:json_end]
+                    parsed = json.loads(json_str)
+                    operation_type = parsed.get('operation_type', 'other')
+                    
+                    self.logger.info(f"LLM操作タイプ判定成功: {operation_type} (信頼度: {parsed.get('confidence', 'unknown')})")
+                    return operation_type
+                else:
+                    self.logger.warning(f"JSON文字列が見つかりません: response={response}")
+                    
+            except Exception as e:
+                self.logger.warning(f"JSONパースエラー: {e}, response={response}")
+            
+            # フォールバック: 簡易キーワード判定
+            return self._fallback_operation_type_determination(user_message)
+            
+        except Exception as e:
+            self.logger.error(f"LLM操作タイプ判定エラー: {e}")
+            # フォールバック: 簡易キーワード判定
+            return self._fallback_operation_type_determination(user_message)
+    
+    def _fallback_operation_type_determination(self, user_message: str) -> str:
+        """フォールバック用の簡易操作タイプ判定"""
+        message_lower = user_message.lower()
+        
+        # 簡易キーワード判定（フォールバック用）
+        if any(kw in message_lower for kw in ["読", "確認", "内容", "見て", "把握", "表示"]):
+            return "read"
+        elif any(kw in message_lower for kw in ["書", "作成", "作成して", "作って", "出力", "生成", "更新"]):
+            return "write"
+        elif any(kw in message_lower for kw in ["一覧", "ls", "dir", "表示"]):
+            return "list"
+        elif any(kw in message_lower for kw in ["プラン", "計画", "設計"]):
+            return "plan"
+        else:
+            return "other"
+    
+    async def _determine_action_type_llm(self, user_message: str) -> ActionType:
+        """LLMによるアクションタイプ判定"""
+        try:
+            # 新しいLLM呼び出しシステムを使用
+            # BaseSpecializedパターンで軽量なプロンプトを合成
+            action_system_prompt = self.prompt_context_service.compose(
+                PromptPattern.BASE_SPECIALIZED, 
+                self.state
+            )
+            
+            # アクションタイプ判定用のプロンプトを構築
+            action_prompt = f"""以下のユーザーメッセージから、実行すべきアクションのタイプを判定してください。
+
+ユーザーメッセージ: {user_message}
+
+以下のJSON形式で回答してください:
+{{
+    "action_type": "file_operation|code_execution|plan_generation|direct_response",
+    "confidence": 0.95,
+    "reasoning": "なぜこのアクションタイプを判定したかの理由"
+}}
+
+アクションタイプの説明:
+- file_operation: ファイルの読み込み、書き込み、一覧表示、削除など
+- code_execution: コードの実行、テスト、デバッグなど
+- plan_generation: プラン生成、計画作成、設計など
+- direct_response: 上記以外の一般的な応答"""
+
+            # LLMCallManagerで統一呼び出し
+            response = await self.llm_call_manager.call(
+                mode="extract",
+                input_text=action_prompt,
+                system_prompt=action_system_prompt,
+                pattern=PromptPattern.BASE_SPECIALIZED
+            )
+            
+            # JSONレスポンスをパース
+            import json
+            try:
+                # JSON部分を抽出
+                json_start = response.find('{')
+                json_end = response.rfind('}') + 1
+                
+                if json_start >= 0 and json_end > json_start:
+                    json_str = response[json_start:json_end]
+                    parsed = json.loads(json_str)
+                    action_type_str = parsed.get('action_type', 'direct_response')
+                    
+                    # ActionTypeに変換
+                    if action_type_str == 'file_operation':
+                        return ActionType.FILE_OPERATION
+                    elif action_type_str == 'code_execution':
+                        return ActionType.CODE_EXECUTION
+                    elif action_type_str == 'plan_generation':
+                        return ActionType.PLAN_GENERATION
+                    else:
+                        return ActionType.DIRECT_RESPONSE
+                    
+                else:
+                    self.logger.warning(f"JSON文字列が見つかりません: response={response}")
+                    
+            except Exception as e:
+                self.logger.warning(f"JSONパースエラー: {e}, response={response}")
+            
+            # フォールバック: デフォルト値
+            return ActionType.DIRECT_RESPONSE
+            
+        except Exception as e:
+            self.logger.error(f"LLMアクションタイプ判定エラー: {e}")
+            # フォールバック: デフォルト値
+            return ActionType.DIRECT_RESPONSE
+    
+    def _extract_file_path_from_message(self, user_message: str) -> Optional[str]:
+        """メッセージからファイルパスを抽出（最適化版）"""
+        try:
+            # まず簡易抽出を試行（高速）
+            simple_result = self._simple_file_extraction(user_message)
+            if simple_result:
+                return simple_result
+            
+            # 簡易抽出で見つからない場合のみCollaborativePlannerを使用（遅延初期化）
+            if self._collaborative_planner_cache is None:
+                try:
+                    from .collaborative_planner import CollaborativePlanner
+                    self._collaborative_planner_cache = CollaborativePlanner()
+                except Exception as e:
+                    self.logger.warning(f"CollaborativePlanner初期化エラー: {e}")
+                    return None
+            
+            if self._collaborative_planner_cache:
+                return self._collaborative_planner_cache._extract_file_path(user_message)
+            else:
+                return None
+                
+        except Exception as e:
+            self.logger.warning(f"ファイルパス抽出エラー: {e}、簡易抽出を使用")
             return self._simple_file_extraction(user_message)
     
     def _simple_file_extraction(self, user_message: str) -> Optional[str]:
-        """簡易ファイル抽出（最小限の実装）"""
-        # 特定のファイル名のキーワードのみ
+        """簡易ファイル抽出（強化版）"""
+        import re
+        
+        # 一般的なファイルパスパターン（高速処理）
+        patterns = [
+            r'["\']([^"\']+\.[a-zA-Z0-9]+)["\']',  # クォート内のファイル
+            r'([a-zA-Z0-9_/\\.-]+\.[a-zA-Z0-9]+)',  # 拡張子付きファイル
+            r'([a-zA-Z0-9_/\\.-]+\.md)',  # Markdownファイル
+            r'([a-zA-Z0-9_/\\.-]+\.txt)',  # テキストファイル
+            r'([a-zA-Z0-9_/\\.-]+\.py)',   # Pythonファイル
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, user_message)
+            if match:
+                return match.group(1)
+        
+        # 特定のファイル名のキーワード（フォールバック）
         if "game_doc.md" in user_message:
             return "game_doc.md"
         elif "readme" in user_message.lower():
             return "README.md"
+        
         return None
     
-    def _determine_file_operation(self, user_message: str) -> str:
-        """メッセージからファイル操作の種類を判定"""
-        message_lower = user_message.lower()
-        
-        if any(kw in message_lower for kw in ["読", "見て", "確認", "内容", "読み"]):
-            return "read"
-        elif any(kw in message_lower for kw in ["作成", "書", "出力", "生成"]):
-            return "write"
-        elif any(kw in message_lower for kw in ["削除", "消去"]):
-            return "delete"
-        elif any(kw in message_lower for kw in ["一覧", "ls", "dir"]):
-            return "list"
-        else:
-            return "read"  # デフォルトは読み取り
+    async def _determine_file_operation(self, user_message: str) -> str:
+        """LLMによるファイル操作の種類を判定"""
+        try:
+            # LLMによる判定を試行
+            return await self._determine_file_operation_type(user_message, None)
+        except Exception as e:
+            self.logger.warning(f"LLMファイル操作判定エラー: {e}, フォールバックキーワード判定を使用")
+            # フォールバック: 簡易キーワード判定
+            message_lower = user_message.lower()
+            
+            if any(kw in message_lower for kw in ["読", "見て", "確認", "内容", "読み"]):
+                return "read"
+            elif any(kw in message_lower for kw in ["作成", "書", "出力", "生成"]):
+                return "write"
+            elif any(kw in message_lower for kw in ["削除", "消去"]):
+                return "delete"
+            elif any(kw in message_lower for kw in ["一覧", "ls", "dir"]):
+                return "list"
+            else:
+                return "read"  # デフォルトは読み取り
     
     async def _execute_file_operation(self, operation: str, file_path: str, user_message: str) -> str:
         """ファイル操作を実行"""
@@ -920,15 +1137,15 @@ class EnhancedCompanionCore:
         except Exception as e:
             return f"❌ ファイル操作エラー: {str(e)}"
     
-    async def _handle_enhanced_code_execution(self, user_message: str, system_prompt: str) -> str:
+    async def _handle_enhanced_code_execution(self, user_message: str, file_target: Optional[str] = None) -> str:
         """Enhanced v2.0独立のコード実行処理"""
         return "Enhanced v2.0独立モードでは、コード実行機能は現在実装されていません。"
     
-    async def _handle_enhanced_multi_step_task(self, user_message: str, system_prompt: str) -> str:
+    async def _handle_enhanced_multi_step_task(self, user_message: str, file_target: Optional[str] = None) -> str:
         """Enhanced v2.0独立の複数ステップタスク処理"""
         return "Enhanced v2.0独立モードでは、複数ステップタスク機能は現在実装されていません。"
     
-    async def _handle_enhanced_plan_generation(self, user_message: str, system_prompt: str) -> str:
+    async def _handle_enhanced_plan_generation(self, user_message: str, file_target: Optional[str] = None) -> str:
         """Enhanced v2.0独立のプラン生成処理"""
         try:
             # プラン生成のロジック
@@ -952,4 +1169,180 @@ class EnhancedCompanionCore:
             self.logger.error(f"プラン生成エラー: {e}")
             return f"プラン生成中にエラーが発生しました: {str(e)}"
 
-    # ... (PlanTool and Code Execution methods remain the same) ...
+    async def _handle_enhanced_summary_generation(self, user_message: str, file_target: Optional[str] = None) -> str:
+        """summary_generation意図に対する具体的な処理"""
+        try:
+            rich_ui.print_message("📊 要約生成タスクとして処理中...", "info")
+            
+            # ファイルパスの取得（IntentAnalyzerLLMの結果を優先）
+            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
+            
+            if not file_path:
+                return "ファイル名を特定できませんでした。具体的なファイル名を指定してください。"
+            
+            rich_ui.print_message(f"📖 ファイル読み込み: {file_path}", "info")
+            
+            # ファイルの存在確認
+            if not self.file_ops.exists(file_path):
+                return f"ファイル '{file_path}' が見つかりません。ファイル名を確認してください。"
+            
+            # ファイルの読み込み
+            try:
+                content = self.file_ops.read_file(file_path)
+                self.logger.info(f"ファイル読み込み成功: {file_path}, 内容長: {len(content)}")
+            except Exception as e:
+                self.logger.error(f"ファイル読み込みエラー: {e}")
+                return f"ファイル '{file_path}' の読み込みに失敗しました: {str(e)}"
+            
+            # ファイルの要約生成
+            summary = await self._generate_file_summary(file_path, content)
+            
+            # 結果を状態に記録
+            self.state.short_term_memory["last_read_file"] = {
+                "path": file_path,
+                "summary": summary,
+                "length": len(content),
+                "timestamp": datetime.now().isoformat()
+            }
+            self._record_file_operation("read", file_path, summary)
+            self.state.add_message("assistant", f"ファイル '{file_path}' の要約を生成しました")
+            
+            # 処理完了のログ出力
+            self.logger.info(f"要約生成処理完了: {file_path}, 内容長: {len(content)}, 要約長: {len(summary)}")
+            
+            return f"📄 ファイル '{file_path}' の要約:\n\n{summary}\n\n--- 完全な内容 ---\n{content}"
+            
+        except Exception as e:
+            self.logger.error(f"要約生成処理エラー: {e}")
+            return f"要約生成処理中にエラーが発生しました: {str(e)}"
+    
+    async def _handle_enhanced_content_extraction(self, user_message: str, file_target: Optional[str] = None) -> str:
+        """content_extraction意図に対する具体的な処理"""
+        try:
+            rich_ui.print_message("🔍 コンテンツ抽出タスクとして処理中...", "info")
+            
+            # ファイルパスの取得（IntentAnalyzerLLMの結果を優先）
+            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
+            
+            if not file_path:
+                return "ファイル名を特定できませんでした。具体的なファイル名を指定してください。"
+            
+            rich_ui.print_message(f"📖 ファイル読み込み: {file_path}", "info")
+            
+            # ファイルの存在確認
+            if not self.file_ops.exists(file_path):
+                return f"ファイル '{file_path}' が見つかりません。ファイル名を確認してください。"
+            
+            # ファイルの読み込み
+            try:
+                content = self.file_ops.read_file(file_path)
+                self.logger.info(f"ファイル読み込み成功: {file_path}, 内容長: {len(content)}")
+            except Exception as e:
+                self.logger.error(f"ファイル読み込みエラー: {e}")
+                return f"ファイル '{file_path}' の読み込みに失敗しました: {str(e)}"
+            
+            # コンテンツの抽出（ユーザーの要求に基づいて）
+            extracted_content = await self._extract_content_based_on_request(user_message, content, file_path)
+            
+            # 結果を状態に記録
+            self.state.short_term_memory["last_extracted_content"] = {
+                "path": file_path,
+                "extracted": extracted_content,
+                "original_length": len(content),
+                "timestamp": datetime.now().isoformat()
+            }
+            self._record_file_operation("extract", file_path, extracted_content[:200])
+            self.state.add_message("assistant", f"ファイル '{file_path}' からコンテンツを抽出しました")
+            
+            return f"🔍 ファイル '{file_path}' から抽出されたコンテンツ:\n\n{extracted_content}"
+            
+        except Exception as e:
+            self.logger.error(f"コンテンツ抽出処理エラー: {e}")
+            return f"コンテンツ抽出処理中にエラーが発生しました: {str(e)}"
+    
+    def _extract_content_based_on_request(self, user_message: str, content: str, file_path: str) -> str:
+        """ユーザーの要求に基づいてコンテンツを抽出"""
+        try:
+            # ユーザーの要求を分析して抽出条件を決定
+            message_lower = user_message.lower()
+            
+            if "概要" in message_lower or "要約" in message_lower:
+                # 概要・要約の場合
+                return self._extract_summary_content(content, file_path)
+            elif "重要な" in message_lower or "ポイント" in message_lower:
+                # 重要なポイントの場合
+                return self._extract_key_points(content, file_path)
+            elif "構造" in message_lower or "構成" in message_lower:
+                # 構造・構成の場合
+                return self._extract_structure_content(content, file_path)
+            else:
+                # デフォルト：最初の部分を抽出
+                return content[:1000] + ("..." if len(content) > 1000 else "")
+                
+        except Exception as e:
+            self.logger.warning(f"コンテンツ抽出エラー: {e}")
+            return content[:1000] + ("..." if len(content) > 1000 else "")
+    
+    def _extract_summary_content(self, content: str, file_path: str) -> str:
+        """要約的なコンテンツを抽出"""
+        lines = content.split('\n')
+        
+        # 最初の数行（ヘッダー部分）を抽出
+        header_lines = lines[:10]
+        
+        # 重要なセクションを探す
+        important_sections = []
+        for i, line in enumerate(lines):
+            if any(keyword in line.lower() for keyword in ['概要', '要約', '目的', '背景', '結論']):
+                # そのセクションの内容を抽出（最大20行）
+                section_content = lines[i:i+20]
+                important_sections.extend(section_content)
+        
+        # 結果を組み合わせ
+        result = '\n'.join(header_lines)
+        if important_sections:
+            result += '\n\n--- 重要なセクション ---\n'
+            result += '\n'.join(important_sections)
+        
+        return result
+    
+    def _extract_key_points(self, content: str, file_path: str) -> str:
+        """重要なポイントを抽出"""
+        lines = content.split('\n')
+        key_points = []
+        
+        for line in lines:
+            # 箇条書きや番号付きリストを探す
+            if line.strip().startswith(('-', '•', '*', '1.', '2.', '3.')):
+                key_points.append(line.strip())
+            # 重要なキーワードを含む行を探す
+            elif any(keyword in line.lower() for keyword in ['重要', '注意', '警告', '必須', '必要']):
+                key_points.append(line.strip())
+        
+        if key_points:
+            return '\n'.join(key_points[:20])  # 最大20個
+        else:
+            # キーポイントが見つからない場合は最初の部分を返す
+            return content[:800] + ("..." if len(content) > 800 else "")
+    
+    def _extract_structure_content(self, content: str, file_path: str) -> str:
+        """構造・構成に関するコンテンツを抽出"""
+        lines = content.split('\n')
+        structure_lines = []
+        
+        for line in lines:
+            # 見出しやセクション区切りを探す
+            if line.strip().startswith(('#', '##', '###', '---', '===')):
+                structure_lines.append(line.strip())
+            # 目次やインデックスを探す
+            elif any(keyword in line.lower() for keyword in ['目次', 'index', 'contents', '構造']):
+                structure_lines.append(line.strip())
+            # 階層的な構造を示す行を探す
+            elif line.strip().startswith(('  ', '\t')) and any(keyword in line.lower() for keyword in ['├', '│', '└', '─']):
+                structure_lines.append(line.strip())
+        
+        if structure_lines:
+            return '\n'.join(structure_lines)
+        else:
+            # 構造が見つからない場合は最初の部分を返す
+            return content[:600] + ("..." if len(content) > 600 else "")

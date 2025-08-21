@@ -1,7 +1,66 @@
 # Duckflow設定ファイル
 # バージョン: 1.0
 
-# LLMプロバイダー設定
+# 基本設定
+app_name: "DuckFlow Companion"
+version: "4.0.0"
+debug: false
+
+# UI設定
+ui_language: "ja"
+ui_theme: "default"
+show_timestamps: true
+
+# システム設定
+max_conversation_history: 100
+max_file_size_mb: 10
+timeout_seconds: 300
+
+# 承認システム設定
+approval_mode: "standard"
+auto_approval_threshold: "low"
+approval_timeout: 300
+
+# 承認設定（詳細）
+approval:
+  mode: "standard"
+  timeout_seconds: 30
+  show_preview: true
+  max_preview_length: 200
+  ui:
+    non_interactive: false
+    auto_approve_low: false
+    auto_approve_high: false
+
+# ファイル操作設定
+work_directory: "./work"
+allowed_extensions: [".py", ".md", ".txt", ".json", ".yaml"]
+backup_enabled: true
+
+# LLM設定
+llm_provider: "groq"
+llm_api_key: ""  # 環境変数から読み込み（.envファイルが読み込まれない場合は、ここに直接APIキーを設定）
+llm_model: "openai/gpt-oss-20b"
+llm_temperature: 0.1
+llm_max_retries: 3
+llm_timeout_seconds: 30
+
+# ログ設定
+log_level: "INFO"
+log_file: "./logs/duckflow.log"
+log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Phase 4: 健全性・統計ログ設定
+health_logging_enabled: false
+health_logging_interval: 60
+gate_auto_stats: false
+
+# セキュリティ設定
+enable_sandbox: true
+restrict_file_access: true
+allowed_directories: ["./work", "./temp"]
+
+# 詳細LLM設定（既存の構造を保持）
 llm:
   # メインプロバイダー (openai, anthropic, google, groq, openrouter)
   provider: "groq"
@@ -399,25 +458,5 @@ development:
   debug: false
   reload_on_change: false
   profiling: false
-
-# 承認システム設定
-approval:
-  mode: "standard"           # strict | standard | trusted
-  timeout_seconds: 30
-  show_preview: true
-  max_preview_length: 200
-  ui:
-    non_interactive: true     # 非対話UIを使用
-    auto_approve_low: true    # 低リスクは自動承認
-    auto_approve_high: false  # 高リスクの自動承認（必要時のみtrueに）
-    auto_approve_all: false   # 全自動承認（非推奨）
-
-
-# Phase 4 / LLM 呼び出し制御・観測設定
-llm_max_retries: 3
-llm_timeout_seconds: 30
-gate_auto_stats: true
-health_logging_enabled: true
-health_logging_interval: 60
 
 

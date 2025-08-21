@@ -10,10 +10,19 @@ import asyncio
 import logging
 from typing import Optional, Dict, Any
 from pathlib import Path
+from enum import Enum
 
 from companion.ui import rich_ui
 from companion.workspace_manager import WorkspaceManager
 from companion.state.enums import Step, Status
+
+
+class StatusType(Enum):
+    """ステータスタイプの定義（v3a: 型安全性向上）"""
+    TASK_COMPLETED = "task_completed"
+    TASK_ERROR = "task_error"
+    STATE_UPDATED = "state_updated"
+    UNKNOWN = "unknown"
 
 
 class EnhancedChatLoop:
@@ -37,6 +46,8 @@ class EnhancedChatLoop:
         
         self.running = False
         self.logger = logging.getLogger(__name__)
+        # デバッグ用にログレベルを調整
+        self.logger.setLevel(logging.DEBUG)
         
         self.logger.info("EnhancedChatLoop initialized with AgentState direct reference")
 
@@ -55,17 +66,28 @@ class EnhancedChatLoop:
     async def _async_main_loop(self):
         """非同期メインループ（Enhanced v2.0版）"""
         try:
+            # ユーザー入力を別スレッドで開始
+            input_task = asyncio.create_task(self._get_user_input_async())
+            
             while self.running:
+                # 状態監視を実行
                 await self._check_status_queue()
-                user_input = await self._get_user_input()
                 
-                if user_input is not None and user_input.strip():
-                    if not await self._handle_enhanced_command(user_input):
-                        await self._dispatch_enhanced_ai_task(user_input)
-                elif user_input is None:
-                    # ユーザー入力がNone（終了要求）の場合はループを終了
-                    self.running = False
+                # ユーザー入力をチェック（非ブロッキング）
+                if input_task.done():
+                    user_input = input_task.result()
+                    if user_input is not None and user_input.strip():
+                        if not await self._handle_enhanced_command(user_input):
+                            await self._dispatch_enhanced_ai_task(user_input)
+                    elif user_input is None:
+                        # 終了要求
+                        self.running = False
+                        break
                     
+                    # 新しい入力タスクを作成
+                    input_task = asyncio.create_task(self._get_user_input_async())
+                
+                # 短い間隔で状態監視を継続
                 await asyncio.sleep(0.1)
                 
         except (KeyboardInterrupt, EOFError):
@@ -92,6 +114,59 @@ class EnhancedChatLoop:
         except Exception as e:
             self.logger.error(f"ユーザー入力エラー: {e}")
             self.running = False
+            return None
+
+    async def _get_user_input_async(self) -> Optional[str]:
+        """非同期でユーザー入力を処理（v3a: 状態監視と並行実行）"""
+        try:
+            # 現在の状態を取得
+            current_step = self.agent_state.step.value if self.agent_state.step else "UNKNOWN"
+            current_status = self.agent_state.status.value if self.agent_state.status else "UNKNOWN"
+            
+            # プロンプトを表示
+            prompt = f"🦆 [{current_step}.{current_status}] {self.workspace_manager.get_current_directory_name()}> "
+            
+            # 別スレッドでユーザー入力を待機
+            user_input = await asyncio.get_event_loop().run_in_executor(None, input, prompt)
+            self.logger.debug(f"ユーザー入力受信: {user_input[:50] if user_input else 'None'}...")
+            return user_input.strip() if user_input else None
+            
+        except (KeyboardInterrupt, EOFError) as e:
+            self.logger.info(f"ユーザー入力終了: {type(e).__name__}")
+            return None
+        except Exception as e:
+            self.logger.error(f"非同期ユーザー入力エラー: {e}")
+            return None
+
+    async def _get_user_input_non_blocking(self) -> Optional[str]:
+        """非ブロッキングでユーザー入力をチェック（v3a: 状態監視優先）"""
+        try:
+            # 現在の状態を取得
+            current_step = self.agent_state.step.value if self.agent_state.step else "UNKNOWN"
+            current_status = self.agent_state.status.value if self.agent_state.status else "UNKNOWN"
+            
+            # プロンプトを表示（状態監視を優先するため、短時間のみ表示）
+            prompt = f"🦆 [{current_step}.{current_status}] {self.workspace_manager.get_current_directory_name()}> "
+            
+            # 非ブロッキングで入力チェック（タイムアウト付き）
+            try:
+                # より長いタイムアウトで入力チェック（1秒）
+                user_input = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(None, input, prompt),
+                    timeout=1.0
+                )
+                self.logger.debug(f"ユーザー入力受信: {user_input[:50] if user_input else 'None'}...")
+                return user_input.strip() if user_input else None
+                
+            except asyncio.TimeoutError:
+                # タイムアウト時は入力なしとして扱う
+                return None
+                
+        except (KeyboardInterrupt, EOFError) as e:
+            self.logger.info(f"ユーザー入力終了: {type(e).__name__}")
+            return "QUIT"
+        except Exception as e:
+            self.logger.error(f"非ブロッキング入力エラー: {e}")
             return None
 
     async def _handle_enhanced_command(self, user_input: str) -> bool:
@@ -241,34 +316,55 @@ AI処理:
     async def _check_status_queue(self):
         """EnhancedTaskLoopからの状態更新を処理（v3a）"""
         try:
+            # デバッグ用ログを追加（頻度を下げる）
+            if self.agent_state:
+                # ログの頻度を下げる（10回に1回のみ出力）
+                if hasattr(self, '_log_counter'):
+                    self._log_counter += 1
+                else:
+                    self._log_counter = 0
+                
+                if self._log_counter % 10 == 0:
+                    self.logger.debug(f"AgentState監視中: last_task_result={self.agent_state.last_task_result is not None}")
+                    if self.agent_state.last_task_result:
+                        self.logger.debug(f"タスク結果検出: {self.agent_state.last_task_result}")
+                        self.logger.debug(f"結果の型: {type(self.agent_state.last_task_result)}")
+                        self.logger.debug(f"結果のキー: {list(self.agent_state.last_task_result.keys()) if isinstance(self.agent_state.last_task_result, dict) else 'N/A'}")
+            else:
+                self.logger.warning("AgentStateがNoneです")
+            
             # AgentStateから直接タスク結果を監視
             if self.agent_state and self.agent_state.last_task_result:
                 result = self.agent_state.last_task_result
-                message_type = result.get('type', 'unknown')
+                message_type = result.get('type', StatusType.UNKNOWN.value)
                 message = result.get('message', '')
                 
-                if message_type == 'task_completed':
+                self.logger.info(f"タスク結果を表示: type={message_type}, message={message[:100]}...")
+                
+                if message_type == StatusType.TASK_COMPLETED.value:
                     rich_ui.print_message(f"✅ 完了: {message}", "success")
-                elif message_type == 'task_error':
+                elif message_type == StatusType.TASK_ERROR.value:
                     rich_ui.print_message(f"❌ エラー: {message}", "error")
                 else:
                     rich_ui.print_message(f"📊 進捗: {message}", "info")
                 
                 # 結果をクリアして再表示を防ぐ
                 self.agent_state.clear_task_result()
+                self.logger.info("タスク結果をクリアしました")
             
             # 状態更新の通知も処理
             try:
                 status_update = self.status_queue.get_nowait()
-                message_type = status_update.get('type', 'unknown')
+                message_type = status_update.get('type', StatusType.UNKNOWN.value)
                 message = status_update.get('message', '')
                 
-                if message_type == 'state_updated':
+                if message_type == StatusType.STATE_UPDATED.value:
                     rich_ui.print_message(f"📊 状態更新: {message}", "info")
                 else:
                     rich_ui.print_message(f"📊 通知: {message}", "info")
                     
-                self.task_queue.task_done()
+                # 修正: status_queueから取得したのでstatus_queueでtask_done()を呼ぶ
+                self.status_queue.task_done()
                 
             except queue.Empty:
                 pass

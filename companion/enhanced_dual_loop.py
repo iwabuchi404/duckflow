@@ -54,7 +54,7 @@ class EnhancedDualLoopSystem:
         except Exception:
             return "UNKNOWN"
     
-    def _sync_state_to_agent_state(self, step: Step, status: Status):
+    def _sync_state_to_agent_state(self, step: Step, status: Status, trigger: str):
         """StateMachineの状態変更をAgentStateに同期（v3a）"""
         try:
             if self.agent_state:
@@ -65,15 +65,15 @@ class EnhancedDualLoopSystem:
         except Exception as e:
             self.logger.error(f"状態同期エラー: {e}")
     
-    def update_state(self, new_step: Step, new_status: Status) -> bool:
+    def update_state(self, new_step: Step, new_status: Status, trigger: str = "external_request") -> bool:
         """外部からの状態遷移要求を処理（v3a）"""
         try:
             # StateMachineを通じて状態遷移を実行
-            success = self.state_machine.set_state(new_step, new_status)
+            success = self.state_machine.set_state(new_step, new_status, trigger)
             if success:
-                self.logger.info(f"状態遷移成功: {new_step.value}.{new_status.value}")
+                self.logger.info(f"状態遷移成功: {new_step.value}.{new_status.value} (トリガー: {trigger})")
             else:
-                self.logger.warning(f"状態遷移失敗: {new_step.value}.{new_status.value}")
+                self.logger.warning(f"状態遷移失敗: {new_step.value}.{new_status.value} (トリガー: {trigger})")
             return success
         except Exception as e:
             self.logger.error(f"状態遷移エラー: {e}")

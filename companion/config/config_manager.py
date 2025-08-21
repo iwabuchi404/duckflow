@@ -12,6 +12,7 @@ import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass, field
+from dotenv import load_dotenv
 
 
 @dataclass
@@ -56,10 +57,10 @@ class Config:
     backup_enabled: bool = True
     
     # LLM設定
-    llm_provider: str = "mock"
+    llm_provider: str = "groq"
     llm_api_key: str = ""
-    llm_model: str = "gpt-4"
-    llm_temperature: float = 0.7
+    llm_model: str = "openai/gpt-oss-20b"
+    llm_temperature: float = 0.1
     llm_max_retries: int = 3
     llm_timeout_seconds: int = 30
     

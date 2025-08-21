@@ -113,9 +113,15 @@ class PromptContextBuilder:
     def from_agent_state(self, agent_state) -> str:
         """エージェント状態から一貫性のあるリッチなコンテキストを作成"""
         try:
+            # Step/Status を安全に取得（Enum/文字列/未設定に対応）
+            raw_step = getattr(agent_state, 'step', None)
+            raw_status = getattr(agent_state, 'status', None)
+            step_value = getattr(raw_step, 'value', None) or (str(raw_step).upper() if raw_step else 'UNKNOWN')
+            status_value = getattr(raw_status, 'value', None) or (str(raw_status).upper() if raw_status else 'UNKNOWN')
+
             state_info = {
-                'step': getattr(agent_state, 'step', 'unknown').value,
-                'status': getattr(agent_state, 'status', 'unknown').value,
+                'step': step_value,
+                'status': status_value,
             }
             title = f"Agent State Context - {state_info['step']}.{state_info['status']}"
             context_id = self.create_context(title, state_info)
@@ -144,22 +150,30 @@ class PromptContextBuilder:
                 activity_content = f"直前にファイル「{last_read_file.get('path')}」を読み込みました。\n要約: {last_read_file.get('summary', 'なし')}"
                 self.add_section(context_id, "最新のアクティビティ", activity_content, priority=8)
 
-            # 4. 直近の会話の流れ
+            # 4. 直近の会話の流れ（順序維持・ロバスト化）
             history = getattr(agent_state, 'conversation_history', [])
             if history:
-                recent_messages = []
-                # 最新のユーザーとアシスタントのペアを1つ取得
-                user_msg, assistant_msg = None, None
-                for msg in reversed(history):
-                    if msg.role == 'assistant' and not assistant_msg:
-                        assistant_msg = msg.content
-                    if msg.role == 'user' and not user_msg:
-                        user_msg = msg.content
-                    if user_msg and assistant_msg:
-                        break
-                if user_msg:
-                    conversation_flow = f"ユーザー: {user_msg[:150]}...\nアシスタント: {assistant_msg[:200] if assistant_msg else '(応答待ち)'}..."
-                    self.add_section(context_id, "直近の会話の流れ", conversation_flow, priority=7)
+                # 直近最大8件を時系列で採用
+                recent_messages = history[-8:] if len(history) > 8 else history
+                lines: List[str] = []
+                for msg in recent_messages:
+                    role = getattr(msg, 'role', 'unknown')
+                    content = getattr(msg, 'content', '') or ''
+                    if not content:
+                        continue
+                    if role not in ('user', 'assistant', 'system'):
+                        continue
+                    label = 'ユーザー' if role == 'user' else ('アシスタント' if role == 'assistant' else 'システム')
+                    snippet = content[:150] + ('...' if len(content) > 150 else '')
+                    lines.append(f"{label}: {snippet}")
+
+                if lines:
+                    self.add_section(context_id, "直近の会話の流れ", "\n".join(lines), priority=7)
+
+            # 5. 会話履歴の要約がある場合は追加（メモリ管理の結果を活用）
+            history_summary = getattr(agent_state, 'history_summary', None)
+            if history_summary:
+                self.add_section(context_id, "会話履歴の要約", str(history_summary)[:1000], priority=8)
 
             self.logger.info(f"エージェント状態からリッチコンテキスト作成: {context_id}")
             return context_id

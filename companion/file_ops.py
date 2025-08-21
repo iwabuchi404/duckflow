@@ -257,6 +257,14 @@ class SimpleFileOps:
             "created": datetime.now().isoformat(),
         }
 
+    def exists(self, file_path: str) -> bool:
+        """ファイルまたはディレクトリの存在確認"""
+        try:
+            path = Path(file_path)
+            return path.exists()
+        except Exception:
+            return False
+
     def read_file(self, file_path: str) -> str:
         """ファイルを読み取り"""
         path = Path(file_path)

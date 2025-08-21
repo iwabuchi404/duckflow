@@ -15,6 +15,8 @@ class ActionType(Enum):
     CODE_EXECUTION = "code_execution"
     MULTI_STEP_TASK = "multi_step_task"
     PLAN_GENERATION = "plan_generation"
+    SUMMARY_GENERATION = "summary_generation"
+    CONTENT_EXTRACTION = "content_extraction"
 
 
 class TaskPriority(Enum):

@@ -11,8 +11,24 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
+from enum import Enum
 
 from companion.state.enums import Step, Status
+
+
+class TaskType(Enum):
+    """タスクタイプの定義（v3a: 型安全性向上）"""
+    PROCESS_ENHANCED_INTENT = "process_enhanced_intent"
+    UPDATE_AGENT_STATE = "update_agent_state"
+    FILE_OPERATION = "file_operation"
+
+
+class StatusType(Enum):
+    """ステータスタイプの定義（v3a: 型安全性向上）"""
+    TASK_COMPLETED = "task_completed"
+    TASK_ERROR = "task_error"
+    STATE_UPDATED = "state_updated"
+    ERROR = "error"
 
 
 class EnhancedTaskLoop:
@@ -33,6 +49,8 @@ class EnhancedTaskLoop:
         
         self.running = False
         self.logger = logging.getLogger(__name__)
+        # デバッグ用にログレベルを調整
+        self.logger.setLevel(logging.DEBUG)
         
         self.logger.info("EnhancedTaskLoop initialized with AgentState direct reference")
 
@@ -51,7 +69,7 @@ class EnhancedTaskLoop:
                 
             except Exception as e:
                 self.logger.error(f"EnhancedTaskLoopで予期せぬエラー: {e}", exc_info=True)
-                self._send_enhanced_status({'type': 'error', 'message': str(e)})
+                self._send_enhanced_status({'type': StatusType.ERROR.value, 'message': str(e)})
 
     def _execute_enhanced_task(self, task_data: Dict[str, Any]):
         """Enhanced v2.0専用のタスク実行"""
@@ -59,18 +77,18 @@ class EnhancedTaskLoop:
         self.logger.info(f"Enhancedタスク受信: {task_type}")
         
         try:
-            if task_type == 'process_enhanced_intent':
+            if task_type == TaskType.PROCESS_ENHANCED_INTENT.value:
                 self._process_enhanced_intent(task_data)
-            elif task_type == 'update_agent_state':
+            elif task_type == TaskType.UPDATE_AGENT_STATE.value:
                 self._update_agent_state(task_data)
-            elif task_type == 'file_operation':
+            elif task_type == TaskType.FILE_OPERATION.value:
                 self._execute_file_operation(task_data)
             else:
                 self.logger.warning(f"不明なEnhancedタスクタイプをスキップしました: {task_type}")
                 
         except Exception as e:
             self.logger.error(f"Enhancedタスク実行中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': 'task_error', 'message': str(e)})
+            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
         
         finally:
             self.task_queue.task_done()
@@ -86,7 +104,7 @@ class EnhancedTaskLoop:
                 return
             
             # AgentStateの状態を更新（PLANNING → EXECUTION）
-            self.parent_system.update_state(Step.EXECUTION, Status.IN_PROGRESS)
+            self.parent_system.update_state(Step.EXECUTION, Status.IN_PROGRESS, "task_execution_start")
             
             # 非同期メソッドの安全な実行
             try:
@@ -101,20 +119,31 @@ class EnhancedTaskLoop:
                     loop.close()
                 
                 # 成功時の状態更新
-                self.parent_system.update_state(Step.REVIEW, Status.SUCCESS)
+                self.parent_system.update_state(Step.REVIEW, Status.SUCCESS, "task_execution_success")
                 
                 # タスク結果をAgentStateに直接書き込み（v3a）
-                self.enhanced_companion.state.set_task_result({
-                    'type': 'task_completed',
+                self.logger.info(f"タスク結果をAgentStateに設定: {result[:100] if result else 'None'}...")
+                self.logger.debug(f"AgentState参照確認: {self.agent_state is not None}")
+                self.logger.debug(f"AgentStateの型: {type(self.agent_state)}")
+                
+                self.agent_state.set_task_result({
+                    'type': StatusType.TASK_COMPLETED.value,
                     'message': result,
                     'step': 'EXECUTION',
                     'status': 'SUCCESS',
                     'timestamp': datetime.now().isoformat()
                 })
                 
+                # 設定後の確認
+                self.logger.debug(f"設定後のlast_task_result: {self.agent_state.last_task_result is not None}")
+                if self.agent_state.last_task_result:
+                    self.logger.debug(f"設定された結果の内容: {self.agent_state.last_task_result}")
+                
+                self.logger.info("タスク結果の設定完了")
+                
                 # 状態更新の通知のみ送信
                 self._send_enhanced_status({
-                    'type': 'state_updated',
+                    'type': StatusType.STATE_UPDATED.value,
                     'message': 'タスク完了: 結果がAgentStateに保存されました',
                     'step': 'EXECUTION',
                     'status': 'SUCCESS'
@@ -122,12 +151,12 @@ class EnhancedTaskLoop:
                 
             except Exception as e:
                 # エラー時の状態更新
-                self.parent_system.update_state(Step.EXECUTION, Status.ERROR)
+                self.parent_system.update_state(Step.EXECUTION, Status.ERROR, "task_execution_error")
                 
                 self.logger.error(f"process_with_intent_resultの実行中にエラー: {e}", exc_info=True)
                 # タスク結果をAgentStateに直接書き込み（v3a）
-                self.enhanced_companion.state.set_task_result({
-                    'type': 'task_error',
+                self.agent_state.set_task_result({
+                    'type': StatusType.TASK_ERROR.value,
                     'message': str(e),
                     'step': 'EXECUTION',
                     'status': 'ERROR',
@@ -136,7 +165,7 @@ class EnhancedTaskLoop:
                 
                 # 状態更新の通知のみ送信
                 self._send_enhanced_status({
-                    'type': 'state_updated',
+                    'type': StatusType.STATE_UPDATED.value,
                     'message': 'タスクエラー: 結果がAgentStateに保存されました',
                     'step': 'EXECUTION',
                     'status': 'ERROR'
@@ -144,29 +173,21 @@ class EnhancedTaskLoop:
                 
         except Exception as e:
             self.logger.error(f"Enhanced意図処理中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': 'task_error', 'message': str(e)})
+            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
 
     def _update_agent_state(self, task_data: Dict[str, Any]):
-        """AgentStateの更新タスク"""
+        """AgentStateの更新タスク（v3a: 単純化）"""
         try:
             step = task_data.get('step')
             status = task_data.get('status')
-            fixed_five = task_data.get('fixed_five', {})
             
             if step and status:
-                self.parent_system.update_state(step, status)
-            
-            if fixed_five:
-                self._update_agent_state_fixed_five(fixed_five)
-                
-            self._send_enhanced_status({
-                'type': 'state_updated',
-                'message': f"状態更新: {step.value if hasattr(step, 'value') else step}.{status.value if hasattr(status, 'value') else status}"
-            })
+                self.parent_system.update_state(step, status, "agent_state_update")
+                self.logger.info(f"状態更新完了: {step.value if hasattr(step, 'value') else step}.{status.value if hasattr(status, 'value') else status}")
             
         except Exception as e:
             self.logger.error(f"AgentState更新中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': 'task_error', 'message': str(e)})
+            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
 
     def _execute_file_operation(self, task_data: Dict[str, Any]):
         """ファイル操作タスクの実行"""
@@ -183,7 +204,7 @@ class EnhancedTaskLoop:
                     self.logger.warning("file_ops が利用できません")
                     result = None
                 self._send_enhanced_status({
-                    'type': 'file_read_completed',
+                    'type': StatusType.STATE_UPDATED.value,
                     'message': f"ファイル読み込み完了: {file_path}",
                     'content_length': len(result) if result else 0
                 })
@@ -197,48 +218,20 @@ class EnhancedTaskLoop:
                     success = False
                 if success:
                     self._send_enhanced_status({
-                        'type': 'file_write_completed',
+                        'type': StatusType.STATE_UPDATED.value,
                         'message': f"ファイル書き込み完了: {file_path}"
                     })
                 else:
                     self._send_enhanced_status({
-                        'type': 'file_write_failed',
+                        'type': StatusType.TASK_ERROR.value,
                         'message': f"ファイル書き込み失敗: {file_path}"
                     })
                     
         except Exception as e:
             self.logger.error(f"ファイル操作中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': 'task_error', 'message': str(e)})
+            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
 
-    def _update_agent_state_step(self, step: Step, status: Status):
-        """AgentStateのステップとステータスを更新"""
-        try:
-            if self.agent_state:
-                self.agent_state.set_step_status(step, status)
-                self.logger.debug(f"AgentState更新: {step.value}.{status.value}")
-            else:
-                self.logger.warning("AgentStateが利用できません")
-                
-        except Exception as e:
-            self.logger.error(f"AgentStateステップ更新中にエラー: {e}")
 
-    def _update_agent_state_fixed_five(self, fixed_five: Dict[str, Any]):
-        """AgentStateの固定5項目を更新"""
-        try:
-            if self.agent_state:
-                self.agent_state.set_fixed_five(
-                    goal=fixed_five.get('goal', ''),
-                    why_now=fixed_five.get('why_now', ''),
-                    constraints=fixed_five.get('constraints', []),
-                    plan_brief=fixed_five.get('plan_brief', []),
-                    open_questions=fixed_five.get('open_questions', [])
-                )
-                self.logger.debug("AgentState固定5項目更新完了")
-            else:
-                self.logger.warning("AgentStateが利用できません")
-                
-        except Exception as e:
-            self.logger.error(f"AgentState固定5項目更新中にエラー: {e}")
 
     def _send_enhanced_status(self, status_data: Dict[str, Any]):
         """Enhanced v2.0専用の状態更新通知"""

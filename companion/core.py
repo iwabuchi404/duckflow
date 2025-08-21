@@ -13,7 +13,11 @@ from typing import Optional, List
 
 # 既存コンポーネントを活用
 from .ui import rich_ui
-from .base.llm_client import llm_manager
+# from .base.llm_client import llm_manager  # 削除: 新しいシステムに置き換え
+
+# 新しいLLM呼び出しシステム
+from .prompts.prompt_context_service import PromptContextService, PromptPattern
+from .prompts.llm_call_manager import LLMCallManager
 
 # Phase 1.5: ファイル操作機能
 from .file_ops import SimpleFileOps, FileOperationError
@@ -124,6 +128,10 @@ class CompanionCore:
         # ファイル操作機能を初期化
         self.file_ops = SimpleFileOps(approval_mode=approval_mode)
         
+        # 新しいLLM呼び出しシステムを初期化
+        self.prompt_context_service = PromptContextService()
+        self.llm_call_manager = LLMCallManager()
+        
         # 新しい意図理解システムの初期化（既存LLMマネージャー使用）
         try:
             from .llm.existing_llm_adapter import default_llm_adapter
@@ -197,7 +205,7 @@ class CompanionCore:
                 action_type = self._analyze_intent_legacy(user_message)
             
             if action_type == ActionType.DIRECT_RESPONSE:
-                result = self._generate_direct_response(user_message)
+                result = await self._generate_direct_response(user_message)
             elif action_type == ActionType.FILE_OPERATION:
                 result = self._handle_file_operation(user_message)
             elif action_type == ActionType.CODE_EXECUTION:
@@ -223,7 +231,7 @@ class CompanionCore:
                 self.last_understanding_result = intent_result.get("understanding_result")
             
             if action_type == ActionType.DIRECT_RESPONSE:
-                result = self._generate_direct_response(user_message)
+                result = await self._generate_direct_response(user_message)
             elif action_type == ActionType.FILE_OPERATION:
                 result = self._handle_file_operation(user_message)
             elif action_type == ActionType.CODE_EXECUTION:
@@ -261,18 +269,37 @@ class CompanionCore:
     def _handle_help_request(self, message: str) -> str:
         return get_help()
 
-    def _generate_direct_response(self, user_message: str) -> str:
-        """直接応答を生成"""
+    async def _generate_direct_response(self, user_message: str) -> str:
+        """直接応答を生成（新しいLLM呼び出しシステム使用）"""
         try:
             rich_ui.print_message("💬 お答えを考えています...", "info")
-            messages = [{"role": "system", "content": self.system_prompt}]
+            
+            # 新しいLLM呼び出しシステムを使用
+            # 会話履歴を含むAgentStateを作成（簡易版）
+            from .state.agent_state import AgentState
+            agent_state = AgentState()
+            
+            # 会話履歴を追加
             with self._history_lock:
                 if self.conversation_history:
-                    for entry in self.conversation_history[-20:]:
-                        messages.append({"role": "user", "content": entry["user"]})
-                        messages.append({"role": "assistant", "content": entry["assistant"]})
-            messages.append({"role": "user", "content": user_message})
-            response = llm_manager.chat_with_history(messages)
+                    for entry in self.conversation_history[-10:]:  # 最新10件
+                        agent_state.add_message("user", entry["user"])
+                        agent_state.add_message("assistant", entry["assistant"])
+            
+            # BaseMainパターンでプロンプトを合成
+            system_prompt = self.prompt_context_service.compose(
+                PromptPattern.BASE_MAIN, 
+                agent_state
+            )
+            
+            # LLMCallManagerで統一呼び出し
+            response = await self.llm_call_manager.call(
+                mode="conversation",
+                input_text=user_message,
+                system_prompt=system_prompt,
+                pattern=PromptPattern.BASE_MAIN
+            )
+            
             rich_ui.print_message("✨ お答えできました！", "success")
             return response
         except Exception as e:

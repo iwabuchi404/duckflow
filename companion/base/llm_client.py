@@ -241,11 +241,21 @@ class LLMManager:
         # モックが許可されているかチェック
         self._mock_allowed = self._is_mock_allowed()
 
-        # 通常起動で実クライアントが設定されていない場合はエラーを発生
-        if self.default_client == "mock" and not self._mock_allowed:
-            raise LLMClientError(
-                "実LLMが有効化されていません。.envファイルにサポートされているAPIキー（例: OPENAI_API_KEY）を設定してください。"
-            )
+        # 本番環境チェック
+        if self._is_production_environment():
+            # 本番環境では絶対にモックLLMを許可しない
+            if self.default_client == "mock":
+                raise LLMClientError(
+                    "本番環境では絶対にモックLLMは使用できません。実LLMのAPIキーを設定してください。"
+                )
+        else:
+            # 開発環境ではモックLLMを許可
+            self.logger.info("開発環境: モックLLMの使用を許可")
+            if self.default_client == "mock" and not self._mock_allowed:
+                # 開発環境でもモックが許可されていない場合はエラー
+                raise LLMClientError(
+                    "開発環境でモックLLMが許可されていません。DUCKFLOW_ALLOW_MOCK=1を設定してください。"
+                )
 
         self.logger.info(f"LLMManager初期化完了。デフォルトクライアント: {self.default_client}")
 
@@ -253,6 +263,43 @@ class LLMManager:
         import os
         # テスト実行時や明示許可のときのみモックを許可
         return bool(os.getenv('DUCKFLOW_ALLOW_MOCK') or os.getenv('PYTEST_CURRENT_TEST'))
+    
+    def _is_production_environment(self) -> bool:
+        """本番環境かどうかをチェック"""
+        try:
+            import os
+            
+            # 環境変数で本番環境フラグをチェック
+            if os.getenv('DUCKFLOW_ENV') == 'production':
+                self.logger.info("環境変数DUCKFLOW_ENV=productionにより本番環境と判定")
+                return True
+            
+            # APIキーの存在で本番環境と判断
+            api_keys = [
+                'OPENAI_API_KEY',
+                'ANTHROPIC_API_KEY', 
+                'GROQ_API_KEY',
+                'OPENROUTER_API_KEY'
+            ]
+            
+            found_keys = []
+            for key in api_keys:
+                if os.getenv(key):
+                    found_keys.append(key)
+            
+            if found_keys:
+                self.logger.info(f"APIキーが設定されているため本番環境と判定: {found_keys}")
+                return True
+            
+            # 開発環境の場合はFalse
+            self.logger.info("APIキーが設定されていないため開発環境と判定")
+            return False
+            
+        except Exception as e:
+            self.logger.warning(f"環境チェックエラー: {e}")
+            # エラーの場合は安全側に倒して本番環境とみなす
+            self.logger.warning("環境チェックエラーのため、安全側に倒して本番環境と判定")
+            return True
 
     def _try_init_real_client(self):
         """環境変数からAPIキーを検知し、実クライアントを初期化・設定する"""
@@ -294,8 +341,17 @@ class LLMManager:
         """LLMでテキスト生成"""
         try:
             client = self.get_client(client_name)
-            if self.default_client == 'mock' and not getattr(self, '_mock_allowed', False):
-                raise LLMClientError("モックLLMはテスト時のみ許可されています。実LLMのAPIキーを設定してください。")
+            
+            # 本番環境チェック
+            if self._is_production_environment():
+                if self.default_client == 'mock':
+                    raise LLMClientError("本番環境では絶対にモックLLMは使用できません。実LLMのAPIキーを設定してください。")
+                if isinstance(client, MockLLMClient):
+                    raise LLMClientError("本番環境では絶対にモックLLMは使用できません。実LLMのAPIキーを設定してください。")
+            else:
+                # 開発環境でのみモックLLMを許可
+                if self.default_client == 'mock' and not getattr(self, '_mock_allowed', False):
+                    raise LLMClientError("モックLLMはテスト時のみ許可されています。実LLMのAPIキーを設定してください。")
             
             request = LLMRequest(
                 prompt=prompt,
@@ -372,6 +428,43 @@ class LLMManager:
     def get_provider_name(self) -> str:
         """現在のプロバイダー名を取得"""
         return self.default_client
+    
+    def _is_production_environment(self) -> bool:
+        """本番環境かどうかをチェック"""
+        try:
+            import os
+            
+            # 環境変数で本番環境フラグをチェック
+            if os.getenv('DUCKFLOW_ENV') == 'production':
+                self.logger.info("環境変数DUCKFLOW_ENV=productionにより本番環境と判定")
+                return True
+            
+            # APIキーの存在で本番環境と判断
+            api_keys = [
+                'OPENAI_API_KEY',
+                'ANTHROPIC_API_KEY', 
+                'GROQ_API_KEY',
+                'OPENROUTER_API_KEY'
+            ]
+            
+            found_keys = []
+            for key in api_keys:
+                if os.getenv(key):
+                    found_keys.append(key)
+            
+            if found_keys:
+                self.logger.info(f"APIキーが設定されているため本番環境と判定: {found_keys}")
+                return True
+            
+            # 開発環境の場合はFalse
+            self.logger.info("APIキーが設定されていないため開発環境と判定")
+            return False
+            
+        except Exception as e:
+            self.logger.warning(f"環境チェックエラー: {e}")
+            # エラーの場合は安全側に倒して本番環境とみなす
+            self.logger.warning("環境チェックエラーのため、安全側に倒して本番環境と判定")
+            return True
     
     def is_mock_client(self) -> bool:
         """現在のクライアントがモックかどうかチェック"""

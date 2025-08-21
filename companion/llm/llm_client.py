@@ -16,16 +16,27 @@ def load_env_vars():
     """環境変数を読み込み"""
     env_vars = {}
     
-    # APIキー
+    # .envファイルの読み込み
+    from ..config.config_manager import load_config
+    try:
+        config = load_config()
+        env_vars['DEFAULT_LLM_PROVIDER'] = config.llm_provider
+        env_vars['DEFAULT_MODEL'] = config.llm_model
+        env_vars['MAX_TOKENS'] = config.llm_max_retries
+        env_vars['TEMPERATURE'] = config.llm_temperature
+    except Exception as e:
+        print(f"設定読み込みエラー: {e}")
+        # デフォルト値を使用
+        env_vars['DEFAULT_LLM_PROVIDER'] = 'groq'
+        env_vars['DEFAULT_MODEL'] = 'openai/gpt-oss-20b'
+        env_vars['MAX_TOKENS'] = 1000
+        env_vars['TEMPERATURE'] = 0.1
+    
+    # APIキー（環境変数から直接読み込み）
     env_vars['OPENAI_API_KEY'] = os.getenv('OPENAI_API_KEY')
     env_vars['ANTHROPIC_API_KEY'] = os.getenv('ANTHROPIC_API_KEY')
     env_vars['OPENROUTER_API_KEY'] = os.getenv('OPENROUTER_API_KEY')
-    
-    # 設定
-    env_vars['DEFAULT_LLM_PROVIDER'] = os.getenv('DEFAULT_LLM_PROVIDER', 'openai')
-    env_vars['DEFAULT_MODEL'] = os.getenv('DEFAULT_MODEL', 'gpt-4')
-    env_vars['MAX_TOKENS'] = int(os.getenv('MAX_TOKENS', '1000'))
-    env_vars['TEMPERATURE'] = float(os.getenv('TEMPERATURE', '0.1'))
+    env_vars['GROQ_API_KEY'] = os.getenv('GROQ_API_KEY')
     
     return env_vars
 
@@ -49,6 +60,7 @@ class LLMProvider(Enum):
     """LLMプロバイダー"""
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
+    GROQ = "groq"
     OPENROUTER = "openrouter"
 
 
@@ -66,37 +78,113 @@ class LLMResponse:
 class LLMClient:
     """シンプルなLLMクライアント"""
     
-    def __init__(self, provider: LLMProvider = LLMProvider.OPENAI):
+    def __init__(self, provider: LLMProvider = None):
         """LLMクライアントを初期化"""
-        self.provider = provider
         self.logger = logging.getLogger(__name__)
+        
+        # .envファイルの明示的な読み込み
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            self.logger.info(".envファイルを読み込みました")
+        except ImportError:
+            self.logger.warning("python-dotenvがインストールされていません")
+        except Exception as e:
+            self.logger.warning(f".envファイル読み込みエラー: {e}")
         
         # 設定の読み込み
         self.config = self._load_config()
+        
+        # プロバイダーの設定
+        if provider is None:
+            # config.yamlからデフォルトプロバイダーを読み込み
+            try:
+                from ..config.config_manager import load_config
+                config = load_config()
+                if config.llm_provider == "groq":
+                    self.provider = LLMProvider.GROQ
+                elif config.llm_provider == "anthropic":
+                    self.provider = LLMProvider.ANTHROPIC
+                elif config.llm_provider == "openai":
+                    self.provider = LLMProvider.OPENAI
+                elif config.llm_provider == "openrouter":
+                    self.provider = LLMProvider.OPENROUTER
+                else:
+                    self.provider = LLMProvider.GROQ  # デフォルト
+            except Exception as e:
+                self.logger.warning(f"設定読み込みエラー: {e}, デフォルトプロバイダーを使用")
+                self.provider = LLMProvider.GROQ  # デフォルト
+        else:
+            self.provider = provider
         
         # プロバイダーの初期化
         self._initialize_provider()
     
     def _load_config(self) -> Dict[str, Any]:
         """設定を読み込み"""
-        config = {
-            "openai": {
-                "api_key": os.getenv("OPENAI_API_KEY"),
-                "base_url": os.getenv("OPENAI_BASE_URL"),
-                "default_model": "gpt-4o-mini"
-            },
-            "anthropic": {
-                "api_key": os.getenv("ANTHROPIC_API_KEY"),
-                "default_model": "claude-3-haiku-20240307"
-            },
-            "openrouter": {
-                "api_key": os.getenv("OPENROUTER_API_KEY"),
-                "base_url": "https://openrouter.ai/api/v1",
-                "default_model": "anthropic/claude-3-haiku"
-            }
-        }
+        from ..config.config_manager import load_config
         
-        return config
+        try:
+            config = load_config()
+            
+            # 環境変数の読み込み状況をログ出力
+            self.logger.info(f"環境変数読み込み状況:")
+            self.logger.info(f"  GROQ_API_KEY: {os.getenv('GROQ_API_KEY', 'Not found')[:10]}..." if os.getenv('GROQ_API_KEY') else "  GROQ_API_KEY: Not found")
+            self.logger.info(f"  OPENAI_API_KEY: {os.getenv('OPENAI_API_KEY', 'Not found')[:10]}..." if os.getenv('OPENAI_API_KEY') else "  OPENAI_API_KEY: Not found")
+            self.logger.info(f"  設定ファイルプロバイダー: {config.llm_provider}")
+            
+            # 環境変数を優先的に読み込み、設定ファイルはフォールバック
+            config_data = {
+                "openai": {
+                    "api_key": os.getenv("OPENAI_API_KEY") or (config.llm_api_key if config.llm_provider == "openai" else ""),
+                    "base_url": os.getenv("OPENAI_BASE_URL"),
+                    "default_model": config.llm_model if config.llm_provider == "openai" else "gpt-4o-mini"
+                },
+                "anthropic": {
+                    "api_key": os.getenv("ANTHROPIC_API_KEY") or (config.llm_api_key if config.llm_provider == "anthropic" else ""),
+                    "default_model": config.llm_model if config.llm_provider == "anthropic" else "claude-3-haiku-20240307"
+                },
+                "groq": {
+                    "api_key": os.getenv("GROQ_API_KEY") or (config.llm_api_key if config.llm_provider == "groq" else ""),
+                    "default_model": config.llm_model if config.llm_provider == "groq" else "openai/gpt-oss-20b"
+                },
+                "openrouter": {
+                    "api_key": os.getenv("OPENROUTER_API_KEY") or (config.llm_api_key if config.llm_provider == "openrouter" else ""),
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "default_model": config.llm_model if config.llm_provider == "openrouter" else "anthropic/claude-3-5-sonnet-20241022"
+                }
+            }
+            
+            # 設定データの読み込み状況をログ出力
+            self.logger.info(f"設定データ読み込み状況:")
+            self.logger.info(f"  GROQ API Key: {config_data['groq']['api_key'][:10]}..." if config_data['groq']['api_key'] else "  GROQ API Key: Not found")
+            
+            return config_data
+            
+        except Exception as e:
+            self.logger.warning(f"設定読み込みエラー: {e}, デフォルト設定を使用")
+            
+            # デフォルト設定（環境変数のみ）
+            return {
+                "openai": {
+                    "api_key": os.getenv("OPENAI_API_KEY"),
+                    "base_url": os.getenv("OPENAI_BASE_URL"),
+                    "default_model": "gpt-4o-mini"
+                },
+                "anthropic": {
+                    "api_key": os.getenv("ANTHROPIC_API_KEY"),
+                    "default_model": "claude-3-haiku-20240307"
+                },
+                "groq": {
+                    "api_key": os.getenv("GROQ_API_KEY"),
+                    "default_model": "openai/gpt-oss-20b"
+                },
+                "openrouter": {
+                    "api_key": os.getenv("OPENROUTER_API_KEY"),
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "default_model": "anthropic/claude-3-5-sonnet-20241022"
+                }
+            }
     
     def _initialize_provider(self):
         """プロバイダーを初期化"""
@@ -107,6 +195,10 @@ class LLMClient:
         elif self.provider == LLMProvider.ANTHROPIC and ANTHROPIC_AVAILABLE:
             if not self.config["anthropic"]["api_key"]:
                 self.logger.warning("Anthropic API key not found")
+                
+        elif self.provider == LLMProvider.GROQ:
+            if not self.config["groq"]["api_key"]:
+                self.logger.warning("Groq API key not found")
                 
         elif self.provider == LLMProvider.OPENROUTER:
             if not self.config["openrouter"]["api_key"]:
@@ -141,6 +233,10 @@ class LLMClient:
                 )
             elif self.provider == LLMProvider.ANTHROPIC:
                 return await self._chat_anthropic(
+                    prompt, system_prompt, model, max_tokens, temperature, **kwargs
+                )
+            elif self.provider == LLMProvider.GROQ:
+                return await self._chat_groq(
                     prompt, system_prompt, model, max_tokens, temperature, **kwargs
                 )
             elif self.provider == LLMProvider.OPENROUTER:
@@ -233,6 +329,55 @@ class LLMClient:
             metadata={"response_id": response.id}
         )
     
+    async def _chat_groq(
+        self, 
+        prompt: str, 
+        system_prompt: Optional[str],
+        model: Optional[str],
+        max_tokens: int,
+        temperature: float,
+        **kwargs
+    ) -> LLMResponse:
+        """Groq APIを使用したチャット"""
+        try:
+            import groq
+            
+            model = model or self.config["groq"]["default_model"]
+            api_key = self.config["groq"]["api_key"]
+            
+            if not api_key:
+                raise ValueError("Groq API key not found")
+            
+            client = groq.Groq(api_key=api_key)
+            
+            messages = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+            
+            # GROQクライアントは同期的なメソッドなのでawaitは不要
+            response = client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                **kwargs
+            )
+            
+            return LLMResponse(
+                content=response.choices[0].message.content,
+                provider=LLMProvider.GROQ,
+                model=model,
+                tokens_used=response.usage.total_tokens if hasattr(response, 'usage') else None,
+                metadata={"response_id": response.id}
+            )
+            
+        except ImportError:
+            raise ImportError("Groq library not available. Install with: pip install groq")
+        except Exception as e:
+            self.logger.error(f"Groq API error: {e}")
+            raise
+    
     async def _chat_openrouter(
         self, 
         prompt: str, 
@@ -300,6 +445,8 @@ class LLMClient:
             return OPENAI_AVAILABLE and bool(self.config["openai"]["api_key"])
         elif self.provider == LLMProvider.ANTHROPIC:
             return ANTHROPIC_AVAILABLE and bool(self.config["anthropic"]["api_key"])
+        elif self.provider == LLMProvider.GROQ:
+            return bool(self.config["groq"]["api_key"])
         elif self.provider == LLMProvider.OPENROUTER:
             return bool(self.config["openrouter"]["api_key"])
         return False

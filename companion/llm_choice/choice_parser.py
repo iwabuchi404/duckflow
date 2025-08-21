@@ -8,7 +8,7 @@ import logging
 from typing import Dict, Any, List
 
 from .choice_models import ChoiceContext, ChoiceResult
-from ..base.llm_client import llm_manager
+# from ..base.llm_client import llm_manager  # 削除: 新しいシステムに置き換え
 
 
 class LLMChoiceParser:
@@ -20,7 +20,8 @@ class LLMChoiceParser:
     
     def __init__(self):
         """初期化"""
-        self.llm_client = llm_manager
+        # self.llm_client = llm_manager  # 削除: 新しいシステムに置き換え
+        self.llm_client = None  # 一時的に無効化
         self.confidence_threshold_high = 0.8
         self.confidence_threshold_medium = 0.6
         self.logger = logging.getLogger(__name__)
@@ -40,8 +41,9 @@ class LLMChoiceParser:
             system_prompt = self._build_choice_analysis_prompt(context)
             user_prompt = f"ユーザーの回答: 「{user_input}」"
             
-            # LLM解析実行
-            analysis = await self._analyze_with_llm(system_prompt, user_prompt)
+            # LLM解析実行（一時的に無効化）
+            # analysis = await self._analyze_with_llm(system_prompt, user_prompt)
+            analysis = "LLM解析は一時的に無効化されています"
             
             # 結果パース
             return self._parse_llm_response(analysis, context)
@@ -147,7 +149,7 @@ class LLMChoiceParser:
     
     async def _analyze_with_llm(self, system_prompt: str, user_prompt: str) -> str:
         """
-LLMで解析を実行
+LLMで解析を実行（一時的に無効化）
         
         Args:
             system_prompt: システムプロンプト
@@ -156,17 +158,21 @@ LLMで解析を実行
         Returns:
             str: LLMの応答
         """
-        try:
-            response = await self.llm_client.generate_text(
-                prompt=user_prompt,
-                system_prompt=system_prompt,
-                max_tokens=500,
-                temperature=0.1  # 一貫性を重視
-            )
-            return response
-        except Exception as e:
-            self.logger.error(f"LLM APIエラー: {e}")
-            raise
+        # 一時的に無効化（新しいLLM呼び出しシステム統合中）
+        self.logger.warning("LLM解析は一時的に無効化されています")
+        return "LLM解析は一時的に無効化されています"
+        
+        # try:
+        #     response = await self.llm_client.generate_text(
+        #         prompt=user_prompt,
+        #         system_prompt=system_prompt,
+        #         max_tokens=500,
+        #         temperature=0.1  # 一貫性を重視
+        #     )
+        #     return response
+        # except Exception as e:
+        #     self.logger.error(f"LLM APIエラー: {e}")
+        #     raise
     
     def _parse_llm_response(self, response: str, context: ChoiceContext) -> ChoiceResult:
         """
