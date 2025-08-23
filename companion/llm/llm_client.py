@@ -355,21 +355,65 @@ class LLMClient:
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
             
+            # toolsパラメーターを処理
+            groq_params = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature
+            }
+            
+            # toolsとtool_choiceパラメーターを追加
+            if 'tools' in kwargs and kwargs['tools']:
+                groq_params['tools'] = kwargs['tools']
+                if 'tool_choice' in kwargs:
+                    groq_params['tool_choice'] = kwargs['tool_choice']
+            
+            # その他のkwargsを追加（toolsとtool_choice以外）
+            for key, value in kwargs.items():
+                if key not in ['tools', 'tool_choice']:
+                    groq_params[key] = value
+            
+            # デバッグログ
+            self.logger.info(f"Groq API パラメーター: tools={bool(groq_params.get('tools'))}, tool_choice={groq_params.get('tool_choice', 'N/A')}")
+            
             # GROQクライアントは同期的なメソッドなのでawaitは不要
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                **kwargs
-            )
+            response = client.chat.completions.create(**groq_params)
+            
+            # ツール呼び出しとコンテンツ両方を処理
+            message = response.choices[0].message
+            content = message.content
+            tool_calls = getattr(message, 'tool_calls', None)
+            
+            # コンテンツとツール呼び出しの両方がNoneの場合はエラー
+            if content is None and not tool_calls:
+                raise ValueError("Groq APIからコンテンツとツール呼び出しの両方がNoneです")
+            
+            # ツール呼び出しがある場合はJSON形式で返す
+            if tool_calls:
+                import json
+                tool_call_data = {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": tool_call.function.name,
+                                "arguments": tool_call.function.arguments
+                            }
+                        } for tool_call in tool_calls
+                    ]
+                }
+                content = json.dumps(tool_call_data, ensure_ascii=False)
+                self.logger.info(f"Groq API ツール呼び出し受信: {len(tool_calls)}件")
+            
+            # デバッグ用ログ
+            self.logger.info(f"Groq API レスポンス内容（文字数: {len(content) if content else 0}）: {content[:100] if content else 'None'}...")
             
             return LLMResponse(
-                content=response.choices[0].message.content,
+                content=content,
                 provider=LLMProvider.GROQ,
                 model=model,
                 tokens_used=response.usage.total_tokens if hasattr(response, 'usage') else None,
-                metadata={"response_id": response.id}
+                metadata={"response_id": response.id, "has_tool_calls": tool_calls is not None}
             )
             
         except ImportError:

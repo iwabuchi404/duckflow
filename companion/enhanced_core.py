@@ -1,1348 +1,1837 @@
+#!/usr/bin/env python3
 """
-EnhancedCompanionCore - Step 2: 既存システム統合版
-AgentState、ConversationMemory、PromptCompilerとの統合
+Enhanced Companion Core V7 - 重複表示防止機能付き
+
+AI応答の重複表示を防ぎ、適切な区切り表示を提供する
 """
 
+import json
+import logging
 import asyncio
-import uuid
-from typing import Optional, Dict, Any, List
 from datetime import datetime
+from typing import List, Dict, Any, Optional
+from dataclasses import dataclass
 
-# Enhanced v2.0システムの正しい依存関係
-from companion.state.agent_state import AgentState, Step
-from companion.enhanced.types import ActionType, IntentResult, TaskContext
-from .memory.conversation_memory import conversation_memory
-from .prompts.prompt_compiler import prompt_compiler
-from .prompts.context_builder import PromptContextBuilder
-# from .base.llm_client import llm_manager  # 削除: 新しいシステムに置き換え
-from .ui import rich_ui
-from companion.validators.llm_output import LLMOutputFormatter, MainLLMOutput
-from companion.prompts.context_assembler import ContextAssembler
-from .simple_approval import ApprovalMode
+# 既存のimport
+try:
+    from .state.agent_state import AgentState, Plan
+    from .llm.llm_client import LLMClient
+    from .llm.llm_service import LLMService
+    from .intent_understanding.intent_analyzer_llm import IntentAnalyzerLLM, ActionType
+    from .prompts.prompt_context_service import PromptContextService
+    from .prompts.prompt_patterns import PromptPattern
+except ImportError:
+    # フォールバック用のダミークラス
+    class AgentState: pass
+    class Plan: pass
+    class LLMClient: pass
+    class LLMService: pass
+    class IntentAnalyzerLLM: pass
+    class PromptContextService: pass
+    class PromptPattern: pass
+    # ActionTypeのフォールバック
+    class ActionType:
+        FILE_OPERATION = type('ActionType', (), {'value': 'file_operation'})()
+        CODE_EXECUTION = type('ActionType', (), {'value': 'code_execution'})()
+        PLAN_GENERATION = type('ActionType', (), {'value': 'plan_generation'})()
+        DIRECT_RESPONSE = type('ActionType', (), {'value': 'direct_response'})()
+        SUMMARY_GENERATION = type('ActionType', (), {'value': 'summary_generation'})()
+        CONTENT_EXTRACTION = type('ActionType', (), {'value': 'content_extraction'})()
 
-# 新しいLLM呼び出しシステム
-from companion.prompts.prompt_context_service import PromptContextService, PromptPattern
-from companion.prompts.llm_call_manager import LLMCallManager
-from companion.intent_understanding.intent_analyzer_llm import IntentAnalyzerLLM
+# 設定
+LLMSERVICE_AVAILABLE = True
+INTENT_ANALYZER_AVAILABLE = True
 
+@dataclass
+class Action:
+    """アクション定義"""
+    operation: str
+    args: Dict[str, Any]
+    reasoning: str = ""
+    action_id: str = ""
 
-class EnhancedCompanionCore:
-    """既存システム統合版CompanionCore
+class EnhancedCompanionCoreV7:
     
-    Step 2の改善:
-    - AgentStateによる統一状態管理（単一ソース・オブ・トゥルース）
-    - ConversationMemoryによる自動記憶要約
-    - PromptCompilerによる高度なプロンプト最適化
-    - PromptContextBuilderによる構造化コンテキスト管理
-    
-    状態管理統一（改修後）:
-    - AgentState: 唯一の書き込み可能な状態ソース
-    - Legacy CompanionCore: 読み取り専用ミラー（AgentState → Legacy の一方向同期）
-    - 状態の競合と二重化問題を解決
-    """
-    
-    def __init__(self, session_id: Optional[str] = None, approval_mode: ApprovalMode = ApprovalMode.STANDARD):
-        """初期化
-        
-        Args:
-            session_id: セッションID（省略時は自動生成）
-            approval_mode: 承認モード
-        """
-        # AgentStateを初期化
-        self.state = AgentState(
-            session_id=session_id or str(uuid.uuid4())
-        )
-        
-        # 既存システムとの統合
-        
-        # プラン状態管理（実行阻害改善）
-        self.current_plan_state = {
-            "pending": False,
-            "plan_content": None,
-            "plan_type": None,
-            "created_at": None
-        }
-        self.memory_manager = conversation_memory
-        self.prompt_compiler = prompt_compiler
-        self.context_builder = PromptContextBuilder()
-        
-        # 遅延初期化用のキャッシュ
-        self._collaborative_planner_cache = None
-        
-        # Enhanced v2.0では独立したコア機能を提供
-        self.approval_mode = approval_mode
-        
-        # ファイル操作統合
-        from .file_ops import SimpleFileOps
-        self.file_ops = SimpleFileOps(approval_mode=approval_mode)
-        
-        # Enhanced v2.0では簡易プラン管理
-        self.current_plan = None
-        
-        # PlanTool統合（Enhanced v2.0用に簡略化）
-        try:
-            from .plan_tool import PlanTool
-            self.plan_tool = PlanTool()
-        except ImportError:
-            self.logger.warning("PlanToolが利用できません。簡易プラン管理モードで動作します。")
-            self.plan_tool = None
-        
-        # Phase 1.6: コード実行機能統合
-        from .code_runner import SimpleCodeRunner
-        self.code_runner = SimpleCodeRunner(approval_mode=approval_mode)
-        
-        # 統合モードフラグ
-        self.use_enhanced_mode = True
-        # LLM出力バリデータ（Phase 1）
-        self.llm_output_formatter = LLMOutputFormatter()
-        # Phase 2: Context Assembler（Base+Main）
-        self.context_assembler = ContextAssembler()
-        
-        # 新しいLLM呼び出しシステム
-        self.prompt_context_service = PromptContextService()
-        self.llm_call_manager = LLMCallManager()
-        
-        # IntentAnalyzerLLMを初期化
-        self.intent_analyzer = IntentAnalyzerLLM()
-        
-        # ログ設定
-        import logging
+    def __init__(self, dual_loop_system):
+        # 🔥 修正: ロガーを最初に初期化
         self.logger = logging.getLogger(__name__)
-    
-    def _generate_plan_unified(self, user_input: str):
-        """統一プラン生成（全パスで使用、コンテキスト引き継ぎ対応）"""
-        try:
-            # 短期記憶からコンテキストを取得
-            short_term_memory = getattr(self.state, 'short_term_memory', {})
-            last_read_file = short_term_memory.get('last_read_file')
-
-            # プラン生成のためのプロンプトを動的に構築
-            if last_read_file:
-                plan_generation_prompt = f"""
-ユーザーの要求: {user_input}
-
-関連コンテキスト:
-直前にファイル「{last_read_file.get('path')}」を読み込みました。
-そのファイルの要約は以下の通りです。
----
-{last_read_file.get('summary', 'なし')}
----
-
-上記のコンテキストを完全に踏まえた上で、ユーザーの要求に対する具体的な実装プランを生成してください。
-"""
-                rationale = f"ユーザー要求（{user_input[:50]}...）とファイルコンテキスト（{last_read_file.get('path')}）に基づく"
-            else:
-                plan_generation_prompt = user_input
-                rationale = f"ユーザー要求: {user_input[:100]}..."
-
-            # プラン作成に必要な引数を準備
-            from .plan_tool import MessageRef
-            sources = [MessageRef(message_id="user_request", timestamp=datetime.now().isoformat())]
-            tags = ["user_request", "auto_generated", "context_aware"]
-
-            # プラン作成（PlanToolが利用可能な場合のみ）
-            if self.plan_tool:
-                plan_id = self.plan_tool.propose(plan_generation_prompt, sources, rationale, tags)
-
-                # ActionSpec保証（ActionSpecの生成は元の入力で行う）
-                self._ensure_action_specs(plan_id, user_input)
-
-                # 承認要求
-                from .plan_tool import SpecSelection
-                self.plan_tool.request_approval(plan_id, SpecSelection(all=True))
-            else:
-                # PlanToolが利用できない場合は簡易プラン管理
-                plan_id = str(uuid.uuid4())
-                self.current_plan = {
-                    'id': plan_id,
-                    'content': plan_generation_prompt,
-                    'created_at': datetime.now().isoformat()
-                }
-                self.logger.info(f"簡易プラン作成: {plan_id}")
-
-            return plan_id
-
-        except Exception as e:
-            self.logger.error(f"統一プラン生成エラー: {e}", exc_info=True)
-            raise
-    
-    def _ensure_action_specs(self, plan_id: str, content: str):
-        """ActionSpec保証（PlanToolが利用可能な場合のみ）"""
-        if not self.plan_tool:
-            self.logger.warning("PlanToolが利用できないため、ActionSpec設定をスキップします")
-            return
-            
-        try:
-            from .collaborative_planner import ActionSpec
-            
-            # 動的なファイルパスと説明の生成
-            file_path = self._generate_dynamic_file_path(content)
-            description = self._generate_dynamic_description(content)
-            
-            action_spec = ActionSpec(
-                kind='implement',
-                path=file_path,
-                description=description,
-                optional=False
-            )
-            
-            # ActionSpec設定
-            self.plan_tool.set_action_specs(plan_id, [action_spec])
-        except Exception as e:
-            self.logger.error(f"ActionSpec設定エラー: {e}")
-            # エラー時はログ出力のみ（システム停止は回避）
-    
-    def _generate_dynamic_file_path(self, content: str) -> str:
-        """動的なファイルパスを生成"""
-        if "計画" in content or "プラン" in content:
-            return "plan.md"
-        elif "実装" in content:
-            return "implementation.md"
-        elif "作成" in content:
-            return "implementation.md"
-        elif "設計" in content or "アーキテクチャ" in content:
-            return "design.md"
-        else:
-            return "task.md"
-    
-    def _generate_dynamic_description(self, content: str) -> str:
-        """動的な説明を生成"""
-        if "実装" in content:
-            return f"ユーザー要求に基づく実装: {content[:100]}..."
-        elif "計画" in content:
-            return f"ユーザー要求に基づく計画作成: {content[:100]}..."
-        elif "設計" in content:
-            return f"ユーザー要求に基づく設計: {content[:100]}..."
-        else:
-            return f"ユーザー要求の処理: {content[:100]}..."
-    
-    # 意図検出処理は削除 - IntentAnalyzerLLMを使用するため
-    
-    # 意図検出関連メソッドは削除 - IntentAnalyzerLLMを使用するため
-    # _analyze_intent_enhanced, _determine_action_type, _analyze_intent_simple, _build_main_llm_output
-    
-    async def analyze_intent_only(self, user_message: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """IntentAnalyzerLLMを使用した意図理解"""
-        try:
-            # IntentAnalyzerLLMで意図理解を実行
-            intent_result = await self.intent_analyzer.analyze(user_message, self.state, context)
-            
-            # 結果をEnhancedCompanionCore形式に変換
-            return {
-                "action_type": intent_result.action_type,
-                "understanding_result": intent_result,
-                "message": user_message,
-                "enhanced_mode": True,
-                "session_id": self.state.session_id,
-                "conversation_count": len(self.state.conversation_history),
-                "route_type": "intent_analyzer_llm",
-                "risk_level": "low",
-                "prerequisite_status": "ready"
-            }
-        except Exception as e:
-            self.logger.error(f"IntentAnalyzerLLM意図理解エラー: {e}")
-            # フォールバック: 簡易意図理解
-            return await self._analyze_intent_fallback(user_message)
-    
-    async def _analyze_intent_fallback(self, user_message: str) -> Dict[str, Any]:
-        """フォールバック用の簡易意図理解"""
-        # LLMによる意図理解を試行
-        try:
-            action_type = await self._determine_action_type_llm(user_message)
-        except Exception as e:
-            self.logger.warning(f"LLM意図理解エラー: {e}, フォールバックキーワード判定を使用")
-            # 基本的なキーワードベースの判定（緊急時のみ）
-            message_lower = user_message.lower()
-            
-            if any(kw in message_lower for kw in ["読", "見て", "確認", "内容", "ファイル", "file", "読み"]):
-                action_type = ActionType.FILE_OPERATION
-            elif any(kw in message_lower for kw in ["作成", "書", "出力", "生成", "create", "write"]):
-                action_type = ActionType.FILE_OPERATION
-            elif any(kw in message_lower for kw in ["実行", "run", "テスト", "test"]):
-                action_type = ActionType.CODE_EXECUTION
-            elif any(kw in message_lower for kw in ["プラン", "計画", "設計", "plan"]):
-                action_type = ActionType.PLAN_GENERATION
-            else:
-                action_type = ActionType.DIRECT_RESPONSE
         
+        # システム起動時に文字コード環境を設定（一元化された設定を使用）
+        self._setup_encoding_environment()
+        
+        # 基本システムの初期化
+        self.dual_loop_system = dual_loop_system
+        self.agent_state = dual_loop_system.agent_state
+        self.llm_call_manager = dual_loop_system.llm_call_manager
+        self.llm_service = dual_loop_system.llm_service
+        self.intent_analyzer = dual_loop_system.intent_analyzer
+        self.prompt_context_service = dual_loop_system.prompt_context_service
+        
+        # 🔥 新規: 重複表示防止のための状態管理
+        self._last_response_hash = None
+        self._response_count = 0
+        self._last_response_time = None
+        
+        # UI初期化
+        self.ui = self._initialize_ui()
+        
+        # 設定読み込み
+        self.config = self._load_config()
+        
+        # ツールを登録（正しい設計）
+        self.tools = {
+            "file_ops": {
+                "analyze_file_structure": self._analyze_file_structure,
+                "search_content": self._search_content,
+                "read_file": self._read_file
+            },
+            "plan_tool": {
+                "propose": self._propose_plan,
+                "update_step": self._update_plan_step,
+                "get_plan": self._get_plan
+            },
+            "task_tool": {
+                "generate_list": self._generate_task_list,
+                "create_task": self._create_task
+            },
+            "response": {
+                "echo": self._echo_response
+            },
+            "llm_service": {
+                "synthesize_insights_from_files": self._synthesize_insights
+            },
+            "task_loop": {
+                "execute_task_list": self._execute_task_list
+            }
+        }
+        
+        self.logger.info("EnhancedCompanionCore (v7) が初期化されました。")
+
+    def _read_file(self, file_path: str) -> str:
+        """ファイルを読み込む"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return f.read()
+        except Exception as e:
+            return f"ファイル読み込みエラー: {e}"
+    
+    def _analyze_file_structure(self, file_path: str) -> Dict[str, Any]:
+        """ファイルの構造を分析する"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                lines = content.split('\n')
+                headers = []
+                for i, line in enumerate(lines, 1):
+                    if line.startswith('#'):
+                        level = len(line) - len(line.lstrip('#'))
+                        text = line.lstrip('#').strip()
+                        headers.append({
+                            'line_number': i,
+                            'level': level,
+                            'text': text
+                        })
+                return {
+                    'operation': '構造分析',
+                    'file_path': file_path,
+                    'file_info': {
+                        'total_lines': len(lines),
+                        'total_chars': len(content),
+                        'encoding': 'utf-8'
+                    },
+                    'headers': headers
+                }
+        except Exception as e:
+            return f"ファイル構造分析エラー: {e}"
+    
+    def _search_content(self, file_path: str, pattern: str, context_lines: int = 3) -> Dict[str, Any]:
+        """ファイル内容を検索する"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                lines = content.split('\n')
+                matches = []
+                for i, line in enumerate(lines, 1):
+                    if pattern in line:
+                        start = max(0, i - context_lines - 1)
+                        end = min(len(lines), i + context_lines)
+                        context = lines[start:end]
+                        matches.append({
+                            'line_number': i,
+                            'line_content': line,
+                            'context': context
+                        })
+                return {
+                    'operation': '内容検索',
+                    'file_path': file_path,
+                    'pattern': pattern,
+                    'matches': matches
+                }
+        except Exception as e:
+            return f"ファイル検索エラー: {e}"
+    
+    def _propose_plan(self, agent_state, user_goal: str) -> Dict[str, Any]:
+        """プランを提案する"""
         return {
-            "action_type": action_type,
-            "understanding_result": None,
-            "message": user_message,
-            "enhanced_mode": False,
-            "session_id": self.state.session_id,
-            "conversation_count": len(self.state.conversation_history),
-            "route_type": "fallback_keyword",
-            "risk_level": "medium",
-            "prerequisite_status": "ready"
+            'operation': 'プラン提案',
+            'plan_id': f"plan_{hash(user_goal) % 10000:04d}",
+            'user_goal': user_goal,
+            'status': 'proposed'
         }
     
-    async def process_with_intent_result(self, intent_result: Dict[str, Any]) -> str:
-        """IntentAnalyzerLLMによる意図理解結果を処理"""
-        try:
-            # 意図分析結果の構造を確認
-            self.logger.info(f"意図分析結果の構造: {type(intent_result)}")
-            self.logger.info(f"意図分析結果の内容: {intent_result}")
-            
-            # IntentAnalyzerLLMの結果を正しく取り出す
-            if hasattr(intent_result, 'action_type'):
-                # IntentAnalysisResultオブジェクトの場合
-                action_type = intent_result.action_type
-                file_target = intent_result.file_target
-                user_message = getattr(intent_result, 'user_input', '')
-                confidence = intent_result.confidence
-                reasoning = intent_result.reasoning
-            elif isinstance(intent_result, dict):
-                # 辞書形式の場合
-                action_type = intent_result.get("action_type")
-                file_target = intent_result.get("file_target")
-                user_message = intent_result.get("message", "")
-                confidence = intent_result.get("confidence", 0.0)
-                reasoning = intent_result.get("reasoning", "")
-            else:
-                # 不明な形式の場合
-                self.logger.error(f"不明な意図分析結果の形式: {type(intent_result)}")
-                return "申し訳ありません。意図分析結果の形式が不明です。"
-
-            # ユーザーメッセージが空の場合は、元のメッセージを使用
-            if not user_message and hasattr(intent_result, 'user_input'):
-                user_message = intent_result.user_input
-
-            self._show_enhanced_thinking_process(user_message)
-
-            # アクション実行（型安全）
-            self.logger.info(f"アクションタイプ: {action_type}")
-            self.logger.info(f"ActionType.SUMMARY_GENERATION: {ActionType.SUMMARY_GENERATION}")
-            self.logger.info(f"比較結果: action_type == ActionType.SUMMARY_GENERATION: {action_type == ActionType.SUMMARY_GENERATION}")
-            
-            # ActionTypeの値を文字列として取得して比較
-            action_type_value = action_type.value if hasattr(action_type, 'value') else str(action_type)
-            self.logger.info(f"アクションタイプの値: {action_type_value}")
-            
-            if action_type_value == "direct_response":
-                self.logger.info("DIRECT_RESPONSE処理を実行")
-                result = await self._generate_enhanced_response(user_message, file_target)
-            elif action_type_value == "file_operation":
-                self.logger.info("FILE_OPERATION処理を実行")
-                result = await self._handle_enhanced_file_operation(user_message, file_target)
-            elif action_type_value == "code_execution":
-                self.logger.info("CODE_EXECUTION処理を実行")
-                result = await self._handle_enhanced_code_execution(user_message, file_target)
-            elif action_type_value == "plan_generation":
-                self.logger.info("PLAN_GENERATION処理を実行")
-                result = await self._handle_enhanced_plan_generation(user_message, file_target)
-            elif action_type_value == "summary_generation":
-                self.logger.info("SUMMARY_GENERATION処理を実行")
-                # summary_generation意図に対する具体的な処理を実装
-                result = await self._handle_enhanced_summary_generation(user_message, file_target)
-            elif action_type_value == "content_extraction":
-                self.logger.info("CONTENT_EXTRACTION処理を実行")
-                result = await self._handle_enhanced_content_extraction(user_message, file_target)
-            else:
-                # 不明なアクションタイプの場合
-                self.logger.warning(f"不明なアクションタイプ: {action_type_value}")
-                result = await self._handle_enhanced_multi_step_task(user_message, file_target)
-            
-            if self._looks_like_plan(result):
-                self.set_plan_state(result, "execution_plan")
-            
-            self.state.add_message("assistant", result)
-            self._sync_to_legacy_readonly()
-            
-            return result
-        except Exception as e:
-            self.logger.error(f"Enhanced処理エラー: {e}")
-            return f"申し訳ありません。処理中にエラーが発生しました: {str(e)}"
+    def _update_plan_step(self, agent_state, step_id: str, status: str) -> Dict[str, Any]:
+        """プランのステップを更新する"""
+        return {
+            'operation': 'ステップ更新',
+            'step_id': step_id,
+            'status': status
+        }
     
-    def _build_recent_conversation_context(self) -> str:
-        """直近の会話履歴から重要なコンテキストを構築"""
-        try:
-            if not self.state.conversation_history:
-                return ""
-            
-            recent_messages = self.state.conversation_history[-3:]
-            context_parts = []
-            
-            for msg in recent_messages:
-                role = msg.get("role", "unknown")
-                content = msg.get("content", "")[:150]
-                if content:
-                    context_parts.append(f"{role}: {content}")
-            
-            return "直近の会話:\n" + "\n".join(context_parts) if context_parts else ""
-            
-        except Exception as e:
-            self.logger.warning(f"会話コンテキスト構築エラー: {e}")
-            return ""
+    def _get_plan(self, agent_state) -> Dict[str, Any]:
+        """プランを取得する"""
+        return {
+            'operation': 'プラン取得',
+            'plans': []
+        }
     
-    def _build_session_summary(self) -> str:
-        """セッション全体の要約を構築"""
-        try:
-            summary_parts = []
-            if hasattr(self.state, 'created_at'):
-                summary_parts.append(f"セッション開始: {self.state.created_at.strftime('%H:%M:%S')}")
-            if self.state.conversation_history:
-                summary_parts.append(f"会話数: {len(self.state.conversation_history)}件")
-            if hasattr(self.state, 'step'):
-                summary_parts.append(f"現在のステップ: {getattr(self.state.step, 'value', str(self.state.step))}")
-            
-            return "セッション概要:\n" + "\n".join(summary_parts) if summary_parts else ""
-            
-        except Exception as e:
-            self.logger.warning(f"セッション要約構築エラー: {e}")
-            return ""
+    def _generate_task_list(self, agent_state, step_id: str) -> Dict[str, Any]:
+        """タスクリストを生成する"""
+        return {
+            'operation': 'タスクリスト生成',
+            'step_id': step_id,
+            'tasks': []
+        }
     
-    def _record_file_operation(self, operation_type: str, file_path: str, content_summary: str = ""):
-        """ファイル操作履歴を記録"""
-        try:
-            if 'file_operations' not in self.state.short_term_memory:
-                self.state.short_term_memory['file_operations'] = []
-            
-            operation_record = {
-                'type': operation_type,
-                'path': file_path,
-                'timestamp': datetime.now().isoformat(),
-                'summary': content_summary
-            }
-            
-            self.state.short_term_memory['file_operations'].append(operation_record)
-            
-            if len(self.state.short_term_memory['file_operations']) > 10:
-                self.state.short_term_memory['file_operations'] = self.state.short_term_memory['file_operations'][-10:]
-                
-        except Exception as e:
-            self.logger.warning(f"ファイル操作履歴記録エラー: {e}")
+    def _create_task(self, task_description: str) -> Dict[str, Any]:
+        """タスクを作成する"""
+        return {
+            'operation': 'タスク作成',
+            'task_id': f"task_{hash(task_description) % 10000:04d}",
+            'description': task_description
+        }
     
-    async def _collect_file_context(self) -> Dict[str, Any]:
-        """ファイルコンテキストを収集（直近の操作履歴を含む）"""
+    def _echo_response(self, message: str) -> str:
+        """応答をエコーする"""
+        return f"応答完了: {message}"
+    
+    def _synthesize_insights(self, task_description: str, file_contents: Dict[str, Any]) -> Dict[str, Any]:
+        """ファイル内容から洞察を合成する"""
+        return {
+            'operation': '洞察合成',
+            'task_description': task_description,
+            'insights': '分析結果がここに表示されます'
+        }
+    
+    def _execute_task_list(self, task_list: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """タスクリストを実行する"""
+        return {
+            'operation': 'タスク実行',
+            'task_count': len(task_list),
+            'status': 'dispatched'
+        }
+    
+    def _setup_encoding_environment(self):
+        """文字コード環境を設定"""
         try:
-            file_operations = []
-            if file_ops := getattr(self.state, 'short_term_memory', {}).get('file_operations', []):
-                for op in file_ops[-5:]:
-                    if isinstance(op, dict):
-                        file_operations.append(f"{op.get('type', '?')}: {op.get('path', '?')}")
+            import locale
+            import sys
             
-            return {"file_operations_history": file_operations}
+            # システムのデフォルトエンコーディングを確認
+            default_encoding = locale.getpreferredencoding()
+            self.logger.info(f"システムデフォルトエンコーディング: {default_encoding}")
+            
+            # 標準出力・標準エラーのエンコーディングを設定
+            if hasattr(sys.stdout, 'reconfigure'):
+                sys.stdout.reconfigure(encoding='utf-8')
+                sys.stderr.reconfigure(encoding='utf-8')
+                self.logger.info("標準出力・標準エラーのエンコーディングをUTF-8に設定")
             
         except Exception as e:
-            self.logger.warning(f"ファイルコンテキスト収集エラー: {e}")
+            self.logger.warning(f"文字コード環境設定に失敗: {e}")
+    
+    def _initialize_ui(self):
+        """UIを初期化"""
+        try:
+            from .ui import RichUI
+            return RichUI()
+        except ImportError:
+            try:
+                from .ui import SimpleUI
+                return SimpleUI()
+            except ImportError:
+                self.logger.warning("UI初期化に失敗、標準出力を使用")
+                return None
+    
+    def _load_config(self):
+        """設定を読み込み"""
+        try:
+            import yaml
+            config_path = "config/config.yaml"
+            with open(config_path, 'r', encoding='utf-8') as f:
+                return yaml.safe_load(f)
+        except Exception as e:
+            self.logger.warning(f"設定ファイル読み込みに失敗: {e}")
             return {}
     
-    def set_plan_state(self, plan_content: str, plan_type: str = "execution_plan"):
-        """プラン状態を設定（PlanTool統合版）"""
-        try:
-            if self.plan_tool:
-                plan_id = self.plan_tool.propose(
-                    content=plan_content,
-                    sources=[MessageRef(message_id=str(uuid.uuid4()), timestamp=datetime.now().isoformat())],
-                    rationale=f"AI生成プラン: {plan_type}",
-                    tags=[plan_type, "ai_generated"]
-                )
-                self.current_plan_state = {
-                    "pending": True,
-                    "plan_content": plan_content,
-                    "plan_type": plan_type,
-                    "created_at": datetime.now(),
-                    "plan_id": plan_id
-                }
-            else:
-                # PlanToolが利用できない場合は簡易プラン管理
-                plan_id = str(uuid.uuid4())
-                self.current_plan_state = {
-                    "pending": True,
-                    "plan_content": plan_content,
-                    "plan_type": plan_type,
-                    "created_at": datetime.now(),
-                    "plan_id": plan_id
-                }
-                self.logger.info(f"簡易プラン状態設定: {plan_id}")
-        except Exception as e:
-            self.logger.error(f"プラン状態設定エラー: {e}")
-            self.current_plan_state = {"pending": True, "plan_content": plan_content, "plan_type": plan_type, "created_at": datetime.now()}
+    def _is_duplicate_response(self, message: str) -> bool:
+        """重複応答かどうかを判定
         
-        self.state.short_term_memory["current_plan_state"] = self.current_plan_state
-        self._record_file_operation("plan_creation", f"plan_{plan_type}", plan_content[:100])
-    
-    def get_plan_state(self) -> Dict[str, Any]:
-        """現在のプラン状態を取得"""
-        return self.current_plan_state
-    
-    def clear_plan_state(self):
-        """プラン状態をクリア"""
-        if self.plan_tool:
-            self.plan_tool.clear_current()
-        self.current_plan_state = {"pending": False, "plan_content": None, "plan_type": None, "created_at": None}
-        if "current_plan_state" in self.state.short_term_memory:
-            del self.state.short_term_memory["current_plan_state"]
-
-    def _looks_like_plan(self, text: str) -> bool:
-        """応答テキストが「実装プラン/ロードマップ」的かを簡易判定"""
-        if not text or len(text) < 50: return False
-        import re
-        indicators = ["実装プラン", "ロードマップ", "フェーズ", "次のステップ", "アクションアイテム", "タスク実行計画"]
-        return sum(1 for kw in indicators if kw in text) >= 2 and bool(re.search(r"\n\s*\d+\|\|\n\s*-\s", text))
-
-    def _summarize_plan_for_context(self, text: str) -> str:
-        """PlanContext 用の軽い要約"""
-        lines = text.splitlines()
-        header = next((l for l in lines if l.strip().startswith("#")), "")
-        bullets = [l.strip() for l in lines if l.strip().startswith(("- ", "1."))][:5]
-        return "\n".join([header] + bullets)
-    
-    async def _generate_enhanced_response(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """拡張版直接応答生成（新しいLLM呼び出しシステム使用）"""
-        try:
-            rich_ui.print_message("💬 拡張コンテキストで応答を生成中...", "info")
+        Args:
+            message: 応答メッセージ
             
-            # 新しいLLM呼び出しシステムを使用
-            # BaseMainSpecializedパターンでプロンプトを合成
-            full_system_prompt = self.prompt_context_service.compose(
-                PromptPattern.BASE_MAIN_SPECIALIZED, 
-                self.state
-            )
-            
-            # LLMCallManagerで統一呼び出し
-            response = await self.llm_call_manager.call(
-                mode="conversation",
-                input_text=user_message,
-                system_prompt=full_system_prompt,
-                pattern=PromptPattern.BASE_MAIN_SPECIALIZED
-            )
-            
-            rich_ui.print_message("✨ 拡張応答を生成しました！", "success")
-            return response
-            
-        except Exception as e:
-            self.logger.error(f"拡張応答生成エラー: {e}")
-            # Enhanced v2.0独立の直接応答生成
-            return await self._generate_enhanced_response_fallback(user_message)
-    
-    async def _handle_enhanced_file_operation(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """拡張版ファイル操作処理"""
-        try:
-            rich_ui.print_message("📁 ファイル操作タスクとして処理中...", "info")
-            
-            # ファイルパスの抽出（IntentAnalyzerLLMの結果を優先）
-            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
-            
-            # LLMによるファイル操作タイプ判定
-            operation_type = await self._determine_file_operation_type(user_message, file_path)
-            
-            # ファイル操作タイプに基づく処理
-            if operation_type == "read":
-                return await self._handle_file_read_operation(user_message, file_path)
-            elif operation_type == "write":
-                if file_path:
-                    return await self._handle_file_write_operation(user_message)
-                else:
-                    # ファイルパスが不明な場合、ユーザーに確認
-                    return "ファイルを作成したいと思いますが、ファイル名が特定できませんでした。\n\n具体的なファイル名を教えてください（例: 'game_doc.md' や 'README.txt' など）。"
-            elif operation_type == "list":
-                return await self._handle_file_list_operation(user_message)
-            elif operation_type == "plan":
-                plan = self._generate_plan_unified(user_message)
-                return plan
-            else:
-                # その他の場合は通常の応答生成
-                return await self._generate_enhanced_response(user_message, file_path)
-                
-        except Exception as e:
-            self.logger.error(f"拡張ファイル操作エラー: {e}")
-            # Enhanced v2.0独立のファイル操作処理
-            return await self._handle_file_operation_fallback(user_message)
-    
-    async def _handle_file_read_operation(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """ファイル読み込み操作を処理"""
-        try:
-            # ファイル名の取得（IntentAnalyzerLLMの結果を優先）
-            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
-            
-            rich_ui.print_message(f"📖 ファイル読み込み: {file_path}", "info")
-            content = self.file_ops.read_file(file_path)
-            summary = await self._generate_file_summary(file_path, content)
-
-            self.state.short_term_memory["last_read_file"] = {
-                "path": file_path,
-                "summary": summary,
-                "length": len(content),
-                "timestamp": datetime.now().isoformat()
-            }
-            self._record_file_operation("read", file_path, summary)
-            self.state.add_message("assistant", f"ファイル '{file_path}' を読み込みました")
-            
-            # 処理完了のログ出力を追加
-            self.logger.info(f"ファイル読み込み処理完了: {file_path}, 内容長: {len(content)}, 要約長: {len(summary)}")
-            
-            return f"📄 ファイル '{file_path}' の内容:\n\n{summary}\n\n--- 完全な内容 ---\n{content}"
-        except Exception as e:
-            return f"ファイル '{file_path}' の読み込みに失敗しました: {str(e)}"
-    
-    async def _extract_file_path_from_llm(self, user_message: str) -> str:
-        """LLMの出力からファイルパスを抽出（新しいLLM呼び出しシステム使用）"""
-        try:
-            # 新しいLLM呼び出しシステムを使用
-            # BaseSpecializedパターンで軽量なプロンプトを合成
-            extraction_system_prompt = self.prompt_context_service.compose(
-                PromptPattern.BASE_SPECIALIZED, 
-                self.state
-            )
-            
-            # ファイル抽出用のプロンプトを構築
-            extraction_prompt = f"""以下のユーザーメッセージから、操作対象のファイル名を正確に抽出してください。
-
-ユーザーメッセージ: {user_message}
-
-以下のJSON形式で回答してください:
-{{
-    "file_target": "ファイル名（例: game_doc.md）",
-    "action": "実行するアクション（例: read_file）",
-    "reasoning": "なぜこのファイル名を抽出したかの理由",
-    "confidence": 0.95
-}}
-
-ファイル名のみを抽出し、余分な文字は含めないでください。
-拡張子が不明な場合は、一般的な拡張子を推測してください。"""
-
-            # LLMCallManagerで統一呼び出し
-            response = await self.llm_call_manager.call(
-                mode="extract",
-                input_text=extraction_prompt,
-                system_prompt=extraction_system_prompt,
-                pattern=PromptPattern.BASE_SPECIALIZED
-            )
-            
-            # JSONレスポンスをパース
-            import json
-            try:
-                # デバッグ用：LLM応答をログ出力
-                self.logger.info(f"LLM応答: {response}")
-                
-                # JSON部分を抽出
-                json_start = response.find('{')
-                json_end = response.rfind('}') + 1
-                
-                if json_start >= 0 and json_end > json_start:
-                    json_str = response[json_start:json_end]
-                    self.logger.info(f"抽出されたJSON文字列: {json_str}")
-                    
-                    parsed = json.loads(json_str)
-                    file_target = parsed.get('file_target', '')
-                    
-                    if file_target:
-                        self.logger.info(f"LLM抽出成功: {file_target} (信頼度: {parsed.get('confidence', 'unknown')})")
-                        return file_target
-                else:
-                    self.logger.warning(f"JSON文字列が見つかりません: response={response}")
-                    
-            except Exception as e:
-                self.logger.warning(f"JSONパースエラー: {e}, response={response}")
-            
-            # フォールバック: 既存のCollaborativePlanner機能を使用
-            return self._extract_file_path_from_message(user_message) or self._fallback_file_extraction(user_message)
-            
-        except Exception as e:
-            self.logger.error(f"LLMファイル名抽出エラー: {e}")
-            # フォールバック: 既存のCollaborativePlanner機能を使用
-            return self._extract_file_path_from_message(user_message) or self._fallback_file_extraction(user_message)
-    
-    def _fallback_file_extraction(self, user_message: str) -> str:
-        """フォールバック用のファイル名抽出（最適化版）"""
-        import re
-        
-        # .md, .txt, .py などの拡張子を持つファイル名を探す
-        file_extensions = r'\.(md|txt|py|js|html|css|json|yaml|yml|xml|csv|log)$'
-        file_match = re.search(r'(\S+' + file_extensions + r')', user_message)
-        if file_match:
-            return file_match.group(1)
-        
-        # 一般的なファイル名パターンを探す
-        words = user_message.split()
-        for word in words:
-            if re.search(r'\.\w+$', word):
-                return word
-        
-        # 最後の手段：簡易抽出のみ使用（CollaborativePlannerは使用しない）
-        # fallback_result = self._extract_file_path_from_message(user_message)
-        # if fallback_result:
-        #     return fallback_result
-        
-        # 最終フォールバック：最初の単語
-        return words[0] if words else "unknown_file"
-    
-    async def _handle_file_write_operation(self, user_message: str) -> str:
-        """ファイル書き込み操作を処理（新しいLLM呼び出しシステム使用）"""
-        try:
-            file_path = await self._extract_file_path_from_llm(user_message)
-            
-            if not file_path:
-                return "ファイル名を特定できませんでした。具体的なファイル名を指定してください。"
-            
-            # 新しいLLM呼び出しシステムを使用
-            # BaseMainパターンでプロンプトを合成
-            content_system_prompt = self.prompt_context_service.compose(
-                PromptPattern.BASE_MAIN, 
-                self.state
-            )
-            
-            # ファイル内容生成用のプロンプトを構築
-            content_prompt = f"""以下の要求に基づいて、ファイル '{file_path}' の内容を生成してください。
-
-要求: {user_message}
-
-ファイル名: {file_path}
-
-適切な内容を生成し、ファイルの種類に応じた形式で出力してください。"""
-
-            # LLMCallManagerで統一呼び出し
-            content = await self.llm_call_manager.call(
-                mode="generate_content",
-                input_text=content_prompt,
-                system_prompt=content_system_prompt,
-                pattern=PromptPattern.BASE_MAIN
-            )
-            
-            # ファイルに書き込み
-            try:
-                self.file_ops.write_file(file_path, content)
-                
-                # 状態を更新
-                self.state.short_term_memory["last_written_file"] = {
-                    "path": file_path,
-                    "length": len(content),
-                    "timestamp": datetime.now().isoformat()
-                }
-                self._record_file_operation("write", file_path, content[:100])
-                self.state.add_message("assistant", f"ファイル '{file_path}' を作成・更新しました")
-                
-                return f"✅ ファイル '{file_path}' を作成・更新しました\n\n📄 内容:\n{content}"
-                
-            except Exception as e:
-                return f"❌ ファイル書き込みエラー: {str(e)}"
-                
-        except Exception as e:
-            self.logger.error(f"ファイル書き込み操作エラー: {e}")
-            return f"ファイル書き込み処理中にエラーが発生しました: {str(e)}"
-    
-    async def _handle_file_list_operation(self, user_message: str) -> str:
-        """ファイル一覧操作を処理"""
-        try:
-            import os
-            from pathlib import Path
-            
-            # 現在のディレクトリを取得
-            current_dir = Path.cwd()
-            
-            # ファイルとディレクトリを取得
-            items = []
-            for item in current_dir.iterdir():
-                if item.is_file():
-                    # ファイルサイズを取得
-                    try:
-                        size = item.stat().st_size
-                        size_str = f"{size:,} bytes" if size < 1024 else f"{size/1024:.1f} KB"
-                    except:
-                        size_str = "unknown"
-                    items.append(f"📄 {item.name} ({size_str})")
-                elif item.is_dir():
-                    items.append(f"📁 {item.name}/")
-            
-            # ソート
-            items.sort()
-            
-            # 結果を整形
-            if items:
-                result = f"📂 現在のディレクトリ: {current_dir}\n\n"
-                result += "ファイルとディレクトリ:\n"
-                result += "\n".join(items)
-                result += f"\n\n合計: {len(items)} 項目"
-            else:
-                result = f"📂 現在のディレクトリ: {current_dir}\n\nディレクトリは空です。"
-            
-            # 状態を更新
-            self.state.short_term_memory["last_directory_listing"] = {
-                "path": str(current_dir),
-                "count": len(items),
-                "timestamp": datetime.now().isoformat()
-            }
-            
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"ファイル一覧操作エラー: {e}")
-            return f"ファイル一覧の取得に失敗しました: {str(e)}"
-
-    async def _generate_file_summary(self, file_path: str, content: str) -> str:
-        """ファイル内容の要約を生成（新しいLLM呼び出しシステム使用）"""
-        if len(content) < 200: return "(内容が短いため要約省略)"
-        try:
-            # 新しいLLM呼び出しシステムを使用
-            # BaseSpecializedパターンで軽量なプロンプトを合成
-            summary_system_prompt = self.prompt_context_service.compose(
-                PromptPattern.BASE_SPECIALIZED, 
-                self.state
-            )
-            
-            # 要約生成用のプロンプトを構築
-            summary_prompt = f"以下のファイル内容を3-5行で簡潔に要約してください。\n\nファイル: {file_path}\n\n内容:{content[:3000]}"
-            
-            # LLMCallManagerで統一呼び出し
-            summary = await self.llm_call_manager.call(
-                mode="summarize",
-                input_text=summary_prompt,
-                system_prompt=summary_system_prompt,
-                pattern=PromptPattern.BASE_SPECIALIZED
-            )
-            
-            # 要約生成完了のログ出力を追加
-            self.logger.info(f"ファイル要約生成完了: {file_path}, 要約長: {len(summary)}")
-            
-            # 要約の前処理を追加
-            if summary and len(summary.strip()) > 0:
-                processed_summary = summary.strip()
-            else:
-                processed_summary = "(要約の生成に失敗しました)"
-            
-            self.logger.info(f"要約処理完了: {file_path}, 最終要約長: {len(processed_summary)}")
-            
-            return f"📋 要約:\n{processed_summary}"
-        except Exception as e:
-            self.logger.warning(f"ファイル要約生成エラー: {e}")
-            return "(要約の生成に失敗しました)"
-    
-    def get_agent_state(self) -> AgentState:
-        return self.state
-    
-    def get_session_summary(self) -> Dict[str, Any]:
-        return {
-            **self.state.get_context_summary(),
-            "memory_status": self.state.get_memory_status(),
-            "enhanced_mode": self.use_enhanced_mode
-        }
-
-    def toggle_enhanced_mode(self, enabled: bool = None) -> bool:
-        if enabled is None:
-            self.use_enhanced_mode = not self.use_enhanced_mode
-        else:
-            self.use_enhanced_mode = enabled
-        rich_ui.print_message(f"🔧 拡張モード: {'有効' if self.use_enhanced_mode else '無効'}", "info")
-        return self.use_enhanced_mode
-
-    def _sync_to_legacy_readonly(self):
-        """AgentState → Legacy CompanionCore への読み取り専用同期"""
-        try:
-            legacy_history = []
-            user_msg = None
-            for msg in self.state.conversation_history:
-                if msg.role == "user":
-                    user_msg = msg.content
-                elif msg.role == "assistant" and user_msg is not None:
-                    legacy_history.append({"user": user_msg, "assistant": msg.content, "timestamp": msg.timestamp})
-                    user_msg = None
-            
-            # Enhanced v2.0では独立した会話履歴管理
-            self.logger.debug("Enhanced v2.0では独立した会話履歴を使用します")
-        except Exception as e:
-            self.logger.warning(f"AgentState → Legacy 同期エラー: {e}")
-
-    def _show_enhanced_thinking_process(self, message: str) -> None:
-        """Enhanced v2.0独立の思考過程表示"""
-        rich_ui.print_message("🤔 Enhanced v2.0でメッセージを分析中...", "info")
+        Returns:
+            bool: 重複応答の場合True
+        """
+        import hashlib
         import time
-        time.sleep(0.3)
-        if any(keyword in message.lower() for keyword in ["ファイル", "file", "作成", "create", "読み", "read"]):
-            rich_ui.print_message("📁 ファイル操作が必要そうですね...", "info")
-            time.sleep(0.3)
-        elif any(keyword in message.lower() for keyword in ["実行", "run", "テスト", "test"]):
-            rich_ui.print_message("⚡ コードの実行が必要そうですね...", "info")
-            time.sleep(0.3)
-        rich_ui.print_message("💭 Enhanced v2.0で処理方法を決定中...", "info")
-        time.sleep(0.2)
-    
-    async def _generate_enhanced_response_fallback(self, user_message: str) -> str:
-        """Enhanced v2.0独立の直接応答生成（フォールバック）"""
-        try:
-            # 簡易応答生成
-            if "こんにちは" in user_message or "hello" in user_message.lower():
-                return "こんにちは！Enhanced v2.0システムです。何かお手伝いできることはありますか？"
-            elif "ありがとう" in user_message or "thank" in user_message.lower():
-                return "どういたしまして！他に何かご質問があればお聞かせください。"
-            else:
-                return f"申し訳ありません。現在LLMが利用できないため、詳細な回答ができません。\n\nあなたのメッセージ: {user_message}\n\nシステム状態: Enhanced v2.0 独立モード"
-        except Exception as e:
-            return f"エラーが発生しました: {str(e)}"
-    
-    async def _handle_file_operation_fallback(self, user_message: str) -> str:
-        """Enhanced v2.0独立のファイル操作処理（型安全）"""
-        try:
-            # ファイルパスの抽出
-            file_path = self._extract_file_path_from_message(user_message)
-            if not file_path:
-                return "ファイル名が特定できませんでした。具体的なファイル名を教えてください。"
-            
-            # ファイル操作の実行
-            operation = self._determine_file_operation(user_message)
-            return await self._execute_file_operation(operation, file_path, user_message)
-            
-        except Exception as e:
-            self.logger.error(f"ファイル操作エラー: {e}")
-            return f"ファイル操作中にエラーが発生しました: {str(e)}"
-    
-    async def _determine_file_operation_type(self, user_message: str, file_path: Optional[str] = None) -> str:
-        """LLMによるファイル操作タイプ判定"""
-        try:
-            # 新しいLLM呼び出しシステムを使用
-            # BaseSpecializedパターンで軽量なプロンプトを合成
-            operation_system_prompt = self.prompt_context_service.compose(
-                PromptPattern.BASE_SPECIALIZED, 
-                self.state
-            )
-            
-            # ファイル操作タイプ判定用のプロンプトを構築
-            operation_prompt = f"""以下のユーザーメッセージから、実行すべきファイル操作のタイプを判定してください。
-
-ユーザーメッセージ: {user_message}
-ファイルパス: {file_path if file_path else "未指定"}
-
-以下のJSON形式で回答してください:
-{{
-    "operation_type": "read|write|list|plan|other",
-    "confidence": 0.95,
-    "reasoning": "なぜこの操作タイプを判定したかの理由"
-}}
-
-操作タイプの説明:
-- read: ファイルの読み込み、内容確認、表示
-- write: ファイルの作成、書き込み、更新
-- list: ファイル一覧、ディレクトリ表示
-- plan: プラン生成、計画作成
-- other: 上記以外の操作"""
-
-            # LLMCallManagerで統一呼び出し
-            response = await self.llm_call_manager.call(
-                mode="extract",
-                input_text=operation_prompt,
-                system_prompt=operation_system_prompt,
-                pattern=PromptPattern.BASE_SPECIALIZED
-            )
-            
-            # JSONレスポンスをパース
-            import json
-            try:
-                # JSON部分を抽出
-                json_start = response.find('{')
-                json_end = response.rfind('}') + 1
-                
-                if json_start >= 0 and json_end > json_start:
-                    json_str = response[json_start:json_end]
-                    parsed = json.loads(json_str)
-                    operation_type = parsed.get('operation_type', 'other')
-                    
-                    self.logger.info(f"LLM操作タイプ判定成功: {operation_type} (信頼度: {parsed.get('confidence', 'unknown')})")
-                    return operation_type
-                else:
-                    self.logger.warning(f"JSON文字列が見つかりません: response={response}")
-                    
-            except Exception as e:
-                self.logger.warning(f"JSONパースエラー: {e}, response={response}")
-            
-            # フォールバック: 簡易キーワード判定
-            return self._fallback_operation_type_determination(user_message)
-            
-        except Exception as e:
-            self.logger.error(f"LLM操作タイプ判定エラー: {e}")
-            # フォールバック: 簡易キーワード判定
-            return self._fallback_operation_type_determination(user_message)
-    
-    def _fallback_operation_type_determination(self, user_message: str) -> str:
-        """フォールバック用の簡易操作タイプ判定"""
-        message_lower = user_message.lower()
         
-        # 簡易キーワード判定（フォールバック用）
-        if any(kw in message_lower for kw in ["読", "確認", "内容", "見て", "把握", "表示"]):
-            return "read"
-        elif any(kw in message_lower for kw in ["書", "作成", "作成して", "作って", "出力", "生成", "更新"]):
-            return "write"
-        elif any(kw in message_lower for kw in ["一覧", "ls", "dir", "表示"]):
-            return "list"
-        elif any(kw in message_lower for kw in ["プラン", "計画", "設計"]):
-            return "plan"
+        # メッセージのハッシュを計算
+        message_hash = hashlib.md5(str(message).encode('utf-8')).hexdigest()
+        current_time = time.time()
+        
+        # 重複チェック
+        if (self._last_response_hash == message_hash and 
+            self._last_response_time and 
+            current_time - self._last_response_time < 5.0):  # 5秒以内の重複
+            return True
+        
+        # 状態を更新
+        self._last_response_hash = message_hash
+        self._last_response_time = current_time
+        self._response_count += 1
+        
+        return False
+
+    async def process_user_input(self, user_input: str) -> str:
+        """ユーザー入力を処理するメインのエントリーポイント"""
+        had_error = False
+        try:
+            # ユーザー入力をAgentStateに記録
+            self.agent_state.add_message("user", user_input)
+            
+            action_list = await self._generate_action_list(user_input)
+            execution_results = await self._dispatch_action_list(action_list)
+            final_response = self._create_final_response(execution_results)
+            
+            # アシスタントの応答をAgentStateに記録
+            self.agent_state.add_message("assistant", final_response)
+            
+            # 成功時のvitals更新
+            self._update_vitals(had_error=False, is_progress=True)
+            
+            return final_response
+        except Exception as e:
+            had_error = True
+            self.logger.error(f"処理中にエラーが発生しました: {e}", exc_info=True)
+            error_response = f"エラーが発生しました: {e}"
+            # エラーもAgentStateに記録
+            self.agent_state.add_message("assistant", error_response, {"error": True})
+            
+            # エラー時のvitals更新
+            self._update_vitals(had_error=True, is_progress=False)
+            
+            return error_response
+
+    def _get_tool_definitions_for_llm(self) -> List[Dict[str, Any]]:
+        """LLMに提供するためのツール定義をネイティブ形式で生成する"""
+        tool_defs = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "execute_action_list",
+                    "description": "ユーザーの要求に基づいて、一連のアクションを実行します。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action_list": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "operation": {
+                                            "type": "string",
+                                            "description": "実行する操作（例: plan_tool.propose, file_ops.read_file）"
+                                        },
+                                        "args": {
+                                            "type": "object",
+                                            "description": "操作に必要な引数"
+                                        },
+                                        "reasoning": {
+                                            "type": "string",
+                                            "description": "このアクションを実行する理由"
+                                        }
+                                    },
+                                    "required": ["operation", "args", "reasoning"]
+                                }
+                            }
+                        },
+                        "required": ["action_list"]
+                    }
+                }
+            }
+        ]
+        return tool_defs
+    
+    def _get_available_operations_description(self) -> str:
+        """利用可能な操作の説明文を生成"""
+        operations = [
+            "plan_tool.propose - 長期計画を立案 (引数: user_goal)",
+            "task_tool.generate_list - タスクリストを生成 (引数: step_id)",
+            "file_ops.read_file - ファイルを読み込み (引数: file_path) - 小〜中容量ファイル用",
+            "file_ops.search_content - 高速コンテンツ検索 (引数: file_path, pattern, context_lines) - 大容量ファイル対応",
+            "file_ops.read_file_section - セクション読み込み (引数: file_path, start_line, line_count) - 大容量ファイル対応",
+            "file_ops.analyze_file_structure - 構造分析 (引数: file_path) - マークダウンファイル等の構造把握",
+            "file_ops.write - ファイルに書き込み (引数: file_path, content)",
+            "task_loop.run - タスクを非同期実行 (引数: task_list)",
+            "llm_service.synthesize_insights_from_files - ファイル内容をLLMで分析・要約 (引数: task_description, file_contents)",
+            "response.echo - メッセージを返信 (引数: message)"
+        ]
+        return "\n".join(f"- {op}" for op in operations)
+
+    async def _generate_action_list(self, user_input: str) -> List[Action]:
+        """LLMを呼び出し、ユーザー入力と現在の状態に基づいてActionListを生成する"""
+        self.logger.info("メインLLMを呼び出し、ActionListを生成します...")
+        
+        # 意図分析を実行
+        intent_result = None
+        if self.intent_analyzer:
+            try:
+                self.logger.info("意図分析を開始します...")
+                intent_result = await self.intent_analyzer.analyze(user_input, self.agent_state)
+                self.logger.info(f"意図分析完了: {intent_result.action_type.value}, 信頼度: {intent_result.confidence}")
+            except Exception as e:
+                self.logger.error(f"意図分析エラー: {e}")
+                intent_result = None
         else:
-            return "other"
-    
-    async def _determine_action_type_llm(self, user_message: str) -> ActionType:
-        """LLMによるアクションタイプ判定"""
-        try:
-            # 新しいLLM呼び出しシステムを使用
-            # BaseSpecializedパターンで軽量なプロンプトを合成
-            action_system_prompt = self.prompt_context_service.compose(
-                PromptPattern.BASE_SPECIALIZED, 
-                self.state
-            )
-            
-            # アクションタイプ判定用のプロンプトを構築
-            action_prompt = f"""以下のユーザーメッセージから、実行すべきアクションのタイプを判定してください。
-
-ユーザーメッセージ: {user_message}
-
-以下のJSON形式で回答してください:
-{{
-    "action_type": "file_operation|code_execution|plan_generation|direct_response",
-    "confidence": 0.95,
-    "reasoning": "なぜこのアクションタイプを判定したかの理由"
-}}
-
-アクションタイプの説明:
-- file_operation: ファイルの読み込み、書き込み、一覧表示、削除など
-- code_execution: コードの実行、テスト、デバッグなど
-- plan_generation: プラン生成、計画作成、設計など
-- direct_response: 上記以外の一般的な応答"""
-
-            # LLMCallManagerで統一呼び出し
-            response = await self.llm_call_manager.call(
-                mode="extract",
-                input_text=action_prompt,
-                system_prompt=action_system_prompt,
-                pattern=PromptPattern.BASE_SPECIALIZED
-            )
-            
-            # JSONレスポンスをパース
-            import json
-            try:
-                # JSON部分を抽出
-                json_start = response.find('{')
-                json_end = response.rfind('}') + 1
-                
-                if json_start >= 0 and json_end > json_start:
-                    json_str = response[json_start:json_end]
-                    parsed = json.loads(json_str)
-                    action_type_str = parsed.get('action_type', 'direct_response')
-                    
-                    # ActionTypeに変換
-                    if action_type_str == 'file_operation':
-                        return ActionType.FILE_OPERATION
-                    elif action_type_str == 'code_execution':
-                        return ActionType.CODE_EXECUTION
-                    elif action_type_str == 'plan_generation':
-                        return ActionType.PLAN_GENERATION
-                    else:
-                        return ActionType.DIRECT_RESPONSE
-                    
-                else:
-                    self.logger.warning(f"JSON文字列が見つかりません: response={response}")
-                    
-            except Exception as e:
-                self.logger.warning(f"JSONパースエラー: {e}, response={response}")
-            
-            # フォールバック: デフォルト値
-            return ActionType.DIRECT_RESPONSE
-            
-        except Exception as e:
-            self.logger.error(f"LLMアクションタイプ判定エラー: {e}")
-            # フォールバック: デフォルト値
-            return ActionType.DIRECT_RESPONSE
-    
-    def _extract_file_path_from_message(self, user_message: str) -> Optional[str]:
-        """メッセージからファイルパスを抽出（最適化版）"""
-        try:
-            # まず簡易抽出を試行（高速）
-            simple_result = self._simple_file_extraction(user_message)
-            if simple_result:
-                return simple_result
-            
-            # 簡易抽出で見つからない場合のみCollaborativePlannerを使用（遅延初期化）
-            if self._collaborative_planner_cache is None:
-                try:
-                    from .collaborative_planner import CollaborativePlanner
-                    self._collaborative_planner_cache = CollaborativePlanner()
-                except Exception as e:
-                    self.logger.warning(f"CollaborativePlanner初期化エラー: {e}")
-                    return None
-            
-            if self._collaborative_planner_cache:
-                return self._collaborative_planner_cache._extract_file_path(user_message)
-            else:
-                return None
-                
-        except Exception as e:
-            self.logger.warning(f"ファイルパス抽出エラー: {e}、簡易抽出を使用")
-            return self._simple_file_extraction(user_message)
-    
-    def _simple_file_extraction(self, user_message: str) -> Optional[str]:
-        """簡易ファイル抽出（強化版）"""
-        import re
+            self.logger.info("IntentAnalyzer が利用できないため、意図分析をスキップします")
         
-        # 一般的なファイルパスパターン（高速処理）
-        patterns = [
-            r'["\']([^"\']+\.[a-zA-Z0-9]+)["\']',  # クォート内のファイル
-            r'([a-zA-Z0-9_/\\.-]+\.[a-zA-Z0-9]+)',  # 拡張子付きファイル
-            r'([a-zA-Z0-9_/\\.-]+\.md)',  # Markdownファイル
-            r'([a-zA-Z0-9_/\\.-]+\.txt)',  # テキストファイル
-            r'([a-zA-Z0-9_/\\.-]+\.py)',   # Pythonファイル
+        tool_definitions = self._get_tool_definitions_for_llm()
+        available_operations = self._get_available_operations_description()
+        context_summary = self.agent_state.get_context_summary()
+
+        system_prompt = f"""あなたは優秀なAIアシスタントの司令塔です。ユーザーの要求と現在の状況を分析し、次に実行すべき一連のアクションを決定してください。
+
+### 利用可能な操作:
+{available_operations}
+
+### 🚀 大容量ファイル処理の完全ガイド:
+
+#### 高性能ツール群:
+1. **file_ops.read_file** - 基本ファイル読み込み（小〜中容量ファイル1000文字以下推奨）
+2. **file_ops.search_content** - ripgrepベース超高速検索 ⚡ 大容量ファイル対応
+3. **file_ops.read_file_section** - メモリ効率的部分読み込み 📄 大容量ファイル対応  
+4. **file_ops.analyze_file_structure** - 構造分析 🏗️ マークダウンファイル等の構造把握
+5. **llm_service.synthesize_insights_from_files** - AI要約・分析 🧠
+
+#### ⚠️ 重要な大容量ファイル処理ルール:
+1. **ファイルサイズ判定**: 1000文字を超えるファイルは大容量として扱う
+2. **効率的アプローチ**: `read_file`結果を直接JSON引数で使用せず、以下の最適化ツールを活用:
+   - 特定情報検索: `file_ops.search_content(file_path="file.md", pattern="キーワード", context_lines=3)`
+   - 部分読み込み: `file_ops.read_file_section(file_path="file.md", start_line=1, line_count=50)`
+   - 構造分析: `file_ops.analyze_file_structure(file_path="file.md")`
+3. **スマートプロキシ**: 大容量ファイル参照時は自動的に最適化された形式で提供されます
+
+#### 🎯 推奨処理パターン:
+
+**パターンA: 構造的アプローチ（推奨）**
+```json
+[
+  {{"operation": "file_ops.analyze_file_structure", "args": {{"file_path": "game_doc.md"}}}},
+  {{"operation": "file_ops.search_content", "args": {{"file_path": "game_doc.md", "pattern": "実装優先度|技術仕様", "context_lines": 2}}}},
+  {{"operation": "llm_service.synthesize_insights_from_files", "args": {{"task_description": "構造情報と重要箇所から実装計画を策定", "file_contents": {{}}}}}},
+  {{"operation": "response.echo", "args": {{"message": "📋 構造: {{@act_000_file_ops_analyze_file_structure}}\\n\\n🔍 重要情報: {{@act_001_file_ops_search_content}}\\n\\n🧠 分析結果: {{@act_002_llm_service_synthesize_insights_from_files}}"}}}}
+]
+```
+
+**パターンB: AI要約中心アプローチ**
+```json
+[
+  {{"operation": "llm_service.synthesize_insights_from_files", "args": {{"task_description": "ファイル内容を分析し実装に必要な情報を抽出", "file_contents": {{}}}}}},
+  {{"operation": "response.echo", "args": {{"message": "{{@act_000_llm_service_synthesize_insights_from_files}}"}}}}
+]
+```
+
+### テンプレート変数の使用方法（ActionID参照形式）:
+- `{{@act_000_file_ops_read_file}}` - 1番目のファイル読み込み結果を参照（番号は0ベース）
+- `{{@act_001_llm_service_synthesize_insights_from_files}}` - 2番目のLLMServiceの分析結果を参照
+- `{{@act_002_plan_tool_propose}}` - 3番目のプラン生成結果を参照
+- `{{latest:file_ops.read_file}}` - 最新のファイル読み込み結果を参照（時間制限付き）
+**重要**: ActionID番号は0から始まります（act_000, act_001, act_002...）
+
+### file_contents引数の使用方法:
+- **自動取得**: `"file_contents": {{}}` でAgentStateから自動取得（推奨）
+- **明示的指定**: `"file_contents": {{"ファイル名": "内容"}}` で明示的に指定
+- **大容量ファイル**: システムが自動的にスマートプロキシを適用
+
+### JSON出力形式:
+適切なアクションを選択して、以下のJSON形式で回答してください：
+
+```json
+[
+  {{"operation": "操作名", "args": {{引数}}, "reasoning": "理由"}}
+]
+```
+
+テンプレート変数を適切に使用して、前のアクション結果を効率的に連携してください。大容量ファイルの場合は最適化されたツールを優先的に使用してください。"""
+        
+        user_prompt = f"""### 現在の状態:
+{json.dumps(context_summary, indent=2, ensure_ascii=False)}
+
+### ユーザーの要求:
+{user_input}
+
+上記を分析し、実行すべきActionListをJSONで出力してください。"""
+        
+        # デバッグ用ログ（プロンプト内容）
+        self.logger.info(f"システムプロンプト（文字数: {len(system_prompt)}）: {system_prompt[:200]}...")
+        self.logger.info(f"ユーザープロンプト（文字数: {len(user_prompt)}）: {user_prompt[:200]}...")
+        
+        try:
+            # 意図分析結果に基づいてツール呼び出しの必要性を判定
+            needs_tool_calls = self._should_use_tool_calls(intent_result, user_input)
+            
+            if needs_tool_calls:
+                # ツール呼び出しが必要な場合
+                self.logger.info("ツール呼び出しモードでLLMを呼び出し")
+                response_str = await self.llm_call_manager.call(
+                    system_prompt, 
+                    user_prompt, 
+                    tools=tool_definitions,
+                    tool_choice="auto"
+                )
+            else:
+                # ツール呼び出しが不要な場合
+                self.logger.info("テキスト応答モードでLLMを呼び出し")
+                response_str = await self.llm_call_manager.call(
+                    system_prompt, 
+                    user_prompt, 
+                    tools=None,
+                    tool_choice="none"
+                )
+            
+            # デバッグ用ログ（None チェック）
+            if response_str is None:
+                raise ValueError("LLMからNullレスポンスが返されました")
+                
+            self.logger.info(f"LLMレスポンス（文字数: {len(response_str)}）: {response_str[:200]}...")
+            
+            if not response_str.strip():
+                raise ValueError("LLMから空のレスポンスが返されました")
+            
+            # ツール呼び出しの有無に応じてレスポンスを解析
+            if needs_tool_calls:
+                # ツール呼び出しレスポンスを解析
+                self.logger.info("ツール呼び出しレスポンスの解析を開始")
+                action_list = self._parse_tool_call_response(response_str)
+            else:
+                # テキスト応答からActionListを解析
+                self.logger.info("テキスト応答の解析を開始")
+                action_list = self._parse_text_response_to_action_list(response_str)
+            
+            # 解析結果のログ
+            if action_list:
+                self.logger.info(f"レスポンス解析成功: {len(action_list)}件のアクション")
+                for i, action in enumerate(action_list):
+                    self.logger.info(f"  アクション{i+1}: {action.operation} - {action.reasoning}")
+            else:
+                self.logger.warning("レスポンス解析結果が空です")
+                
+            if not action_list:
+                # より詳細なエラー情報を提供
+                self.logger.error("ActionListが空です。レスポンス内容を確認してください。")
+                self.logger.error(f"レスポンス内容: {response_str[:500]}...")
+                
+                # フォールバックとして、基本的なファイル読み込みアクションを生成
+                fallback_action = Action(
+                    operation='file_ops.read_file',
+                    args={'file_path': 'game_doc.md'},
+                    reasoning='エラーによりフォールバック処理を使用'
+                )
+                
+                self.logger.info("フォールバックアクションを生成: file_ops.read_file")
+                return [fallback_action]
+
+            self.logger.info(f"生成されたActionList: {action_list}")
+            return action_list
+
+        except Exception as e:
+            self.logger.error(f"ActionListの生成に失敗しました: {e}", exc_info=True)
+            return [Action(operation='response.echo', args={'message': f"申し訳ありません、コマンドの解釈中にエラーが発生しました。もう一度試していただけますか？ (エラー: {e})"})]
+
+    async def _dispatch_action_list(self, action_list: List[Action]) -> List[Any]:
+        """ActionListを解釈し、各Actionを実行する（ActionID+タイムスタンプベース）"""
+        import uuid
+        action_list_id = f"al_{uuid.uuid4().hex[:8]}"  # ActionList全体のID
+        results = []
+        
+        self.logger.info(f"ActionList実行開始: {action_list_id}, {len(action_list)}件のアクション")
+        
+        # 現在のaction_list_idを保存（ツール実行時に参照できるように）
+        self._current_action_list_id = action_list_id
+        
+        for i, action in enumerate(action_list):
+            # ActionIDを生成（ActionList内で一意）
+            action_id = f"act_{i:03d}_{action.operation.replace('.', '_')}"
+            
+            self.logger.info(f"アクション実行: {action_id} ({action.operation})")
+            
+            # 参照解決（同一ActionList内の前のアクション結果を参照）
+            processed_args = self._resolve_action_references(
+                action.args, action_list_id, i
+            )
+            
+            op_parts = action.operation.split('.')
+            if len(op_parts) != 2:
+                results.append({"error": f"無効な操作形式: {action.operation}"})
+                continue
+            
+            tool_name, method_name = op_parts
+            args = processed_args
+            result = None
+
+            # ツール実行の開始時刻を記録
+            start_time = datetime.now()
+            
+            try:
+                if tool_name in self.tools and method_name in self.tools[tool_name]:
+                    method = self.tools[tool_name][method_name]
+                    # 引数にagent_stateを要求するかどうかを判定（仮）
+                    if method_name in ["propose", "update_step", "get_plan", "generate_list"]:
+                        result = method(self.agent_state, **args)
+                    else:
+                        result = method(**args)
+                    
+                    # ツール実行履歴をAgentStateに記録
+                    execution_time = (datetime.now() - start_time).total_seconds()
+                    self._record_tool_execution(tool_name, method_name, args, result, execution_time)
+                    
+                    # ファイル読み込み結果をAgentStateに保存
+                    if tool_name == "file_ops" and method_name == "read_file":
+                        if isinstance(result, str) and "file_path" in args:
+                            self.agent_state.add_file_content(
+                                file_path=args["file_path"],
+                                content=result,
+                                content_type="text"
+                            )
+                            self.logger.info(f"ファイル読み込み結果をAgentStateに保存: {args['file_path']}")
+                    
+                    # プラン生成結果をAgentStateに保存
+                    elif tool_name == "plan_tool" and method_name == "propose":
+                        if hasattr(result, 'plan_id'):
+                            # プランコンテキストを更新
+                            self.agent_state.update_plan_context(
+                                plan_id=result.plan_id,
+                                context_data={
+                                    "generation_context": args,
+                                    "recent_files": self.agent_state.short_term_memory.get("recent_files", [])[-3:]
+                                }
+                            )
+                            self.logger.info(f"プラン生成結果をAgentStateに保存: {result.plan_id}")
+                            
+                elif tool_name == "task_loop":
+                    self.logger.info("重いタスクをTaskLoopに委譲します...")
+                    task_command = {"type": "execute_task_list", "task_list": args.get("task_list", [])}
+                    self.dual_loop_system.task_queue.put(task_command)
+                    result = {"status": "dispatched", "message": "TaskLoopで非同期実行を開始しました。"}
+                elif tool_name == "response":
+                    if method_name == "echo":
+                        # メッセージを取得（既に参照解決済み）
+                        message = args.get("message", "メッセージが指定されていません")
+                        
+                        # 🔥 最適化: 重複表示防止と適切な要約処理
+                        if len(str(message)) > 1000:
+                            self.logger.info(f"大容量メッセージを検出: {len(str(message))}文字 -> 既存の要約機能を適用")
+                            
+                            # 既存のスマートプロキシを適用
+                            processed_message = self._apply_smart_content_proxy(
+                                message, 
+                                "response.echo", 
+                                "display"
+                            )
+                            
+                            result = processed_message
+                            self.logger.info(f"要約完了: {len(str(message))}文字 -> {len(str(result))}文字")
+                        else:
+                            result = message
+                        
+                        # 🔥 新規: 重複表示防止チェック
+                        if self._is_duplicate_response(result):
+                            self.logger.info("重複応答を検出、表示をスキップします")
+                            result = {"status": "skipped", "reason": "duplicate_response"}
+                        else:
+                            # ログ出力を最適化（重複防止）
+                            log_preview = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
+                            self.logger.info(f"response.echo: {log_preview}")
+                            
+                            # UIに表示（重複防止・区切り表示付き）
+                            if hasattr(self, 'ui') and self.ui:
+                                # UIのechoメソッドを使用（重複防止機能付き）
+                                self.ui.echo(result, clear_previous=True)
+                            else:
+                                # フォールバック: 標準出力（重複防止・区切り表示付き）
+                                print()  # 空行で区切り
+                                print("─" * 60)
+                                print("🤖 AIアシスタント:")
+                                print(result)
+                                print("─" * 60)
+                                print()  # 空行で区切り
+                elif tool_name == "llm_service":
+                    # LLMServiceの処理
+                    if not self.llm_service:
+                        result = {"error": "LLMService が利用できません"}
+                    elif method_name == "synthesize_insights_from_files":
+                        try:
+                            task_description = args.get("task_description", "")
+                            file_contents = args.get("file_contents", {})
+                            
+                            self.logger.info(f"LLMService呼び出し開始: {method_name}")
+                            self.logger.info(f"task_description: {task_description}")
+                            self.logger.info(f"file_contents type: {type(file_contents)}")
+                            self.logger.info(f"file_contents keys: {list(file_contents.keys()) if isinstance(file_contents, dict) else 'N/A'}")
+                            
+                            # file_contentsが文字列の場合は、AgentStateから取得
+                            if isinstance(file_contents, str):
+                                self.logger.info(f"file_contentsが文字列として渡されました: {file_contents}")
+                                file_contents = self.agent_state.get_file_contents()
+                            
+                            # ファイル内容が空の場合は、AgentStateから取得
+                            if not file_contents:
+                                self.logger.info("file_contentsが空のため、AgentStateから取得します")
+                                file_contents = self.agent_state.get_file_contents()
+                            
+                            # 🔥 改善：file_contentsが空の場合、直近のアクション結果から情報を収集
+                            if not file_contents:
+                                self.logger.info("AgentStateにファイル内容がないため、直近のアクション結果から情報を収集します")
+                                # action_list_idを取得（実行コンテキストから）
+                                current_action_list_id = getattr(self, '_current_action_list_id', None)
+                                if current_action_list_id:
+                                    file_contents = self._collect_file_info_from_recent_actions(current_action_list_id)
+                                else:
+                                    self.logger.warning("action_list_idが取得できませんでした")
+                            
+                            if file_contents:
+                                self.logger.info(f"LLMServiceでファイル分析を開始: {len(file_contents)}件のファイル")
+                                self.logger.info(f"ファイル一覧: {list(file_contents.keys())}")
+                                
+                                result = await self.llm_service.synthesize_insights_from_files(
+                                    task_description=task_description,
+                                    file_contents=file_contents
+                                )
+                                
+                                self.logger.info(f"LLMService処理完了: 結果文字数 {len(result) if result else 0}")
+                            else:
+                                result = "分析対象のファイルが見つかりませんでした。"
+                                self.logger.warning("分析対象のファイルが見つかりませんでした")
+                        except Exception as e:
+                            self.logger.error(f"LLMService処理エラー: {e}", exc_info=True)
+                            result = f"ファイル分析中にエラーが発生しました: {str(e)}"
+                    else:
+                        result = {"error": f"不明なLLMServiceメソッド: {method_name}"}
+                else:
+                    result = {"error": f"不明なツール: {tool_name}"}
+            except Exception as e:
+                self.logger.error(f"アクション実行エラー: {action.operation} - {e}", exc_info=True)
+                result = {"error": str(e)}
+                
+                # エラー時もツール実行履歴に記録
+                execution_time = (datetime.now() - start_time).total_seconds()
+                self._record_tool_execution(tool_name, method_name, args, result, execution_time, str(e))
+            
+            # 実行結果をAgentStateに記録
+            self._record_action_result(action, result)
+            
+            # 結果をAgentStateに保存（ActionID+タイムスタンプベース）
+            # 次のActionが参照できるように、実行直後に保存
+            metadata = {
+                "execution_time": (datetime.now() - start_time).total_seconds(),
+                "input_args": args,
+                "result_type": type(result).__name__
+            }
+            
+            # ファイル操作の場合、file_pathをmetadataに記録
+            if tool_name == "file_ops" and "file_path" in args:
+                metadata["file_path"] = args["file_path"]
+            
+            self.agent_state.add_action_result(
+                action_id=action_id,
+                operation=action.operation,
+                result=result,
+                action_list_id=action_list_id,
+                sequence_number=i,
+                metadata=metadata
+            )
+            
+            results.append(result)
+        
+        # クリーンアップ
+        self._current_action_list_id = None
+        
+        return results
+
+    def _resolve_action_references(self, args: Dict[str, Any], 
+                                  action_list_id: str, current_sequence: int) -> Dict[str, Any]:
+        """アクション参照を解決"""
+        processed_args = {}
+        
+        for key, value in args.items():
+            if isinstance(value, str):
+                processed_value = self._resolve_single_reference(
+                    value, action_list_id, current_sequence
+                )
+                processed_args[key] = processed_value
+            elif isinstance(value, dict):
+                processed_args[key] = self._resolve_action_references(value, action_list_id, current_sequence)
+            elif isinstance(value, list):
+                processed_args[key] = [
+                    self._resolve_action_references(item, action_list_id, current_sequence) 
+                    if isinstance(item, dict) else item
+                    for item in value
+                ]
+            else:
+                processed_args[key] = value
+        
+        return processed_args
+    
+    def _resolve_single_reference(self, value: str, action_list_id: str, 
+                                 current_sequence: int) -> Any:
+        """単一の参照を解決"""
+        
+        self.logger.info(f"参照解決開始: '{value}' (action_list_id: {action_list_id}, sequence: {current_sequence})")
+        
+        # 文字列内のテンプレート変数を置換する処理を追加
+        if '{{@' in value or '{{latest:' in value or '{@' in value or '{latest:' in value:
+            import re
+            result_value = value
+            
+            # 1. ActionID参照を処理（波括弧2つ） {{@action_id}}
+            action_id_pattern = r'\{\{@([^}]+)\}\}'
+            for match in re.finditer(action_id_pattern, value):
+                action_id = match.group(1)
+                self.logger.info(f"ActionID参照試行（波括弧2つ）: {action_id}")
+                replacement = self.agent_state.get_action_result_by_id(action_id, action_list_id)
+                if replacement is not None:
+                    self.logger.info(f"ActionID参照成功: {action_id} -> 結果長: {len(str(replacement))}")
+                    # 🔥 スマートコンテンツプロキシを適用
+                    processed_replacement = self._apply_smart_content_proxy(replacement, action_id, value)
+                    result_value = result_value.replace(match.group(0), str(processed_replacement))
+                else:
+                    self.logger.warning(f"ActionID参照失敗: {action_id}")
+                    result_value = result_value.replace(match.group(0), f"参照エラー: {action_id}")
+            
+            # 1b. ActionID参照を処理（波括弧1つ） {@action_id}
+            single_action_id_pattern = r'\{@([^}]+)\}'
+            for match in re.finditer(single_action_id_pattern, value):
+                action_id = match.group(1)
+                self.logger.info(f"ActionID参照試行（波括弧1つ）: {action_id}")
+                replacement = self.agent_state.get_action_result_by_id(action_id, action_list_id)
+                if replacement is not None:
+                    self.logger.info(f"ActionID参照成功: {action_id} -> 結果長: {len(str(replacement))}")
+                    # 🔥 スマートコンテンツプロキシを適用
+                    processed_replacement = self._apply_smart_content_proxy(replacement, action_id, value)
+                    result_value = result_value.replace(match.group(0), str(processed_replacement))
+                else:
+                    self.logger.warning(f"ActionID参照失敗: {action_id}")
+                    result_value = result_value.replace(match.group(0), f"参照エラー: {action_id}")
+            
+            # 2. 最新結果参照を処理（波括弧2つ） {{latest:operation}}
+            latest_pattern = r'\{\{latest:([^}]+)\}\}'
+            for match in re.finditer(latest_pattern, value):
+                operation = match.group(1)
+                self.logger.info(f"最新結果参照試行（波括弧2つ）: {operation}")
+                replacement = self.agent_state.get_latest_result_by_operation(operation, max_age_minutes=30)
+                if replacement is not None:
+                    self.logger.info(f"最新結果参照成功: {operation}")
+                    result_value = result_value.replace(match.group(0), str(replacement))
+                else:
+                    self.logger.warning(f"最新結果参照失敗または古すぎる: {operation}")
+                    result_value = result_value.replace(match.group(0), f"最新の{operation}結果が見つかりません（30分以内）")
+            
+            # 2b. 最新結果参照を処理（波括弧1つ） {latest:operation}
+            single_latest_pattern = r'\{latest:([^}]+)\}'
+            for match in re.finditer(single_latest_pattern, value):
+                operation = match.group(1)
+                self.logger.info(f"最新結果参照試行（波括弧1つ）: {operation}")
+                replacement = self.agent_state.get_latest_result_by_operation(operation, max_age_minutes=30)
+                if replacement is not None:
+                    self.logger.info(f"最新結果参照成功: {operation}")
+                    result_value = result_value.replace(match.group(0), str(replacement))
+                else:
+                    self.logger.warning(f"最新結果参照失敗または古すぎる: {operation}")
+                    result_value = result_value.replace(match.group(0), f"最新の{operation}結果が見つかりません（30分以内）")
+            
+            return result_value
+        
+        # 古い形式の単一完全一致（後方互換性）
+        # 1. 同一ActionList内の特定アクション参照
+        if value.startswith("{{@") and value.endswith("}}"):  # 例: "{{@act_001_file_ops_read_file}}"
+            action_id = value[3:-2]  # "{{@" と "}}" を除去
+            self.logger.info(f"ActionID参照試行: {action_id}")
+            result = self.agent_state.get_action_result_by_id(action_id, action_list_id)
+            if result is not None:
+                self.logger.info(f"ActionID参照成功: {action_id} -> 結果長: {len(str(result))}")
+                return result
+            else:
+                self.logger.warning(f"ActionID参照失敗: {action_id}")
+                return f"参照エラー: {action_id}"
+        
+        # 2. 最新の操作結果参照（時間制限付き）
+        elif value.startswith("{{latest:"):  # 例: "{{latest:file_ops.read_file}}"
+            operation = value[9:-2]  # "{{latest:" と "}}" を除去
+            result = self.agent_state.get_latest_result_by_operation(operation, max_age_minutes=30)
+            if result is not None:
+                self.logger.info(f"最新結果参照成功: {operation}")
+                return result
+            else:
+                self.logger.warning(f"最新結果参照失敗または古すぎる: {operation}")
+                return f"最新の{operation}結果が見つかりません（30分以内）"
+        
+        # 3. 簡単な省略形（既存の互換性維持）
+        elif value == "{{file_content}}":
+            result = self.agent_state.get_latest_result_by_operation("file_ops.read_file", max_age_minutes=10)
+            return result if result is not None else "ファイル内容が見つかりません"
+        elif value == "{{analysis}}" or value == "{{summary}}":
+            result = self.agent_state.get_latest_result_by_operation("llm_service.synthesize_insights_from_files", max_age_minutes=10)
+            return result if result is not None else "分析結果が見つかりません"
+        elif value == "{{file_contents}}":
+            # AgentState.get_file_contents()との互換性
+            return self.agent_state.get_file_contents()
+        
+        return value
+    
+    def _apply_smart_content_proxy(self, content: Any, action_id: str, target_context: str) -> Any:
+        """コンテンツを使用コンテキストに応じてインテリジェントに処理"""
+        
+        # 🔥 改善：辞書型データの処理も追加
+        if isinstance(content, dict) and self._is_large_data_dict(content):
+            self.logger.info(f"大容量辞書データを検出：{len(str(content))}文字 -> スマートプロキシ処理を実行")
+            return self._summarize_dict_data(content, action_id, target_context)
+        
+        # 文字列コンテンツのサイズをチェック
+        if isinstance(content, str) and len(content) > 1000:  # 閾値
+            
+            # ファイル読み込み結果の場合
+            if 'file_ops_read_file' in action_id:
+                self.logger.info(f"大容量ファイルコンテンツを検出：{len(content)}文字 -> スマートプロキシ処理を実行")
+                
+                # ファイルパスを推測（ActionIDから）
+                file_path = self._extract_file_path_from_action_id(action_id)
+                
+                # コンテキストに応じて処理方法を決定
+                if "file_contents" in target_context or '"file_contents"' in target_context:
+                    # JSON引数として使用される場合 - 警告付きで要約版を提供
+                    guidance_message = f"""[大容量ファイル自動プロキシ - 元サイズ: {len(content)}文字]
+
+⚠️  このファイルは大きすぎるため、直接JSON引数に使用できません。
+
+📋 推奨する効率的なアクセス方法:
+1. 🔍 特定情報の検索: file_ops.search_content(file_path="{file_path}", pattern="キーワード", context_lines=3)
+2. 📄 部分読み込み: file_ops.read_file_section(file_path="{file_path}", start_line=1, line_count=50)
+3. 🏗️ 構造分析: file_ops.analyze_file_structure(file_path="{file_path}")
+4. 🧠 AI要約: llm_service.synthesize_insights_from_files(task_description="要約タスク", file_contents={{}})
+
+💡 内容プレビュー（先頭800文字）:
+{content[:800]}{'...' if len(content) > 800 else ''}
+
+🔗 フルアクセス: file_ops.read_file(file_path="{file_path}") で改めて読み込み可能"""
+                    
+                    return guidance_message
+                else:
+                    # 通常の参照では要約版を提供
+                    return self._create_content_summary(content, action_id, file_path)
+        
+        return content  # そのまま返す
+    
+    def _extract_file_path_from_action_id(self, action_id: str) -> str:
+        """ActionIDからファイルパスを推測"""
+        # ActionIDの形式: act_000_file_ops_read_file
+        # AgentStateの実行履歴から対応するファイルパスを検索
+        try:
+            action_results = self.agent_state.short_term_memory.get('action_results', [])
+            for result in action_results:
+                if result.get('action_id') == action_id:
+                    # 実行時の引数からfile_pathを取得
+                    metadata = result.get('metadata', {})
+                    return metadata.get('file_path', 'unknown_file')
+            
+            # フォールバック: 一般的なファイル名
+            return "target_file"
+        except Exception:
+            return "target_file"
+    
+    def _create_content_summary(self, content: str, action_id: str, file_path: str) -> str:
+        """コンテンツの要約版を作成"""
+        
+        # 先頭部分 + 構造情報 + アクセスガイドの組み合わせ
+        preview = content[:600]
+        
+        # 基本的な構造分析
+        lines = content.split('\n')
+        headers = [line for line in lines[:50] if line.strip().startswith('#')]
+        
+        summary = f"""[ファイル要約 - 元サイズ: {len(content)}文字, 行数: {len(lines)}行]
+
+📄 ファイル: {file_path}
+
+🔍 構造情報:
+{chr(10).join(headers[:5]) if headers else "（ヘッダー構造なし）"}
+
+📝 内容プレビュー:
+{preview}{'...' if len(content) > 600 else ''}
+
+💡 詳細アクセス方法:
+- 検索: file_ops.search_content(file_path="{file_path}", pattern="キーワード")
+- 部分読み込み: file_ops.read_file_section(file_path="{file_path}", start_line=N)
+- 構造分析: file_ops.analyze_file_structure(file_path="{file_path}")"""
+        
+        return summary
+    
+    def _is_large_data_dict(self, data: dict) -> bool:
+        """辞書データが大容量かどうかを判定"""
+        try:
+            data_str = str(data)
+            return len(data_str) > 2000  # 2000文字以上は大容量
+        except Exception:
+            return False
+    
+    def _summarize_dict_data(self, data: dict, action_id: str, target_context: str) -> str:
+        """辞書データを要約して表示用に変換"""
+        
+        try:
+            # ツール結果の場合の特別処理
+            if 'file_ops_analyze_file_structure' in action_id and isinstance(data, dict):
+                return self._summarize_file_structure_result(data)
+            elif 'file_ops_search_content' in action_id and isinstance(data, dict):
+                return self._summarize_search_result(data)
+            elif 'plan_tool_propose' in action_id and isinstance(data, dict):
+                return self._summarize_plan_result(data)
+            
+            # 一般的な辞書の要約
+            summary_parts = []
+            for key, value in list(data.items())[:5]:  # 最初の5項目のみ
+                if isinstance(value, (list, dict)):
+                    summary_parts.append(f"- {key}: {type(value).__name__} ({len(value)} items)")
+                else:
+                    value_str = str(value)[:100]
+                    summary_parts.append(f"- {key}: {value_str}")
+            
+            if len(data) > 5:
+                summary_parts.append(f"... (他 {len(data) - 5} 項目)")
+                
+            return "\n".join(summary_parts)
+            
+        except Exception as e:
+            return f"[データ要約エラー: {str(e)}]"
+    
+    def _summarize_file_structure_result(self, data: dict) -> str:
+        """ファイル構造分析結果の要約"""
+        file_info = data.get('file_info', {})
+        headers = data.get('headers', [])
+        sections = data.get('sections', [])
+        
+        return f"""📊 **ファイル構造分析結果**
+📄 ファイル: {data.get('file_path', 'unknown')}
+📏 サイズ: {file_info.get('total_lines', 'N/A')}行 / {file_info.get('total_chars', 'N/A')}文字
+
+🏷️ 主要セクション ({len(sections)}個):
+{chr(10).join([f"  {i+1}. {s.get('title', 'N/A')} (L{s.get('start_line', 'N/A')}-{s.get('end_line', 'N/A')})" for i, s in enumerate(sections[:8])])}
+{'  ...' if len(sections) > 8 else ''}
+
+📋 ヘッダー構造 ({len(headers)}個):
+{chr(10).join([f"  L{h.get('line_number', 'N/A')}: {'#' * h.get('level', 1)} {h.get('text', 'N/A')}" for h in headers[:5]])}
+{'  ...' if len(headers) > 5 else ''}"""
+    
+    def _summarize_search_result(self, data: dict) -> str:
+        """検索結果の要約"""
+        pattern = data.get('pattern', 'N/A')
+        matches_found = data.get('matches_found', 0)
+        results = data.get('results', [])
+        
+        result_summary = f"""🔍 **検索結果**
+🎯 パターン: {pattern}
+📊 マッチ数: {matches_found}件
+
+"""
+        if results:
+            result_summary += "📋 マッチした箇所:\n"
+            for result in results[:3]:
+                line_num = result.get('line_number', 'N/A')
+                match_text = result.get('match', 'N/A')
+                result_summary += f"  L{line_num}: {match_text}\n"
+            
+            if len(results) > 3:
+                result_summary += f"  ... (他 {len(results) - 3} 件)\n"
+        else:
+            result_summary += "❌ マッチなし\n"
+            
+        return result_summary
+    
+    def _summarize_plan_result(self, data: dict) -> str:
+        """プラン結果の要約"""
+        if isinstance(data, dict) and 'plan_id' in data:
+            plan_name = data.get('name', 'N/A')
+            goal = data.get('goal', 'N/A')  
+            steps = data.get('steps', [])
+            
+            return f"""📋 **実装プラン作成完了**
+🎯 プラン: {plan_name}
+🚀 目標: {goal}
+📊 ステップ数: {len(steps)}個
+
+📝 実装ステップ:
+{chr(10).join([f"  {i+1}. {step.get('name', 'N/A')}" for i, step in enumerate(steps)])}"""
+        
+        return str(data)[:500] + "..." if len(str(data)) > 500 else str(data)
+
+    def _collect_file_info_from_recent_actions(self, action_list_id: str) -> Dict[str, str]:
+        """直近のアクション結果からファイル情報を収集してLLMService用のfile_contentsを構築"""
+        
+        file_contents = {}
+        
+        try:
+            # ActionResultsから直近の結果を取得
+            action_results = self.agent_state.short_term_memory.get('action_results', [])
+            
+            # 現在のaction_list_idに関連する結果のみをフィルター
+            relevant_results = [
+                result for result in action_results 
+                if result.get('action_list_id') == action_list_id
+            ]
+            
+            self.logger.info(f"action_list_id {action_list_id} の関連結果: {len(relevant_results)}件")
+            
+            collected_info = []
+            
+            for result in relevant_results:
+                operation = result.get('operation', '')
+                result_data = result.get('result', '')
+                action_id = result.get('action_id', '')
+                
+                if isinstance(result_data, dict):
+                    
+                    # 構造分析結果の処理
+                    if 'analyze_file_structure' in operation:
+                        file_path = result_data.get('file_path', 'unknown')
+                        headers = result_data.get('headers', [])
+                        sections = result_data.get('sections', [])
+                        file_info = result_data.get('file_info', {})
+                        
+                        structure_summary = f"""
+## ファイル構造分析結果 ({file_path})
+- 総行数: {file_info.get('total_lines', 'N/A')}
+- 総文字数: {file_info.get('total_chars', 'N/A')}
+
+### ヘッダー構造:
+{chr(10).join([f"L{h.get('line_number', 'N/A')}: {'#' * h.get('level', 1)} {h.get('text', 'N/A')}" for h in headers[:10]])}
+
+### セクション情報:
+{chr(10).join([f"- {s.get('title', 'N/A')} (L{s.get('start_line', 'N/A')}-{s.get('end_line', 'N/A')})" for s in sections[:5]])}
+"""
+                        collected_info.append(structure_summary)
+                        self.logger.info(f"構造分析結果を追加: {file_path}")
+                    
+                    # 検索結果の処理
+                    elif 'search_content' in operation:
+                        file_path = result_data.get('file_path', 'unknown')
+                        pattern = result_data.get('pattern', 'N/A')
+                        results = result_data.get('results', [])
+                        matches_found = result_data.get('matches_found', 0)
+                        
+                        search_summary = f"""
+## コンテンツ検索結果 ({file_path})
+検索パターン: {pattern}
+マッチ数: {matches_found}件
+
+### 検索結果:
+"""
+                        for match in results[:3]:  # 最大3件
+                            line_num = match.get('line_number', 'N/A')
+                            match_text = match.get('match', 'N/A')
+                            context_lines = match.get('context_lines', [])
+                            
+                            search_summary += f"""
+L{line_num}: {match_text}
+コンテキスト:
+{chr(10).join(context_lines[:5])}
+"""
+                        
+                        collected_info.append(search_summary)
+                        self.logger.info(f"検索結果を追加: {file_path} (パターン: {pattern})")
+                    
+                    # セクション読み込み結果の処理  
+                    elif 'read_file_section' in operation:
+                        file_path = result_data.get('file_path', 'unknown')
+                        section_info = result_data.get('section_info', {})
+                        content = result_data.get('content', '')
+                        
+                        section_summary = f"""
+## ファイルセクション ({file_path})
+範囲: L{section_info.get('start_line', 'N/A')}-{section_info.get('end_line', 'N/A')}
+読み込み行数: {section_info.get('actual_lines', 'N/A')} / {section_info.get('total_file_lines', 'N/A')}
+
+### 内容:
+{content}
+"""
+                        collected_info.append(section_summary)
+                        self.logger.info(f"セクション内容を追加: {file_path}")
+            
+            # 収集した情報を統合
+            if collected_info:
+                combined_content = "\n\n".join(collected_info)
+                file_contents["collected_file_info"] = combined_content
+                self.logger.info(f"ファイル情報を収集完了: {len(combined_content)}文字")
+            else:
+                self.logger.warning("アクション結果からファイル情報を収集できませんでした")
+        
+        except Exception as e:
+            self.logger.error(f"ファイル情報収集中にエラー: {e}")
+        
+        return file_contents
+
+    def _should_use_tool_calls(self, intent_result, user_input: str) -> bool:
+        """意図分析結果に基づいてツール呼び出しの必要性を判定する"""
+        try:
+            # 意図分析結果が利用可能な場合
+            if intent_result and hasattr(intent_result, 'action_type') and INTENT_ANALYZER_AVAILABLE:
+                action_type = intent_result.action_type
+                
+                # ファイル操作系はツール呼び出しが必要
+                if action_type == ActionType.FILE_OPERATION:
+                    self.logger.info(f"ツール呼び出しが必要: ファイル操作 ({action_type.value})")
+                    return True
+                
+                # コード実行系はツール呼び出しが必要
+                elif action_type == ActionType.CODE_EXECUTION:
+                    self.logger.info(f"ツール呼び出しが必要: コード実行 ({action_type.value})")
+                    return True
+                
+                # プラン生成系はツール呼び出しが必要
+                elif action_type == ActionType.PLAN_GENERATION:
+                    self.logger.info(f"ツール呼び出しが必要: プラン生成 ({action_type.value})")
+                    return True
+                
+                # 直接応答系はツール呼び出しが不要
+                elif action_type == ActionType.DIRECT_RESPONSE:
+                    self.logger.info(f"ツール呼び出しが不要: 直接応答 ({action_type.value})")
+                    return False
+                
+                # 要約生成系はツール呼び出しが不要
+                elif action_type == ActionType.SUMMARY_GENERATION:
+                    self.logger.info(f"ツール呼び出しが不要: 要約生成 ({action_type.value})")
+                    return False
+                
+                # コンテンツ抽出系はツール呼び出しが不要
+                elif action_type == ActionType.CONTENT_EXTRACTION:
+                    self.logger.info(f"ツール呼び出しが不要: コンテンツ抽出 ({action_type.value})")
+                    return False
+            
+            # 意図分析結果が利用できない場合、キーワードベースで判定
+            self.logger.info("意図分析結果が利用できないため、キーワードベースで判定")
+            return self._fallback_tool_call_detection(user_input)
+            
+        except Exception as e:
+            self.logger.error(f"ツール呼び出し判定エラー: {e}")
+            # エラー時は安全側に倒してツール呼び出しを有効化
+            return True
+    
+    def _fallback_tool_call_detection(self, user_input: str) -> bool:
+        """フォールバック用のツール呼び出し判定（キーワードベース）"""
+        user_input_lower = user_input.lower()
+        
+        # ツール呼び出しが必要なキーワード
+        tool_call_keywords = [
+            "実行", "実行して", "実行してください",
+            "作成", "作成して", "作成してください",
+            "生成", "生成して", "生成してください",
+            "提案", "提案して", "提案してください",
+            "計画", "計画を", "計画を立てて",
+            "タスク", "タスクを", "タスクを作成",
+            "ファイル", "ファイルを", "ファイルを作成",
+            "コード", "コードを", "コードを生成",
+            "実装", "実装して", "実装してください",
+            "進めて", "進めてください", "開始して"
         ]
         
-        for pattern in patterns:
-            match = re.search(pattern, user_message)
-            if match:
-                return match.group(1)
+        # ツール呼び出しが不要なキーワード
+        no_tool_call_keywords = [
+            "説明", "説明して", "説明してください",
+            "要約", "要約して", "要約してください",
+            "分析", "分析して", "分析してください",
+            "確認", "確認して", "確認してください",
+            "見て", "見てください", "把握してください",
+            "把握", "把握して", "理解してください",
+            "理解", "理解して"
+        ]
         
-        # 特定のファイル名のキーワード（フォールバック）
-        if "game_doc.md" in user_message:
-            return "game_doc.md"
-        elif "readme" in user_message.lower():
-            return "README.md"
+        # ツール呼び出しが必要なキーワードが含まれているかチェック
+        for keyword in tool_call_keywords:
+            if keyword in user_input_lower:
+                self.logger.info(f"フォールバック判定: ツール呼び出しが必要 - キーワード '{keyword}' を検出")
+                return True
         
-        return None
-    
-    async def _determine_file_operation(self, user_message: str) -> str:
-        """LLMによるファイル操作の種類を判定"""
+        # ツール呼び出しが不要なキーワードのみが含まれているかチェック
+        has_no_tool_keywords = any(keyword in user_input_lower for keyword in no_tool_call_keywords)
+        has_tool_keywords = any(keyword in user_input_lower for keyword in tool_call_keywords)
+        
+        if has_no_tool_keywords and not has_tool_keywords:
+            self.logger.info("フォールバック判定: ツール呼び出しが不要 - 情報取得・確認系の操作")
+            return False
+        
+        # デフォルトはツール呼び出しが必要
+        self.logger.info("フォールバック判定: ツール呼び出しが必要 - デフォルト設定")
+        return True
+
+    def _parse_tool_call_response(self, response_str: str) -> List[Action]:
+        """ツール呼び出しレスポンスを解析してActionListを生成する"""
         try:
-            # LLMによる判定を試行
-            return await self._determine_file_operation_type(user_message, None)
-        except Exception as e:
-            self.logger.warning(f"LLMファイル操作判定エラー: {e}, フォールバックキーワード判定を使用")
-            # フォールバック: 簡易キーワード判定
-            message_lower = user_message.lower()
-            
-            if any(kw in message_lower for kw in ["読", "見て", "確認", "内容", "読み"]):
-                return "read"
-            elif any(kw in message_lower for kw in ["作成", "書", "出力", "生成"]):
-                return "write"
-            elif any(kw in message_lower for kw in ["削除", "消去"]):
-                return "delete"
-            elif any(kw in message_lower for kw in ["一覧", "ls", "dir"]):
-                return "list"
+            # ツール呼び出しレスポンスの形式を確認
+            if "execute_action_list" in response_str:
+                # execute_action_listツールの呼び出しを解析
+                return self._parse_execute_action_list_response(response_str)
             else:
-                return "read"  # デフォルトは読み取り
-    
-    async def _execute_file_operation(self, operation: str, file_path: str, user_message: str) -> str:
-        """ファイル操作を実行"""
-        try:
-            if operation == "read":
-                content = self.file_ops.read_file(file_path)
-                preview = content if len(content) < 1000 else content[:1000] + '...'
-                return f"📄 {file_path} の内容:\n\n{preview}"
-            elif operation == "write":
-                return f"📝 {file_path} への書き込み機能は現在実装中です。"
-            elif operation == "delete":
-                return f"🗑️ {file_path} の削除機能は現在実装中です。"
-            elif operation == "list":
-                return f"📋 ディレクトリ一覧機能は現在実装中です。"
-            else:
-                return f"❓ 不明な操作: {operation}"
-                
-        except FileNotFoundError:
-            return f"❌ ファイル '{file_path}' が見つかりません。"
-        except PermissionError:
-            return f"❌ ファイル '{file_path}' へのアクセス権限がありません。"
-        except Exception as e:
-            return f"❌ ファイル操作エラー: {str(e)}"
-    
-    async def _handle_enhanced_code_execution(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """Enhanced v2.0独立のコード実行処理"""
-        return "Enhanced v2.0独立モードでは、コード実行機能は現在実装されていません。"
-    
-    async def _handle_enhanced_multi_step_task(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """Enhanced v2.0独立の複数ステップタスク処理"""
-        return "Enhanced v2.0独立モードでは、複数ステップタスク機能は現在実装されていません。"
-    
-    async def _handle_enhanced_plan_generation(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """Enhanced v2.0独立のプラン生成処理"""
-        try:
-            # プラン生成のロジック
-            plan_content = f"""
-# プラン生成結果
-
-## ユーザー要求
-{user_message}
-
-## 生成されたプラン
-1. 要求の分析と理解
-2. 実行可能なタスクの特定
-3. 優先順位の決定
-4. 実行手順の策定
-
-## 次のステップ
-このプランに基づいて具体的な実装を進めることができます。
-"""
-            return plan_content
-        except Exception as e:
-            self.logger.error(f"プラン生成エラー: {e}")
-            return f"プラン生成中にエラーが発生しました: {str(e)}"
-
-    async def _handle_enhanced_summary_generation(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """summary_generation意図に対する具体的な処理"""
-        try:
-            rich_ui.print_message("📊 要約生成タスクとして処理中...", "info")
-            
-            # ファイルパスの取得（IntentAnalyzerLLMの結果を優先）
-            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
-            
-            if not file_path:
-                return "ファイル名を特定できませんでした。具体的なファイル名を指定してください。"
-            
-            rich_ui.print_message(f"📖 ファイル読み込み: {file_path}", "info")
-            
-            # ファイルの存在確認
-            if not self.file_ops.exists(file_path):
-                return f"ファイル '{file_path}' が見つかりません。ファイル名を確認してください。"
-            
-            # ファイルの読み込み
-            try:
-                content = self.file_ops.read_file(file_path)
-                self.logger.info(f"ファイル読み込み成功: {file_path}, 内容長: {len(content)}")
-            except Exception as e:
-                self.logger.error(f"ファイル読み込みエラー: {e}")
-                return f"ファイル '{file_path}' の読み込みに失敗しました: {str(e)}"
-            
-            # ファイルの要約生成
-            summary = await self._generate_file_summary(file_path, content)
-            
-            # 結果を状態に記録
-            self.state.short_term_memory["last_read_file"] = {
-                "path": file_path,
-                "summary": summary,
-                "length": len(content),
-                "timestamp": datetime.now().isoformat()
-            }
-            self._record_file_operation("read", file_path, summary)
-            self.state.add_message("assistant", f"ファイル '{file_path}' の要約を生成しました")
-            
-            # 処理完了のログ出力
-            self.logger.info(f"要約生成処理完了: {file_path}, 内容長: {len(content)}, 要約長: {len(summary)}")
-            
-            return f"📄 ファイル '{file_path}' の要約:\n\n{summary}\n\n--- 完全な内容 ---\n{content}"
-            
-        except Exception as e:
-            self.logger.error(f"要約生成処理エラー: {e}")
-            return f"要約生成処理中にエラーが発生しました: {str(e)}"
-    
-    async def _handle_enhanced_content_extraction(self, user_message: str, file_target: Optional[str] = None) -> str:
-        """content_extraction意図に対する具体的な処理"""
-        try:
-            rich_ui.print_message("🔍 コンテンツ抽出タスクとして処理中...", "info")
-            
-            # ファイルパスの取得（IntentAnalyzerLLMの結果を優先）
-            file_path = file_target if file_target else await self._extract_file_path_from_llm(user_message)
-            
-            if not file_path:
-                return "ファイル名を特定できませんでした。具体的なファイル名を指定してください。"
-            
-            rich_ui.print_message(f"📖 ファイル読み込み: {file_path}", "info")
-            
-            # ファイルの存在確認
-            if not self.file_ops.exists(file_path):
-                return f"ファイル '{file_path}' が見つかりません。ファイル名を確認してください。"
-            
-            # ファイルの読み込み
-            try:
-                content = self.file_ops.read_file(file_path)
-                self.logger.info(f"ファイル読み込み成功: {file_path}, 内容長: {len(content)}")
-            except Exception as e:
-                self.logger.error(f"ファイル読み込みエラー: {e}")
-                return f"ファイル '{file_path}' の読み込みに失敗しました: {str(e)}"
-            
-            # コンテンツの抽出（ユーザーの要求に基づいて）
-            extracted_content = await self._extract_content_based_on_request(user_message, content, file_path)
-            
-            # 結果を状態に記録
-            self.state.short_term_memory["last_extracted_content"] = {
-                "path": file_path,
-                "extracted": extracted_content,
-                "original_length": len(content),
-                "timestamp": datetime.now().isoformat()
-            }
-            self._record_file_operation("extract", file_path, extracted_content[:200])
-            self.state.add_message("assistant", f"ファイル '{file_path}' からコンテンツを抽出しました")
-            
-            return f"🔍 ファイル '{file_path}' から抽出されたコンテンツ:\n\n{extracted_content}"
-            
-        except Exception as e:
-            self.logger.error(f"コンテンツ抽出処理エラー: {e}")
-            return f"コンテンツ抽出処理中にエラーが発生しました: {str(e)}"
-    
-    def _extract_content_based_on_request(self, user_message: str, content: str, file_path: str) -> str:
-        """ユーザーの要求に基づいてコンテンツを抽出"""
-        try:
-            # ユーザーの要求を分析して抽出条件を決定
-            message_lower = user_message.lower()
-            
-            if "概要" in message_lower or "要約" in message_lower:
-                # 概要・要約の場合
-                return self._extract_summary_content(content, file_path)
-            elif "重要な" in message_lower or "ポイント" in message_lower:
-                # 重要なポイントの場合
-                return self._extract_key_points(content, file_path)
-            elif "構造" in message_lower or "構成" in message_lower:
-                # 構造・構成の場合
-                return self._extract_structure_content(content, file_path)
-            else:
-                # デフォルト：最初の部分を抽出
-                return content[:1000] + ("..." if len(content) > 1000 else "")
+                # その他のツール呼び出しを解析
+                return self._parse_generic_tool_call_response(response_str)
                 
         except Exception as e:
-            self.logger.warning(f"コンテンツ抽出エラー: {e}")
-            return content[:1000] + ("..." if len(content) > 1000 else "")
+            self.logger.error(f"ツール呼び出しレスポンス解析エラー: {e}")
+            # エラー時はテキスト応答として解析を試行
+            return self._parse_text_response_to_action_list(response_str)
     
-    def _extract_summary_content(self, content: str, file_path: str) -> str:
-        """要約的なコンテンツを抽出"""
-        lines = content.split('\n')
-        
-        # 最初の数行（ヘッダー部分）を抽出
-        header_lines = lines[:10]
-        
-        # 重要なセクションを探す
-        important_sections = []
-        for i, line in enumerate(lines):
-            if any(keyword in line.lower() for keyword in ['概要', '要約', '目的', '背景', '結論']):
-                # そのセクションの内容を抽出（最大20行）
-                section_content = lines[i:i+20]
-                important_sections.extend(section_content)
-        
-        # 結果を組み合わせ
-        result = '\n'.join(header_lines)
-        if important_sections:
-            result += '\n\n--- 重要なセクション ---\n'
-            result += '\n'.join(important_sections)
-        
-        return result
+    def _parse_execute_action_list_response(self, response_str: str) -> List[Action]:
+        """execute_action_listツールの呼び出しレスポンスを解析"""
+        try:
+            # JSON部分を抽出
+            import re
+            
+            # action_listの引数を探す（複数のパターンを試行）
+            patterns = [
+                r'"action_list":\s*(\[.*?\])',  # 標準的なパターン
+                r'"arguments":\s*"([^"]*)"',    # arguments全体を取得
+                r'arguments":\s*"([^"]*)"',     # arguments部分のみ
+            ]
+            
+            action_list_json = None
+            for pattern in patterns:
+                match = re.search(pattern, response_str, re.DOTALL)
+                if match:
+                    if pattern == r'"arguments":\s*"([^"]*)"':
+                        # arguments全体を取得した場合、JSONとしてパース
+                        try:
+                            args_str = match.group(1)
+                            args_data = json.loads(args_str)
+                            if 'action_list' in args_data:
+                                action_list_json = json.dumps(args_data['action_list'])
+                                break
+                        except json.JSONDecodeError:
+                            continue
+                    else:
+                        action_list_json = match.group(1)
+                        break
+            
+            if action_list_json:
+                self.logger.info(f"execute_action_listからActionListを抽出: {action_list_json[:100]}...")
+                
+                # JSONをパース
+                action_data = json.loads(action_list_json)
+                
+                # Actionオブジェクトに変換
+                actions = []
+                for action_dict in action_data:
+                    if isinstance(action_dict, dict) and 'operation' in action_dict:
+                        action = Action(
+                            operation=action_dict['operation'],
+                            args=action_dict.get('args', {}),
+                            reasoning=action_dict.get('reasoning', '')
+                        )
+                        actions.append(action)
+                
+                self.logger.info(f"ActionList解析完了: {len(actions)}件のアクション")
+                return actions
+            else:
+                self.logger.warning("execute_action_listの引数が見つかりません")
+                # フォールバック: レスポンス全体をJSONとしてパースを試行
+                return self._fallback_parse_response(response_str)
+                
+        except Exception as e:
+            self.logger.error(f"execute_action_listレスポンス解析エラー: {e}")
+            return self._fallback_parse_response(response_str)
     
-    def _extract_key_points(self, content: str, file_path: str) -> str:
-        """重要なポイントを抽出"""
-        lines = content.split('\n')
-        key_points = []
-        
-        for line in lines:
-            # 箇条書きや番号付きリストを探す
-            if line.strip().startswith(('-', '•', '*', '1.', '2.', '3.')):
-                key_points.append(line.strip())
-            # 重要なキーワードを含む行を探す
-            elif any(keyword in line.lower() for keyword in ['重要', '注意', '警告', '必須', '必要']):
-                key_points.append(line.strip())
-        
-        if key_points:
-            return '\n'.join(key_points[:20])  # 最大20個
-        else:
-            # キーポイントが見つからない場合は最初の部分を返す
-            return content[:800] + ("..." if len(content) > 800 else "")
+    def _fallback_parse_response(self, response_str: str) -> List[Action]:
+        """フォールバック用のレスポンス解析"""
+        try:
+            # レスポンス全体をJSONとしてパース
+            response_data = json.loads(response_str)
+            
+            # tool_callsからaction_listを抽出
+            if 'tool_calls' in response_data:
+                for tool_call in response_data['tool_calls']:
+                    if tool_call.get('function', {}).get('name') == 'execute_action_list':
+                        args = json.loads(tool_call['function']['arguments'])
+                        if 'action_list' in args:
+                            actions = []
+                            for action_dict in args['action_list']:
+                                if isinstance(action_dict, dict) and 'operation' in action_dict:
+                                    action = Action(
+                                        operation=action_dict['operation'],
+                                        args=action_dict.get('args', {}),
+                                        reasoning=action_dict.get('reasoning', '')
+                                    )
+                                    actions.append(action)
+                            
+                            self.logger.info(f"フォールバック解析成功: {len(actions)}件のアクション")
+                            return actions
+            
+            # 直接action_listが含まれている場合
+            if 'action_list' in response_data:
+                actions = []
+                for action_dict in response_data['action_list']:
+                    if isinstance(action_dict, dict) and 'operation' in action_dict:
+                        action = Action(
+                            operation=action_dict['operation'],
+                            args=action_dict.get('args', {}),
+                            reasoning=action_dict.get('reasoning', '')
+                        )
+                        actions.append(action)
+                
+                self.logger.info(f"直接解析成功: {len(actions)}件のアクション")
+                return actions
+            
+            self.logger.warning("フォールバック解析でもActionListが見つかりません")
+            return []
+            
+        except Exception as e:
+            self.logger.error(f"フォールバック解析エラー: {e}")
+            return []
     
-    def _extract_structure_content(self, content: str, file_path: str) -> str:
-        """構造・構成に関するコンテンツを抽出"""
-        lines = content.split('\n')
-        structure_lines = []
+    def _parse_generic_tool_call_response(self, response_str: str) -> List[Action]:
+        """一般的なツール呼び出しレスポンスを解析"""
+        try:
+            # まず、直接的なJSONレスポンスとしてパースを試行
+            try:
+                response_data = json.loads(response_str)
+                
+                # action_listが直接含まれている場合
+                if 'action_list' in response_data:
+                    self.logger.info("直接的なaction_listレスポンスを検出")
+                    actions = []
+                    for action_dict in response_data['action_list']:
+                        if isinstance(action_dict, dict) and 'operation' in action_dict:
+                            action = Action(
+                                operation=action_dict['operation'],
+                                args=action_dict.get('args', {}),
+                                reasoning=action_dict.get('reasoning', '')
+                            )
+                            actions.append(action)
+                    
+                    self.logger.info(f"直接的なJSON解析成功: {len(actions)}件のアクション")
+                    return actions
+                
+                # tool_callsが含まれている場合
+                if 'tool_calls' in response_data:
+                    self.logger.info("tool_callsレスポンスを検出")
+                    return self._parse_tool_calls_from_response(response_data)
+                
+            except json.JSONDecodeError:
+                self.logger.info("直接的なJSONパースに失敗、正規表現パターンで解析を試行")
+            
+            # 正規表現パターンでツール呼び出しを探す
+            import re
+            
+            # ツール呼び出しのパターンを探す
+            tool_call_pattern = r'"function":\s*{\s*"name":\s*"([^"]+)"[^}]*"arguments":\s*"([^"]+)"'
+            matches = re.findall(tool_call_pattern, response_str)
+            
+            if matches:
+                actions = []
+                for tool_name, args_str in matches:
+                    self.logger.info(f"ツール呼び出しを検出: {tool_name}")
+                    
+                    # 引数をパース
+                    try:
+                        args = json.loads(args_str)
+                        if tool_name == "execute_action_list" and "action_list" in args:
+                            # ネストしたActionListを処理
+                            nested_actions = self._parse_nested_action_list(args["action_list"])
+                            actions.extend(nested_actions)
+                        else:
+                            # 単一のツール呼び出しをActionとして処理
+                            action = Action(
+                                operation=f"{tool_name}.execute",
+                                args=args,
+                                reasoning=f"ツール呼び出し: {tool_name}"
+                            )
+                            actions.append(action)
+                    except json.JSONDecodeError:
+                        self.logger.warning(f"ツール引数のパースに失敗: {args_str}")
+                        continue
+                
+                if actions:
+                    self.logger.info(f"正規表現パターン解析成功: {len(actions)}件のアクション")
+                    return actions
+            
+            # 最後の手段として、テキスト応答として解析を試行
+            self.logger.info("ツール呼び出し解析に失敗、テキスト応答として解析を試行")
+            return self._parse_text_response_to_action_list(response_str)
+                
+        except Exception as e:
+            self.logger.error(f"一般的なツール呼び出しレスポンス解析エラー: {e}")
+            # エラー時はテキスト応答として解析を試行
+            return self._parse_text_response_to_action_list(response_str)
+    
+    def _parse_tool_calls_from_response(self, response_data: Dict[str, Any]) -> List[Action]:
+        """tool_callsレスポンスからActionListを抽出"""
+        try:
+            actions = []
+            tool_calls = response_data.get('tool_calls', [])
+            
+            for tool_call in tool_calls:
+                function_info = tool_call.get('function', {})
+                tool_name = function_info.get('name', '')
+                arguments_str = function_info.get('arguments', '{}')
+                
+                self.logger.info(f"tool_callを検出: {tool_name}")
+                
+                try:
+                    arguments = json.loads(arguments_str)
+                    
+                    if tool_name == "execute_action_list" and "action_list" in arguments:
+                        # execute_action_listツールの呼び出し
+                        nested_actions = self._parse_nested_action_list(arguments["action_list"])
+                        actions.extend(nested_actions)
+                        self.logger.info(f"execute_action_listから{len(nested_actions)}件のアクションを抽出")
+                    else:
+                        # その他のツール呼び出し
+                        action = Action(
+                            operation=f"{tool_name}.execute",
+                            args=arguments,
+                            reasoning=f"ツール呼び出し: {tool_name}"
+                        )
+                        actions.append(action)
+                        
+                except json.JSONDecodeError as e:
+                    self.logger.warning(f"ツール引数のパースに失敗: {arguments_str}, エラー: {e}")
+                    continue
+            
+            self.logger.info(f"tool_calls解析完了: {len(actions)}件のアクション")
+            return actions
+            
+        except Exception as e:
+            self.logger.error(f"tool_calls解析エラー: {e}")
+            return []
+    
+    def _parse_nested_action_list(self, action_list_data) -> List[Action]:
+        """ネストしたActionListを解析"""
+        try:
+            actions = []
+            for action_dict in action_list_data:
+                if isinstance(action_dict, dict) and 'operation' in action_dict:
+                    action = Action(
+                        operation=action_dict['operation'],
+                        args=action_dict.get('args', {}),
+                        reasoning=action_dict.get('reasoning', '')
+                    )
+                    actions.append(action)
+            
+            return actions
+            
+        except Exception as e:
+            self.logger.error(f"ネストしたActionList解析エラー: {e}")
+            return []
+
+    def _parse_text_response_to_action_list(self, response_text: str) -> List[Action]:
+        """テキスト応答からActionListを解析する"""
+        try:
+            # JSON部分を探す
+            import re
+            
+            # JSON形式のActionListを探す
+            json_pattern = r'```json\s*(\[.*?\])\s*```'
+            json_match = re.search(json_pattern, response_text, re.DOTALL)
+            
+            if json_match:
+                json_str = json_match.group(1)
+                self.logger.info(f"JSON形式のActionListを発見: {json_str[:100]}...")
+                
+                # JSONをパース
+                import json
+                action_data = json.loads(json_str)
+                
+                # Actionオブジェクトに変換
+                actions = []
+                for action_dict in action_data:
+                    if isinstance(action_dict, dict) and 'operation' in action_dict:
+                        action = Action(
+                            operation=action_dict['operation'],
+                            args=action_dict.get('args', {}),
+                            reasoning=action_dict.get('reasoning', '')
+                        )
+                        actions.append(action)
+                
+                return actions
+            
+            # JSON形式が見つからない場合は、自然言語から推測
+            self.logger.info("JSON形式が見つからないため、自然言語から推測します")
+            
+            # ファイル読み込みと要約の基本的なActionListを生成
+            if "game_doc.md" in response_text.lower() or "ファイル" in response_text:
+                return [
+                    Action(
+                        operation='file_ops.read_file',
+                        args={'file_path': 'game_doc.md'},
+                        reasoning='ユーザーの要求に基づいてファイルを読み込みます'
+                    ),
+                    Action(
+                        operation='llm_service.synthesize_insights_from_files',
+                        args={
+                            'task_description': 'game_doc.mdの内容を要約してください',
+                            'file_contents': {}  # AgentStateから自動取得
+                        },
+                        reasoning='ファイル内容をLLMで分析・要約します'
+                    ),
+                    Action(
+                        operation='response.echo',
+                        args={'message': 'ファイルの要約結果を表示します'},
+                        reasoning='要約結果をユーザーに返信します'
+                    )
+                ]
+            
+            # デフォルトのActionList
+            return [
+                Action(
+                    operation='response.echo',
+                    args={'message': '申し訳ありませんが、要求を理解できませんでした。もう一度詳しく説明してください。'},
+                    reasoning='要求が理解できない場合のデフォルト応答'
+                )
+            ]
+            
+        except Exception as e:
+            self.logger.error(f"テキスト応答の解析エラー: {e}")
+            # エラー時のフォールバック
+            return [
+                Action(
+                    operation='response.echo',
+                    args={'message': f'応答の解析中にエラーが発生しました: {str(e)}'},
+                    reasoning='エラー時のフォールバック応答'
+                )
+            ]
+
+    def _process_template_variables(self, args: Dict[str, Any], previous_results: Dict[str, Any]) -> Dict[str, Any]:
+        """テンプレート変数を処理して、前のアクション結果で置換する"""
+        if not isinstance(args, dict):
+            return args
         
-        for line in lines:
-            # 見出しやセクション区切りを探す
-            if line.strip().startswith(('#', '##', '###', '---', '===')):
-                structure_lines.append(line.strip())
-            # 目次やインデックスを探す
-            elif any(keyword in line.lower() for keyword in ['目次', 'index', 'contents', '構造']):
-                structure_lines.append(line.strip())
-            # 階層的な構造を示す行を探す
-            elif line.strip().startswith(('  ', '\t')) and any(keyword in line.lower() for keyword in ['├', '│', '└', '─']):
-                structure_lines.append(line.strip())
+        processed_args = {}
+        for key, value in args.items():
+            if isinstance(value, str):
+                # {{var}}形式のテンプレート変数を処理
+                if value.startswith('{{') and value.endswith('}}'):
+                    template_var = value[2:-2].strip()
+                    if template_var in previous_results:
+                        processed_args[key] = previous_results[template_var]
+                        self.logger.info(f"テンプレート変数を置換: {value} -> {type(previous_results[template_var])}")
+                    else:
+                        # テンプレート変数が見つからない場合、デフォルト値を設定
+                        if template_var == "summary":
+                            # 要約結果のデフォルト値
+                            processed_args[key] = "要約結果が利用できません"
+                        elif template_var == "file_content":
+                            # ファイル内容のデフォルト値
+                            processed_args[key] = "ファイル内容が利用できません"
+                        else:
+                            processed_args[key] = value
+                        self.logger.warning(f"テンプレート変数が見つかりません: {template_var}")
+                
+                # {var}形式のテンプレート変数を処理
+                elif '{' in value and '}' in value:
+                    import re
+                    template_vars = re.findall(r'\{([^}]+)\}', value)
+                    if template_vars:
+                        processed_value = value
+                        for template_var in template_vars:
+                            if template_var in previous_results:
+                                placeholder = '{' + template_var + '}'
+                                replacement = str(previous_results[template_var])
+                                processed_value = processed_value.replace(placeholder, replacement)
+                                self.logger.info(f"テンプレート変数を置換: {placeholder} -> {type(previous_results[template_var])}")
+                            else:
+                                # テンプレート変数が見つからない場合、デフォルト値を設定
+                                if template_var == "summary":
+                                    replacement = "要約結果が利用できません"
+                                elif template_var == "file_content":
+                                    replacement = "ファイル内容が利用できません"
+                                else:
+                                    replacement = "未定義の変数"
+                                
+                                placeholder = '{' + template_var + '}'
+                                processed_value = processed_value.replace(placeholder, replacement)
+                                self.logger.warning(f"テンプレート変数が見つかりません: {template_var}")
+                        
+                        processed_args[key] = processed_value
+                    else:
+                        processed_args[key] = value
+                else:
+                    processed_args[key] = value
+            elif isinstance(value, dict):
+                processed_args[key] = self._process_template_variables(value, previous_results)
+            elif isinstance(value, list):
+                processed_args[key] = [
+                    self._process_template_variables(item, previous_results) if isinstance(item, dict) else item
+                    for item in value
+                ]
+            else:
+                processed_args[key] = value
         
-        if structure_lines:
-            return '\n'.join(structure_lines)
-        else:
-            # 構造が見つからない場合は最初の部分を返す
-            return content[:600] + ("..." if len(content) > 600 else "")
+        return processed_args
+
+    def _create_final_response(self, results: List[Any]) -> str:
+        """実行結果をまとめてユーザーへの最終応答を生成する"""
+        if not results:
+            return "実行するアクションがありませんでした。"
+        
+        last_result = results[-1]
+
+        # Planオブジェクトの場合、整形して表示
+        if isinstance(last_result, Plan):
+            response = f"以下の計画を提案します。よろしいですか？ (plan_id: {last_result.plan_id})\n\n"
+            response += f"**計画名:** {last_result.name}\n"
+            response += f"**ゴール:** {last_result.goal}\n\n"
+            response += "**ステップ:**\n"
+            for i, step in enumerate(last_result.steps, 1):
+                response += f"{i}. {step.name} ({step.description})\n"
+            return response
+
+        # Pydanticモデルのインスタンスの場合
+        if hasattr(last_result, 'model_dump_json'):
+            # PydanticモデルをJSON文字列に変換
+            return last_result.model_dump_json(indent=2)
+        
+        # その他の型に対する処理
+        if isinstance(last_result, str):
+            return last_result
+        try:
+            # 辞書やリストなど、JSONに変換可能なオブジェクト
+            return json.dumps(last_result, indent=2, ensure_ascii=False)
+        except TypeError:
+            # その他のオブジェクトは、単純に文字列化する
+            return f"処理が完了しました。結果: {str(last_result)}"
+    
+    def _record_action_result(self, action: Action, result: Any) -> None:
+        """Action実行結果をAgentStateに記録"""
+        try:
+            # Action実行履歴を短期記憶に記録
+            action_record = {
+                'operation': action.operation,
+                'args': action.args,
+                'result_type': type(result).__name__,
+                'success': not (isinstance(result, dict) and "error" in result),
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            if 'action_history' not in self.agent_state.short_term_memory:
+                self.agent_state.short_term_memory['action_history'] = []
+            
+            self.agent_state.short_term_memory['action_history'].append(action_record)
+            
+            # 最新20件まで保持
+            if len(self.agent_state.short_term_memory['action_history']) > 20:
+                self.agent_state.short_term_memory['action_history'] = self.agent_state.short_term_memory['action_history'][-20:]
+                
+        except Exception as e:
+            self.logger.warning(f"Action結果記録エラー: {e}")
+            # エラーは無視して継続
+    
+    def _record_tool_execution(self, tool_name: str, method_name: str, args: Dict[str, Any], 
+                              result: Any, execution_time: float, error: Optional[str] = None) -> None:
+        """ツール実行履歴をAgentStateに記録"""
+        from .state.agent_state import ToolExecution
+        
+        try:
+            # ToolExecutionオブジェクトを作成
+            tool_execution = ToolExecution(
+                tool_name=f"{tool_name}.{method_name}",
+                arguments=args,
+                result=result,
+                error=error,
+                execution_time=execution_time,
+                timestamp=datetime.now()
+            )
+            
+            # AgentStateのtool_executionsリストに追加
+            self.agent_state.tool_executions.append(tool_execution)
+            
+            # 最新50件まで保持
+            if len(self.agent_state.tool_executions) > 50:
+                self.agent_state.tool_executions = self.agent_state.tool_executions[-50:]
+            
+            self.logger.debug(f"ツール実行履歴を記録: {tool_name}.{method_name} ({execution_time:.3f}s)")
+            
+        except Exception as e:
+            self.logger.warning(f"ツール実行履歴記録エラー: {e}")
+            # エラーは無視して継続
+    
+    def _update_vitals(self, had_error: bool = False, is_progress: bool = True, 
+                      context_size: int = 0, confidence_score: float = 0.8) -> None:
+        """エージェントのバイタル情報を更新"""
+        try:
+            # コンテキストサイズを推定（会話履歴の長さから）
+            if context_size == 0:
+                context_size = sum(len(msg.content) for msg in self.agent_state.conversation_history[-10:])
+            
+            # 各バイタルを更新
+            self.agent_state.vitals.update_stamina(had_error=had_error)
+            self.agent_state.vitals.update_focus(is_progress=is_progress, context_size=context_size)
+            self.agent_state.vitals.update_mood(confidence_score=confidence_score)
+            
+            # バイタル情報をログ出力
+            vitals = self.agent_state.vitals
+            self.logger.debug(f"バイタル更新: mood={vitals.mood:.2f}, focus={vitals.focus:.2f}, "
+                             f"stamina={vitals.stamina:.2f}, loops={vitals.total_loops}")
+            
+        except Exception as e:
+            self.logger.warning(f"バイタル更新エラー: {e}")
+            # エラーは無視して継続
+    
+    def _extract_json_from_response(self, response_str: str) -> str:
+        """レスポンスからJSONを抽出する"""
+        try:
+            # レスポンスがそのままJSONの場合
+            if response_str.strip().startswith('{') and response_str.strip().endswith('}'):
+                return response_str.strip()
+            
+            # エラーメッセージからJSONを抽出（Groqエラーの場合）
+            import re
+            
+            # Groqの'failed_generation'フィールドから抽出
+            failed_gen_pattern = r"'failed_generation'\s*:\s*'([^']+)'"
+            failed_matches = re.findall(failed_gen_pattern, response_str)
+            if failed_matches:
+                json_str = failed_matches[0]
+                # エスケープされた文字を修正
+                json_str = json_str.replace('\\"', '"')
+                self.logger.info("Groqのfailed_generationからJSONを抽出しました")
+                return json_str
+            
+            # より一般的なJSON抽出パターン
+            json_pattern = r'\{[^{}]*"action_list"\s*:\s*\[[^\]]*\][^{}]*\}'
+            matches = re.findall(json_pattern, response_str, re.DOTALL)
+            
+            if matches:
+                self.logger.info("エラーメッセージからJSONを抽出しました")
+                return matches[0]
+            
+            # より広範囲のJSON抽出を試行
+            bracket_start = response_str.find('{')
+            bracket_end = response_str.rfind('}')
+            
+            if bracket_start != -1 and bracket_end != -1 and bracket_end > bracket_start:
+                potential_json = response_str[bracket_start:bracket_end + 1]
+                # 簡単な検証
+                if '"action_list"' in potential_json:
+                    self.logger.info("レスポンスからJSON部分を抽出しました")
+                    return potential_json
+            
+            # JSONが見つからない場合はそのまま返す（エラーとして処理される）
+            return response_str
+            
+        except Exception as e:
+            self.logger.warning(f"JSON抽出エラー: {e}")
+            return response_str

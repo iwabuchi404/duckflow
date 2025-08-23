@@ -336,6 +336,226 @@ class SimpleFileOps:
         except Exception as e:
             raise FileOperationError(f"ディレクトリ作成に失敗しました: {directory_path} - {str(e)}")
 
+    def search_content(self, file_path: str, pattern: str, context_lines: int = 2) -> Dict[str, Any]:
+        """ripgrepベースの高速コンテンツ検索"""
+        try:
+            import subprocess
+            import re
+            
+            path = Path(file_path)
+            if not path.is_file():
+                return {"error": f"ファイルが見つかりません: {file_path}"}
+            
+            # ripgrep (rg) コマンドを実行
+            cmd = ["rg", pattern, str(path), "-C", str(context_lines), "-n", "--color", "never"]
+            
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    # マッチした結果を解析
+                    matches = []
+                    lines = result.stdout.split('\n')
+                    
+                    current_match = None
+                    for line in lines:
+                        if not line.strip():
+                            continue
+                        
+                        # 行番号とコンテンツを解析
+                        match = re.match(r'^(\d+)[:-](.*)$', line)
+                        if match:
+                            line_num = int(match.group(1))
+                            content = match.group(2)
+                            
+                            if current_match is None or abs(line_num - current_match["line_number"]) > context_lines + 1:
+                                # 新しいマッチグループ
+                                current_match = {
+                                    "line_number": line_num,
+                                    "match": content.strip(),
+                                    "context_lines": [content]
+                                }
+                                matches.append(current_match)
+                            else:
+                                # 既存のマッチに追加
+                                current_match["context_lines"].append(content)
+                    
+                    return {
+                        "operation": "高速コンテンツ検索",
+                        "pattern": pattern,
+                        "file_path": file_path,
+                        "matches_found": len(matches),
+                        "results": matches[:5],  # 最大5件
+                        "tool_used": "ripgrep"
+                    }
+                else:
+                    return {
+                        "operation": "高速コンテンツ検索", 
+                        "pattern": pattern,
+                        "file_path": file_path,
+                        "matches_found": 0,
+                        "results": [],
+                        "tool_used": "ripgrep"
+                    }
+                    
+            except subprocess.TimeoutExpired:
+                return {"error": "検索がタイムアウトしました"}
+            except FileNotFoundError:
+                # ripgrepが利用できない場合のフォールバック
+                return self._fallback_search_content(file_path, pattern, context_lines)
+                
+        except Exception as e:
+            return {"error": f"検索エラー: {str(e)}"}
+    
+    def _fallback_search_content(self, file_path: str, pattern: str, context_lines: int) -> Dict[str, Any]:
+        """ripgrepが利用できない場合のフォールバック検索"""
+        try:
+            import re
+            
+            with open(file_path, 'r', encoding='utf-8') as file:
+                lines = file.readlines()
+            
+            matches = []
+            pattern_regex = re.compile(pattern, re.IGNORECASE)
+            
+            for i, line in enumerate(lines):
+                if pattern_regex.search(line):
+                    start = max(0, i - context_lines)
+                    end = min(len(lines), i + context_lines + 1)
+                    context = ''.join(lines[start:end])
+                    
+                    matches.append({
+                        "line_number": i + 1,
+                        "match": line.strip(),
+                        "context_lines": [l.rstrip() for l in lines[start:end]]
+                    })
+            
+            return {
+                "operation": "コンテンツ検索（フォールバック）",
+                "pattern": pattern,
+                "file_path": file_path,
+                "matches_found": len(matches),
+                "results": matches[:5],
+                "tool_used": "python_regex"
+            }
+            
+        except Exception as e:
+            return {"error": f"フォールバック検索エラー: {str(e)}"}
+    
+    def read_file_section(self, file_path: str, start_line: int = 1, line_count: int = 50) -> Dict[str, Any]:
+        """効率的なセクション読み込み"""
+        try:
+            path = Path(file_path)
+            if not path.is_file():
+                return {"error": f"ファイルが見つかりません: {file_path}"}
+            
+            with open(path, 'r', encoding='utf-8') as file:
+                lines = file.readlines()
+            
+            total_lines = len(lines)
+            start_idx = max(0, start_line - 1)  # 1-based to 0-based
+            end_idx = min(total_lines, start_idx + line_count)
+            
+            section_lines = lines[start_idx:end_idx]
+            content = ''.join(section_lines)
+            
+            return {
+                "operation": "セクション読み込み",
+                "file_path": file_path,
+                "section_info": {
+                    "start_line": start_line,
+                    "end_line": start_idx + len(section_lines),
+                    "requested_lines": line_count,
+                    "actual_lines": len(section_lines),
+                    "total_file_lines": total_lines
+                },
+                "content": content,
+                "has_more": end_idx < total_lines,
+                "tool_used": "optimized_read"
+            }
+            
+        except Exception as e:
+            return {"error": f"セクション読み込みエラー: {str(e)}"}
+    
+    def analyze_file_structure(self, file_path: str) -> Dict[str, Any]:
+        """ファイル構造の効率的な分析"""
+        try:
+            path = Path(file_path)
+            if not path.is_file():
+                return {"error": f"ファイルが見つかりません: {file_path}"}
+            
+            with open(path, 'r', encoding='utf-8') as file:
+                lines = file.readlines()
+            
+            structure = {
+                "operation": "構造分析",
+                "file_path": file_path,
+                "file_info": {
+                    "total_lines": len(lines),
+                    "total_chars": sum(len(line) for line in lines),
+                    "encoding": "utf-8"
+                },
+                "headers": [],
+                "sections": [],
+                "code_blocks": [],
+                "tool_used": "structure_analyzer"
+            }
+            
+            current_section = None
+            
+            for i, line in enumerate(lines, 1):
+                line_stripped = line.strip()
+                
+                # マークダウンヘッダーの検出
+                if line_stripped.startswith('#'):
+                    level = 0
+                    for char in line_stripped:
+                        if char == '#':
+                            level += 1
+                        else:
+                            break
+                    
+                    header_text = line_stripped[level:].strip()
+                    header_info = {
+                        "line_number": i,
+                        "level": level,
+                        "text": header_text,
+                        "full_line": line_stripped
+                    }
+                    
+                    structure["headers"].append(header_info)
+                    
+                    # レベル2以上をセクションとして記録
+                    if level >= 2:
+                        if current_section:
+                            current_section["end_line"] = i - 1
+                        
+                        current_section = {
+                            "title": header_text,
+                            "level": level,
+                            "start_line": i,
+                            "end_line": None
+                        }
+                        structure["sections"].append(current_section)
+                
+                # コードブロックの検出
+                elif line_stripped.startswith('```'):
+                    language = line_stripped[3:].strip()
+                    structure["code_blocks"].append({
+                        "line_number": i,
+                        "language": language if language else "text",
+                        "marker": line_stripped
+                    })
+            
+            # 最後のセクションの終了行を設定
+            if current_section:
+                current_section["end_line"] = len(lines)
+            
+            return structure
+            
+        except Exception as e:
+            return {"error": f"構造分析エラー: {str(e)}"}
+
     # === Phase 1 compatibility API (used by PlanExecutor/PlanTool) ===
     def apply_with_approval_write(self, file_path: str, content: str, session_id: str = "") -> FileOpOutcome:
         """Compatibility wrapper used by executors to perform an approved write with safety checks."""

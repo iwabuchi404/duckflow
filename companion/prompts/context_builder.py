@@ -176,7 +176,8 @@ class PromptContextBuilder:
                 self.add_section(context_id, "会話履歴の要約", str(history_summary)[:1000], priority=8)
 
             self.logger.info(f"エージェント状態からリッチコンテキスト作成: {context_id}")
-            return context_id
+            # 実際のコンテキスト内容を返す
+            return self.build_prompt(context_id, "text")
             
         except Exception as e:
             self.logger.error(f"エージェント状態からのコンテキスト作成エラー: {e}", exc_info=True)

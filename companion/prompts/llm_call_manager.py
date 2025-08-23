@@ -114,29 +114,95 @@ class LLMCallManager:
             return f"LLM呼び出しエラー: {str(e)}"
     
     def _compose_prompt(self, mode: str, input_text: str, system_prompt: str, pattern: PromptPattern) -> str:
-        """モード別プロンプト合成"""
+        """モード別プロンプト合成（PromptContextService統合版）"""
         try:
-            if not system_prompt:
-                # system_promptが空の場合はinput_textをそのまま使用
-                return input_text
+            self.logger.info(f"プロンプト合成開始: mode={mode}, pattern={pattern.value}")
             
+            # PromptContextServiceを使用してプロンプトを合成
+            from .prompt_context_service import PromptContextService
+            from ..state.agent_state import AgentState
+            
+            # 現在のAgentStateを取得（グローバルから）
+            agent_state = None
+            try:
+                from ..enhanced_core import EnhancedCompanionCore
+                # グローバルインスタンスからAgentStateを取得
+                enhanced_core = EnhancedCompanionCore.get_global_instance()
+                self.logger.info(f"EnhancedCompanionCore取得: {enhanced_core is not None}")
+                
+                if enhanced_core and hasattr(enhanced_core, 'state'):
+                    agent_state = enhanced_core.state
+                    self.logger.info(f"AgentState取得成功: セッションID={agent_state.session_id}")
+                    self.logger.info(f"会話履歴数: {len(agent_state.conversation_history) if agent_state.conversation_history else 0}")
+                    self.logger.info(f"短期記憶キー数: {len(agent_state.short_term_memory) if agent_state.short_term_memory else 0}")
+                else:
+                    self.logger.warning("EnhancedCompanionCoreのグローバルインスタンスが見つかりません")
+            except Exception as e:
+                self.logger.error(f"AgentState取得エラー: {e}")
+                import traceback
+                self.logger.error(f"スタックトレース: {traceback.format_exc()}")
+            
+            # PromptContextServiceでプロンプトを合成
+            service = PromptContextService()
+            self.logger.info(f"PromptContextService初期化完了")
+            
+            if agent_state:
+                # 記憶注入版でプロンプトを合成
+                self.logger.info(f"記憶注入版プロンプト合成開始: pattern={pattern.value}")
+                try:
+                    full_prompt = service.compose_with_memory(pattern, agent_state)
+                    self.logger.info(f"PromptContextService使用: pattern={pattern.value}, 会話履歴数={len(agent_state.conversation_history) if agent_state.conversation_history else 0}")
+                    self.logger.info(f"生成されたプロンプト長: {len(full_prompt)}文字")
+                    
+                    # プロンプトが空でないことを確認
+                    if not full_prompt or len(full_prompt.strip()) == 0:
+                        self.logger.warning("PromptContextServiceが空のプロンプトを返しました。従来方式でフォールバック")
+                        full_prompt = service.compose(pattern, agent_state)
+                        self.logger.info(f"従来方式プロンプト合成完了: 長さ={len(full_prompt)}文字")
+                        
+                except Exception as e:
+                    self.logger.error(f"記憶注入版プロンプト合成エラー: {e}")
+                    self.logger.info("従来方式でフォールバック")
+                    full_prompt = service.compose(pattern, agent_state)
+                    self.logger.info(f"従来方式プロンプト合成完了: 長さ={len(full_prompt)}文字")
+            else:
+                # AgentStateが取得できない場合は従来方式
+                self.logger.warning("AgentState取得失敗: 従来方式でプロンプト合成")
+                fallback_state = AgentState(session_id="fallback")
+                full_prompt = service.compose(pattern, fallback_state)
+                self.logger.info(f"従来方式プロンプト合成完了: 長さ={len(full_prompt)}文字")
+            
+            # ユーザー入力と組み合わせ
+            final_prompt = ""
             if mode == "summarize":
-                return f"{system_prompt}\n\n以下の内容を要約してください:\n{input_text}"
+                final_prompt = f"{full_prompt}\n\n以下の内容を要約してください:\n{input_text}"
             elif mode == "extract":
-                return f"{system_prompt}\n\n以下の内容から指定された情報を抽出してください:\n{input_text}"
+                final_prompt = f"{full_prompt}\n\n以下の内容から指定された情報を抽出してください:\n{input_text}"
             elif mode == "generate_content":
-                return f"{system_prompt}\n\n以下の要求に基づいて内容を生成してください:\n{input_text}"
+                final_prompt = f"{full_prompt}\n\n以下の要求に基づいて内容を生成してください:\n{input_text}"
             elif mode == "plan":
-                return f"{system_prompt}\n\n以下の要求に基づいて計画を立案してください:\n{input_text}"
+                final_prompt = f"{full_prompt}\n\n以下の要求に基づいて計画を立案してください:\n{input_text}"
             elif mode == "conversation_summarize":
-                return f"{system_prompt}\n\n以下の会話履歴を要約してください:\n{input_text}"
+                final_prompt = f"{full_prompt}\n\n以下の会話履歴を要約してください:\n{input_text}"
             else:
                 # デフォルト: 一般的な応答生成
-                return f"{system_prompt}\n\n{input_text}"
+                final_prompt = f"{full_prompt}\n\n{input_text}"
+            
+            self.logger.info(f"最終プロンプト合成完了: 長さ={len(final_prompt)}文字")
+            
+            # プロンプトが空でないことを最終確認
+            if not final_prompt or len(final_prompt.strip()) == 0:
+                self.logger.error("最終プロンプトが空です。最小限のフォールバックプロンプトを使用")
+                final_prompt = f"システム: ユーザーの要求に応答してください。\n\nユーザー: {input_text}"
+            
+            return final_prompt
                 
         except Exception as e:
             self.logger.error(f"プロンプト合成エラー: {e}")
-            return input_text
+            # エラー時は最小限のフォールバックプロンプト
+            fallback_prompt = f"システム: エラーが発生しました。ユーザーの要求に応答してください。\n\nユーザー: {input_text}"
+            self.logger.info(f"フォールバックプロンプト使用: 長さ={len(fallback_prompt)}文字")
+            return fallback_prompt
     
     async def _call_llm_async(self, full_prompt: str, mode: str, expected_format: str,
                              temperature: float, max_tokens: int, retries: int, 

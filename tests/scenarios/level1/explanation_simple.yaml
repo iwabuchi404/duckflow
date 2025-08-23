@@ -1,26 +1,24 @@
-name: "簡単な説明"
-level: 1
+name: "簡単な説明（5ターン厳密指定版）"
+level: 2
 genre: "説明・教育"
-description: "基本的な技術概念の説明能力確認"
+description: "指定された5ターン以上の連続した対話を通じて、文脈を維持し深く説明できるかを確認する"
 
-scenario: |
-  Pythonのprint関数について、初心者にわかりやすく説明してください
+turns:
+  - "Python初心者です。print関数の基本的な使い方を教えてください。"
+  - "なるほど。では、複数の値を一度に表示するにはどうすればいいですか？"
+  - "分かりました。値の間をカンマではなくハイフンで区切りたい場合は？"
+  - "sepですね！最後に、f-stringというものについても教えてください。"
+  - "とても分かりやすい説明でした。ありがとうございます！"
 
 evaluation_criteria: |
-  1. 説明が分かりやすく適切か
-  2. 初心者レベルに適した内容か
-  3. 具体例が含まれているか
-  4. 質問に対して的確に答えているか
-
-expected_outcomes:
-  - explanation_provided: true
-  - includes_examples: true
-  - beginner_friendly: true
+  1. 各質問に対して、文脈を維持し的確に回答できているか。
+  2. sepやf-stringなどの具体的な機能について、正しく説明できているか。
+  3. 全ての対話がスムーズに行われているか。
 
 test_config:
-  max_exchanges: 4
-  timeout_minutes: 3
-  min_score: 3.0
-  
-priority: "medium"
-frequency: "daily"
+  max_exchanges: 7
+  timeout_minutes: 5
+  min_score: 3.5
+
+priority: "high"
+frequency: "manual"

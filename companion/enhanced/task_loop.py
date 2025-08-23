@@ -1,252 +1,156 @@
+# companion/enhanced/task_loop.py (v7)
 """
-Enhanced TaskLoop - Enhanced v2.0専用版
+Duckflow v7アーキテクチャに基づくTaskLoop。
 
-v4.0 Final版の機能を移植し、AgentStateを直接参照する設計。
-状態管理はAgentStateに統一し、StateMachineへの依存を完全に排除。
+ChatLoopから委譲された重いTaskListの非同期実行と、LLMによる結果報告を担当する
+「非同期ワーカー兼報告者」として機能する。
 """
-
 import queue
-import time
 import asyncio
 import logging
-from datetime import datetime
-from typing import Optional, Dict, Any
-from enum import Enum
+from typing import List, Dict, Any
 
-from companion.state.enums import Step, Status
+# v7の新しいツールとデータモデルをインポート
+from companion.state.agent_state import AgentState, Task
+from companion.file_ops import SimpleFileOps
+from companion.code_runner import SimpleCodeRunner
+from companion.llm_call_manager import LLMCallManager
+from companion.prompts.prompt_compiler import PromptCompiler
 
-
-class TaskType(Enum):
-    """タスクタイプの定義（v3a: 型安全性向上）"""
-    PROCESS_ENHANCED_INTENT = "process_enhanced_intent"
-    UPDATE_AGENT_STATE = "update_agent_state"
-    FILE_OPERATION = "file_operation"
-
-
-class StatusType(Enum):
-    """ステータスタイプの定義（v3a: 型安全性向上）"""
-    TASK_COMPLETED = "task_completed"
-    TASK_ERROR = "task_error"
-    STATE_UPDATED = "state_updated"
-    ERROR = "error"
-
-
-class EnhancedTaskLoop:
-    """Enhanced v2.0専用TaskLoop - AgentState直接参照版"""
-    
-    def __init__(self, task_queue: queue.Queue, status_queue: queue.Queue, 
-                 enhanced_companion, dual_loop_system):
+class TaskLoopV7:
+    def __init__(self, task_queue: queue.Queue, status_queue: queue.Queue, agent_state: AgentState):
         self.task_queue = task_queue
         self.status_queue = status_queue
-        self.enhanced_companion = enhanced_companion
-        self.dual_loop_system = dual_loop_system
-        
-        # parent_system参照を追加（v3a）
-        self.parent_system = dual_loop_system
-        
-        # AgentStateを直接参照（StateMachine不要）
-        self.agent_state = dual_loop_system.agent_state
-        
+        self.agent_state = agent_state
+        self.file_ops = SimpleFileOps()
+        self.code_runner = SimpleCodeRunner()
+        self.llm_manager = LLMCallManager()
+        self.prompt_compiler = PromptCompiler()
         self.running = False
         self.logger = logging.getLogger(__name__)
-        # デバッグ用にログレベルを調整
-        self.logger.setLevel(logging.DEBUG)
-        
-        self.logger.info("EnhancedTaskLoop initialized with AgentState direct reference")
 
     def run(self):
-        """Enhanced v2.0専用の実行ループ開始"""
+        """タスクループのメイン処理"""
         self.running = True
-        self.logger.info("EnhancedTaskLoop を開始しました")
-        
+        self.logger.info("TaskLoop (v7) を開始しました")
         while self.running:
             try:
-                task_data = self.task_queue.get(timeout=1)  # タイムアウト付きで待機
-                self._execute_enhanced_task(task_data)
+                # ChatLoopからの指令を待つ
+                # 指令の形式: {"type": "execute_task_list", "task_list": List[Task]}
+                command = self.task_queue.get(timeout=1)
+                if command is None:
+                    continue
+
+                if command.get("type") == "execute_task_list":
+                    task_list = command.get("task_list", [])
+                    self._execute_task_list(task_list)
                 
             except queue.Empty:
-                continue  # タイムアウト時はループを継続
-                
+                continue
             except Exception as e:
-                self.logger.error(f"EnhancedTaskLoopで予期せぬエラー: {e}", exc_info=True)
-                self._send_enhanced_status({'type': StatusType.ERROR.value, 'message': str(e)})
+                self.logger.error(f"TaskLoopで予期せぬエラー: {e}", exc_info=True)
+                self.status_queue.put({"type": "loop_error", "error": str(e)})
 
-    def _execute_enhanced_task(self, task_data: Dict[str, Any]):
-        """Enhanced v2.0専用のタスク実行"""
-        task_type = task_data.get('type')
-        self.logger.info(f"Enhancedタスク受信: {task_type}")
-        
-        try:
-            if task_type == TaskType.PROCESS_ENHANCED_INTENT.value:
-                self._process_enhanced_intent(task_data)
-            elif task_type == TaskType.UPDATE_AGENT_STATE.value:
-                self._update_agent_state(task_data)
-            elif task_type == TaskType.FILE_OPERATION.value:
-                self._execute_file_operation(task_data)
-            else:
-                self.logger.warning(f"不明なEnhancedタスクタイプをスキップしました: {task_type}")
-                
-        except Exception as e:
-            self.logger.error(f"Enhancedタスク実行中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
-        
-        finally:
-            self.task_queue.task_done()
+    def _execute_task_list(self, task_list: List[Task]):
+        """渡されたTaskListを順番に実行する"""
+        self.logger.info(f"{len(task_list)}件のタスクリストの実行を開始します。")
+        execution_log = []
+        overall_success = True
 
-    def _process_enhanced_intent(self, task_data: Dict[str, Any]):
-        """Enhanced v2.0専用の意図処理"""
-        try:
-            intent_result = task_data.get('intent_result')
-            user_input = task_data.get('user_input', '')
-            
-            if not intent_result:
-                self.logger.warning("intent_resultが含まれていないEnhancedタスクをスキップしました。")
-                return
-            
-            # AgentStateの状態を更新（PLANNING → EXECUTION）
-            self.parent_system.update_state(Step.EXECUTION, Status.IN_PROGRESS, "task_execution_start")
-            
-            # 非同期メソッドの安全な実行
+        for task in task_list:
+            task.status = "in_progress"
             try:
-                # 新しいイベントループで実行
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    result = loop.run_until_complete(
-                        self.enhanced_companion.process_with_intent_result(intent_result)
-                    )
-                finally:
-                    loop.close()
+                # TaskLoopが直接ツールを呼び出す
+                op_parts = task.operation.split('.')
+                if len(op_parts) != 2:
+                    raise ValueError(f"無効な操作形式: {task.operation}")
                 
-                # 成功時の状態更新
-                self.parent_system.update_state(Step.REVIEW, Status.SUCCESS, "task_execution_success")
+                tool_name, method_name = op_parts
                 
-                # タスク結果をAgentStateに直接書き込み（v3a）
-                self.logger.info(f"タスク結果をAgentStateに設定: {result[:100] if result else 'None'}...")
-                self.logger.debug(f"AgentState参照確認: {self.agent_state is not None}")
-                self.logger.debug(f"AgentStateの型: {type(self.agent_state)}")
-                
-                self.agent_state.set_task_result({
-                    'type': StatusType.TASK_COMPLETED.value,
-                    'message': result,
-                    'step': 'EXECUTION',
-                    'status': 'SUCCESS',
-                    'timestamp': datetime.now().isoformat()
-                })
-                
-                # 設定後の確認
-                self.logger.debug(f"設定後のlast_task_result: {self.agent_state.last_task_result is not None}")
-                if self.agent_state.last_task_result:
-                    self.logger.debug(f"設定された結果の内容: {self.agent_state.last_task_result}")
-                
-                self.logger.info("タスク結果の設定完了")
-                
-                # 状態更新の通知のみ送信
-                self._send_enhanced_status({
-                    'type': StatusType.STATE_UPDATED.value,
-                    'message': 'タスク完了: 結果がAgentStateに保存されました',
-                    'step': 'EXECUTION',
-                    'status': 'SUCCESS'
-                })
-                
-            except Exception as e:
-                # エラー時の状態更新
-                self.parent_system.update_state(Step.EXECUTION, Status.ERROR, "task_execution_error")
-                
-                self.logger.error(f"process_with_intent_resultの実行中にエラー: {e}", exc_info=True)
-                # タスク結果をAgentStateに直接書き込み（v3a）
-                self.agent_state.set_task_result({
-                    'type': StatusType.TASK_ERROR.value,
-                    'message': str(e),
-                    'step': 'EXECUTION',
-                    'status': 'ERROR',
-                    'timestamp': datetime.now().isoformat()
-                })
-                
-                # 状態更新の通知のみ送信
-                self._send_enhanced_status({
-                    'type': StatusType.STATE_UPDATED.value,
-                    'message': 'タスクエラー: 結果がAgentStateに保存されました',
-                    'step': 'EXECUTION',
-                    'status': 'ERROR'
-                })
-                
-        except Exception as e:
-            self.logger.error(f"Enhanced意図処理中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
-
-    def _update_agent_state(self, task_data: Dict[str, Any]):
-        """AgentStateの更新タスク（v3a: 単純化）"""
-        try:
-            step = task_data.get('step')
-            status = task_data.get('status')
-            
-            if step and status:
-                self.parent_system.update_state(step, status, "agent_state_update")
-                self.logger.info(f"状態更新完了: {step.value if hasattr(step, 'value') else step}.{status.value if hasattr(status, 'value') else status}")
-            
-        except Exception as e:
-            self.logger.error(f"AgentState更新中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
-
-    def _execute_file_operation(self, task_data: Dict[str, Any]):
-        """ファイル操作タスクの実行"""
-        try:
-            operation = task_data.get('operation')
-            file_path = task_data.get('file_path')
-            content = task_data.get('content')
-            
-            if operation == 'read':
-                # ファイル読み込み（依存関係の安全な確認）
-                if hasattr(self.enhanced_companion, 'file_ops') and self.enhanced_companion.file_ops:
-                    result = self.enhanced_companion.file_ops.read_file(file_path)
+                if tool_name == "file_ops":
+                    tool = self.file_ops
+                elif tool_name == "code_runner":
+                    tool = self.code_runner
                 else:
-                    self.logger.warning("file_ops が利用できません")
-                    result = None
-                self._send_enhanced_status({
-                    'type': StatusType.STATE_UPDATED.value,
-                    'message': f"ファイル読み込み完了: {file_path}",
-                    'content_length': len(result) if result else 0
-                })
-                
-            elif operation == 'write':
-                # ファイル書き込み（依存関係の安全な確認）
-                if hasattr(self.enhanced_companion, 'file_ops') and self.enhanced_companion.file_ops:
-                    success = self.enhanced_companion.file_ops.write_file(file_path, content)
-                else:
-                    self.logger.warning("file_ops が利用できません")
-                    success = False
-                if success:
-                    self._send_enhanced_status({
-                        'type': StatusType.STATE_UPDATED.value,
-                        'message': f"ファイル書き込み完了: {file_path}"
-                    })
-                else:
-                    self._send_enhanced_status({
-                        'type': StatusType.TASK_ERROR.value,
-                        'message': f"ファイル書き込み失敗: {file_path}"
-                    })
+                    raise ValueError(f"不明なツール: {tool_name}")
                     
-        except Exception as e:
-            self.logger.error(f"ファイル操作中にエラー: {e}", exc_info=True)
-            self._send_enhanced_status({'type': StatusType.TASK_ERROR.value, 'message': str(e)})
+                method = getattr(tool, method_name)
+                result = method(**task.args)
 
+                task.result = result
+                task.status = "completed"
+                execution_log.append(f"  - SUCCESS: {task.operation} with args {task.args} -> {result}")
+            except Exception as e:
+                task.status = "failed"
+                task.result = str(e)
+                overall_success = False
+                execution_log.append(f"  - FAILED: {task.operation} with args {task.args} -> {str(e)}")
+                break # 失敗した時点でループを中断
 
+        self.logger.info("タスクリストの実行が完了しました。")
+        self._report_summary(task_list, overall_success, execution_log)
 
-    def _send_enhanced_status(self, status_data: Dict[str, Any]):
-        """Enhanced v2.0専用の状態更新通知"""
-        try:
-            # タイムスタンプを追加
-            status_data['timestamp'] = time.time()
-            status_data['agent_state_step'] = self.agent_state.step.value if self.agent_state and self.agent_state.step else 'UNKNOWN'
-            status_data['agent_state_status'] = self.agent_state.status.value if self.agent_state and self.agent_state.status else 'UNKNOWN'
-            
-            self.status_queue.put(status_data)
-            
-        except Exception as e:
-            self.logger.error(f"Enhanced状態キューへの通知エラー: {e}")
+    def _report_summary(self, task_list: List[Task], success: bool, log_lines: List[str]):
+        """実行結果をLLMで要約して報告する"""
+        self.logger.info("実行結果の要約報告を生成します。")
+        
+        # プロンプトコンパイラーでSpecializedプロンプトを生成
+        specialized_context = self._build_summary_specialized_context(task_list, success, log_lines)
+        system_prompt = self.prompt_compiler.compile_with_memory(
+            pattern="base_specialized",
+            base_context="あなたはタスク実行結果の要約専門家です。実行ログを分析して報告書を作成してください。",
+            specialized_context=specialized_context,
+            agent_state=self.agent_state
+        )
+        
+        # LLMに問い合わせてサマリー生成（実装待ち）
+        # llm_summary = await self.llm_manager.call(system_prompt, "実行結果をまとめてください")
+
+        # ダミーのサマリーを生成
+        status_str = "成功" if success else "失敗"
+        summary = {
+            "status": status_str,
+            "message": f"タスクリストの実行が{status_str}しました。",
+            "details": "\n".join(log_lines)
+        }
+
+        self.status_queue.put({
+            "type": "task_list_completed",
+            "summary": summary
+        })
+        self.logger.info("実行結果をChatLoopに報告しました。")
 
     def stop(self):
-        """Enhanced v2.0専用の停止処理"""
         self.running = False
-        self.logger.info("EnhancedTaskLoop を停止しました")
+        self.logger.info("TaskLoop (v7) を停止しました")
+    
+    def _build_summary_specialized_context(self, task_list: List[Task], success: bool, log_lines: List[str]) -> str:
+        """実行結果要約用のSpecializedコンテキストを構築"""
+        from companion.prompts.specialized_prompt_generator import SpecializedPromptGenerator
+        
+        task_count = len(task_list)
+        completed_count = len([t for t in task_list if t.status == "completed"])
+        failed_count = len([t for t in task_list if t.status == "failed"])
+        
+        # SpecializedPromptGeneratorを使用してTool専用プロンプトを生成
+        prompt_generator = SpecializedPromptGenerator()
+        operation_args = {
+            "task_count": task_count,
+            "completed_count": completed_count,
+            "failed_count": failed_count,
+            "success": success,
+            "execution_log": "\n".join(log_lines),
+            "task_details": [
+                {
+                    "operation": task.operation,
+                    "status": task.status,
+                    "result": str(task.result) if task.result else None
+                } for task in task_list
+            ]
+        }
+        
+        return prompt_generator.generate_tool_specialized_context(
+            tool_name="response_echo",
+            agent_state=self.agent_state,
+            operation_args=operation_args
+        )

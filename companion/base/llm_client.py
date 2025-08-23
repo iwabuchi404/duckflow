@@ -8,6 +8,7 @@ codecrafterから分離し、companion内で完結するように調整
 import json
 import logging
 import asyncio
+import os
 from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -104,19 +105,43 @@ class ExternalManagerClient:
             raise LLMClientError(f"外部LLM呼び出しに失敗しました: {e}")
 
 
-class MockLLMClient:
-    """モックLLMクライアント（テスト用）"""
+class GroqLLMClient:
+    """Groq API用LLMクライアント"""
     
-    def __init__(self):
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.logger = logging.getLogger(__name__)
+        
+        # APIキーの取得（優先度: 引数 > 環境変数 > 設定ファイル）
+        self.api_key = api_key or os.getenv("GROQ_API_KEY") or self._load_config_api_key()
+        
+        if not self.api_key:
+            raise LLMClientError("GROQ API keyが設定されていません")
+        
+        # モデルの設定
+        self.model = model or self._load_config_model() or "llama-3.1-70b-versatile"
+        self.provider = "groq"
+        
+        # 設定からモデル設定を読み込み
+        self.temperature = self._load_config_temperature()
+        self.max_tokens = self._load_config_max_tokens()
+        
         self.request_count = 0
         self.response_count = 0
         
-        # 設定ファイルからプロバイダー情報を読み込み
-        self.provider = self._load_config_provider()
-        self.model = self._load_config_model()
-        
-        self.logger.info(f"MockLLMClient初期化完了 - プロバイダー: {self.provider}, モデル: {self.model}")
+        self.logger.info(f"GroqLLMClient初期化完了 - モデル: {self.model}")
+    
+    def _load_config_api_key(self) -> Optional[str]:
+        """設定ファイルからAPIキーを読み込み（予備）"""
+        try:
+            import yaml
+            config_path = "config/config.yaml"
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    return config.get('llm_api_key') or config.get('llm', {}).get('groq', {}).get('api_key')
+            return None
+        except Exception:
+            return None
     
     def _load_config_provider(self) -> str:
         """設定ファイルからプロバイダーを読み込み"""
@@ -138,61 +163,159 @@ class MockLLMClient:
         """設定ファイルからモデルを読み込み"""
         try:
             import yaml
-            import os
-            
             config_path = "config/config.yaml"
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding='utf-8') as f:
                     config = yaml.safe_load(f)
-                    provider = config.get('llm', {}).get('provider', 'mock')
-                    if provider in config.get('llm', {}):
-                        return config['llm'][provider].get('model', 'mock-model')
-            return 'mock-model'
+                    return config.get('llm', {}).get('groq', {}).get('model', 'llama-3.1-70b-versatile')
+            return 'llama-3.1-70b-versatile'
         except Exception as e:
             self.logger.warning(f"設定ファイル読み込みエラー: {e}")
-            return 'mock-model'
+            return 'llama-3.1-70b-versatile'
+    
+    def _load_config_temperature(self) -> float:
+        """設定ファイルからtemperatureを読み込み"""
+        try:
+            import yaml
+            config_path = "config/config.yaml"
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    return config.get('llm', {}).get('groq', {}).get('temperature', 0.1)
+            return 0.1
+        except Exception:
+            return 0.1
+    
+    def _load_config_max_tokens(self) -> int:
+        """設定ファイルからmax_tokensを読み込み"""
+        try:
+            import yaml
+            config_path = "config/config.yaml"
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    return config.get('llm', {}).get('groq', {}).get('max_tokens', 8192)
+            return 8192
+        except Exception:
+            return 8192
+    
+    async def generate(self, request: LLMRequest) -> LLMResponse:
+        """Groq API呼び出し"""
+        try:
+            self.request_count += 1
+            
+            # Groq APIに送信するペイロードを準備
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "user", "content": request.prompt}
+                ],
+                "temperature": request.temperature if hasattr(request, 'temperature') else self.temperature,
+                "max_tokens": request.max_tokens if hasattr(request, 'max_tokens') else self.max_tokens,
+                "stream": False
+            }
+            
+            # システムプロンプトがある場合は追加
+            if request.metadata and 'system_prompt' in request.metadata:
+                system_prompt = request.metadata['system_prompt']
+                payload["messages"].insert(0, {"role": "system", "content": system_prompt})
+            
+            # Groq APIを呼び出し
+            import aiohttp
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://api.groq.com/openai/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status != 200:
+                        error_text = await resp.text()
+                        raise LLMClientError(f"Groq API error {resp.status}: {error_text}")
+                    
+                    result = await resp.json()
+            
+            # レスポンスの処理
+            if 'choices' not in result or not result['choices']:
+                raise LLMClientError("Groq APIからの無効なレスポンス")
+            
+            content = result['choices'][0]['message']['content']
+            usage = result.get('usage', {})
+            
+            response = LLMResponse(
+                content=content,
+                model=self.model,
+                usage={
+                    'prompt_tokens': usage.get('prompt_tokens', 0),
+                    'completion_tokens': usage.get('completion_tokens', 0),
+                    'total_tokens': usage.get('total_tokens', 0)
+                },
+                metadata={
+                    'provider': self.provider,
+                    'request_id': self.request_count,
+                    'groq_response': True
+                }
+            )
+            
+            self.response_count += 1
+            self.logger.info(f"Groq API呼び出し成功: リクエスト#{self.request_count}")
+            
+            return response
+            
+        except Exception as e:
+            self.logger.error(f"Groq API呼び出しエラー: {e}")
+            raise LLMClientError(f"Groq API呼び出しエラー: {str(e)}")
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """統計情報を取得"""
+        return {
+            'request_count': self.request_count,
+            'response_count': self.response_count,
+            'client_type': 'groq',
+            'model': self.model,
+            'provider': self.provider
+        }
+
+
+class MockLLMClient:
+    """モックLLMクライアント（フォールバック用）"""
+    
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.request_count = 0
+        self.response_count = 0
+        self.provider = "mock"
+        self.model = "mock-model"
+        
+        self.logger.info("MockLLMClient初期化完了（フォールバック用）")
     
     async def generate(self, request: LLMRequest) -> LLMResponse:
         """モック生成"""
         try:
             self.request_count += 1
             
-            # 意図分析要求の場合はJSON形式で応答
-            if "意図" in request.prompt or "分析" in request.prompt or "JSON" in request.prompt:
+            # JSON要求の場合は構造化レスポンス
+            if "JSON" in request.prompt or "action_list" in request.prompt:
                 mock_content = """{
-  "intent": "information_request",
-  "confidence": 0.85,
-  "action_type": "file_operation",
-  "parameters": {
-    "target_file": "game_doc.md",
-    "operation": "read_and_analyze"
-  }
+  "action_list": [
+    {
+      "operation": "response.echo",
+      "args": {"message": "モックLLMからの応答です"},
+      "reasoning": "実際のLLMが利用できないため、モックで応答しています"
+    }
+  ]
 }"""
-            # ファイル読み取り要求の場合は実際のファイルを読み取る
-            elif "game_doc.md" in request.prompt or "ファイル" in request.prompt or "読んで" in request.prompt:
-                try:
-                    import os
-                    if os.path.exists("game_doc.md"):
-                        with open("game_doc.md", "r", encoding="utf-8") as f:
-                            file_content = f.read()
-                        mock_content = f"""ファイル内容を確認しました。
-
-**game_doc.md の概要:**
-
-{file_content[:500]}{'...' if len(file_content) > 500 else ''}
-
-このファイルはゲーム開発に関するドキュメントのようです。詳細な内容を確認する必要がありますか？"""
-                    else:
-                        mock_content = "ファイル 'game_doc.md' が見つかりません。ファイルが存在するか確認してください。"
-                except Exception as e:
-                    mock_content = f"ファイル読み取りエラー: {str(e)}"
             else:
-                # 通常のモックレスポンス
-                mock_content = f"モックLLMレスポンス #{self.request_count}\n\n要求: {request.prompt[:100]}..."
+                mock_content = f"モックLLMレスポンス #{self.request_count}\\n\\n要求: {request.prompt[:100]}..."
             
             response = LLMResponse(
                 content=mock_content,
-                model=self.model,  # 設定ファイルのモデル名を使用
+                model=self.model,
                 usage={
                     'prompt_tokens': len(request.prompt.split()),
                     'completion_tokens': len(mock_content.split()),
@@ -201,8 +324,7 @@ class MockLLMClient:
                 metadata={
                     'mock': True, 
                     'request_id': self.request_count,
-                    'provider': self.provider,
-                    'config_model': self.model
+                    'provider': self.provider
                 }
             )
             

@@ -508,16 +508,34 @@ class LLMService:
 簡潔で実用的な要約を提供してください。
 """
             
+            self.logger.info(f"LLMService: LLM呼び出し開始 - プロンプト長: {len(prompt)}文字")
+            
             response = await self.llm_client.chat(
                 prompt=prompt,
                 max_tokens=600,
-                temperature=0.1
+                temperature=0.1,
+                tools=None,
+                tool_choice="none"
             )
             
+            # レスポンスの検証
+            if response is None:
+                self.logger.error("LLMService: LLMからNoneレスポンスが返されました")
+                return "LLMからの応答が取得できませんでした。"
+            
+            if response.content is None:
+                self.logger.error("LLMService: LLMレスポンスのcontentがNoneです")
+                return "LLMからの応答内容が取得できませんでした。"
+            
+            if not response.content.strip():
+                self.logger.error("LLMService: LLMレスポンスのcontentが空です")
+                return "LLMからの応答内容が空でした。"
+            
+            self.logger.info(f"LLMService: LLM応答成功 - 文字数: {len(response.content)}")
             return response.content
             
         except Exception as e:
-            self.logger.error(f"洞察合成エラー: {e}")
+            self.logger.error(f"洞察合成エラー: {e}", exc_info=True)
             return f"ファイル分析中にエラーが発生しました: {str(e)}"
     
     def get_service_status(self) -> Dict[str, Any]:

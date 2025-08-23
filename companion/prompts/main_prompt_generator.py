@@ -41,6 +41,9 @@ class MainPromptGenerator:
         # 短期記憶（直近の会話）を構築
         recent_conversation_flow = self._build_recent_conversation_flow(agent_state)
         
+        # 🔥 新規: 応答ガイドラインを追加
+        response_guidelines = self._build_response_guidelines()
+        
         # Main Promptを構築
         main_prompt = f"""# 現在の対話状況（ワーキングメモリ）
 
@@ -51,6 +54,9 @@ class MainPromptGenerator:
 
 # 直近の会話の流れ（短期記憶）
 {recent_conversation_flow}
+
+# 応答ガイドライン（重要）
+{response_guidelines}
 
 # 次のステップの指示
 必ず以下のJSON形式で出力してください:
@@ -148,6 +154,31 @@ class MainPromptGenerator:
             flow_parts.append(f"{i}. {role}: {content}")
         
         return "\n".join(flow_parts)
+    
+    def _build_response_guidelines(self) -> str:
+        """応答ガイドラインを構築"""
+        return """## 📝 応答ガイドライン（必須遵守）
+
+### 応答の長さ制限
+- **通常の対話応答**: 最大1000文字以内
+- **ファイル内容説明**: 最大800文字以内  
+- **エラーメッセージ**: 最大500文字以内
+- **成功報告**: 最大600文字以内
+
+### 大容量データの処理
+- **ファイル構造分析**: 要約版のみ表示（詳細はツール使用を提案）
+- **長いコード**: 重要な部分のみ表示（全体はツール使用を提案）
+- **大量ログ**: 統計情報のみ表示（詳細はツール使用を提案）
+
+### 表示方法の指針
+1. **要約優先**: 重要なポイントを最初に説明
+2. **ツール提案**: 詳細が必要な場合は適切なツール使用を提案
+3. **自然な日本語**: 読みやすく、理解しやすい表現
+4. **構造化**: 箇条書きやセクション分けを活用
+
+### 例
+❌ 悪い例: 9000文字のファイル内容をそのまま表示
+✅ 良い例: 「ファイル構造分析が完了しました。主要なセクションは...（800文字以内）。詳細が必要な場合は `file_ops.analyze_file_structure(file_path, detail_level="full")` を使用してください。」"""
     
     def update_fixed_five(self, agent_state: AgentState, 
                           goal: str = None, why_now: str = None,

@@ -100,6 +100,39 @@ class SimpleUI:
             print()
         print("-" * 50)
     
+    def echo(self, message: str, clear_previous: bool = True):
+        """AI応答を表示（重複防止・区切り表示付き）
+        
+        Args:
+            message: 表示するメッセージ
+            clear_previous: 前の応答をクリアするかどうか
+        """
+        # 前の応答をクリア（オプション）
+        if clear_previous:
+            print()  # 空行で区切り
+        
+        # 応答の開始を示す区切り線
+        print("-" * 60)
+        
+        # AI応答のヘッダー
+        print("🤖 AIアシスタント:")
+        
+        # メッセージ内容を表示
+        if len(message) > 2000:
+            # 長いメッセージは要約版を表示
+            summary = message[:2000] + "\n\n... (内容が長いため要約版を表示しています)"
+            print(summary)
+            
+            # 詳細表示の提案
+            print("\n💡 詳細が必要な場合は、適切なツールを使用してください。")
+        else:
+            # 通常のメッセージ表示
+            print(message)
+        
+        # 応答の終了を示す区切り線
+        print("-" * 60)
+        print()  # 空行で区切り
+    
     def get_user_input(self, prompt: str = "", default: str = "") -> str:
         """ユーザー入力取得（EnhancedDualLoopSystem用）"""
         if prompt:
@@ -206,6 +239,39 @@ class RichUI:
         """Markdown表示"""
         md = Markdown(markdown_text)
         self.console.print(md)
+    
+    def echo(self, message: str, clear_previous: bool = True):
+        """AI応答を表示（重複防止・区切り表示付き）
+        
+        Args:
+            message: 表示するメッセージ
+            clear_previous: 前の応答をクリアするかどうか
+        """
+        # 前の応答をクリア（オプション）
+        if clear_previous:
+            self.console.print()  # 空行で区切り
+        
+        # 応答の開始を示す区切り線
+        self.console.print("─" * 60, style="dim")
+        
+        # AI応答のヘッダー
+        self.console.print("🤖 AIアシスタント:", style="bold green")
+        
+        # メッセージ内容を表示
+        if len(message) > 2000:
+            # 長いメッセージは要約版を表示
+            summary = message[:2000] + "\n\n... (内容が長いため要約版を表示しています)"
+            self.console.print(summary, style="white")
+            
+            # 詳細表示の提案
+            self.console.print("\n💡 詳細が必要な場合は、適切なツールを使用してください。", style="dim")
+        else:
+            # 通常のメッセージ表示
+            self.console.print(message, style="white")
+        
+        # 応答の終了を示す区切り線
+        self.console.print("─" * 60, style="dim")
+        self.console.print()  # 空行で区切り
     
     def input(self, prompt: str = "") -> str:
         """ユーザー入力"""

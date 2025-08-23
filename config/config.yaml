@@ -60,6 +60,30 @@ enable_sandbox: true
 restrict_file_access: true
 allowed_directories: ["./work", "./temp"]
 
+# 応答制限設定（新規追加）
+response_control:
+  # 応答制限の有効化
+  enable_prompt_level_control: true
+  default_max_length: 1000
+  
+  # 操作別制限
+  length_limits:
+    echo: 1000
+    file_analysis: 800
+    plan_display: 1200
+    error_message: 500
+    success_message: 600
+  
+  # 制御方法
+  control_method: "prompt_instruction"  # prompt_instruction, truncation, summary
+  
+  # LLM要約設定
+  llm_summary:
+    enabled: true
+    max_tokens: 1000
+    temperature: 0.3
+    fallback_to_simple: true
+
 # 詳細LLM設定（既存の構造を保持）
 llm:
   # メインプロバイダー (openai, anthropic, google, groq, openrouter)

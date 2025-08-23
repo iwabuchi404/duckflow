@@ -28,7 +28,13 @@ class E2ETestRunner:
         Args:
             duckflow_system: DuckflowCompanionインスタンス（テスト用）
         """
-        self.duckflow_system = duckflow_system
+        # duckflow_systemが提供されない場合、ここでインスタンス化
+        if duckflow_system is None:
+            from companion.enhanced_dual_loop import EnhancedDualLoopSystem
+            self.duckflow_system = EnhancedDualLoopSystem()
+        else:
+            self.duckflow_system = duckflow_system
+        
         self.test_llm = None
         self.evaluator = ConversationEvaluator()
         self.logger = None
@@ -54,9 +60,12 @@ class E2ETestRunner:
             
             self.runner_logger.info(f"Starting test: {scenario_config['name']}")
             
+            # シナリオの主題を特定（'scenario'または'turns'の最初の要素）
+            scenario_prompt = scenario_config.get("scenario") or scenario_config.get("turns", [""])[0]
+
             # コンポーネントの初期化
             self.test_llm = ConversationTestLLM(
-                scenario=scenario_config["scenario"],
+                scenario=scenario_prompt,
                 evaluation_criteria=scenario_config["evaluation_criteria"]
             )
             
@@ -69,7 +78,7 @@ class E2ETestRunner:
             # 評価実行
             evaluation_result = self.evaluator.evaluate_conversation(
                 log=self.logger.log,
-                scenario=scenario_config["scenario"],
+                scenario=scenario_prompt,
                 evaluation_criteria=scenario_config["evaluation_criteria"]
             )
             
@@ -108,46 +117,53 @@ class E2ETestRunner:
         start_time = time.time()
         
         try:
-            # テスト設定の取得
             test_config = scenario_config.get("test_config", {})
             max_exchanges = test_config.get("max_exchanges", 10)
             timeout_minutes = test_config.get("timeout_minutes", 5)
-            
-            # 最初のユーザー入力を生成
-            user_input = self.test_llm.generate_first_input()
-            
+
+            # --- 対話形式の分岐 ---
+            if "turns" in scenario_config:
+                # --- 形式1: `turns` リストによる厳密な対話 ---
+                self.runner_logger.info("Running in 'turns' mode (scripted conversation).")
+                turn_based = True
+                user_turns = scenario_config["turns"]
+                max_exchanges = len(user_turns) # ターン数でループを制御
+            else:
+                # --- 形式2: `scenario` に基づくAI駆動の対話 ---
+                self.runner_logger.info("Running in 'scenario' mode (AI-driven conversation).")
+                turn_based = False
+                user_input = scenario_config["scenario"]
+
             # 対話ループ
             for exchange_num in range(max_exchanges):
-                # タイムアウトチェック
                 if (time.time() - start_time) > (timeout_minutes * 60):
                     self.logger.set_completion_status("timeout", "時間制限に達しました")
                     break
                 
-                # Duckflowに入力を送信（モック版）
+                # 現在のユーザー入力を決定
+                if turn_based:
+                    user_input = user_turns[exchange_num]
+
+                if not user_input:
+                    break
+
                 duckflow_response = await self._send_to_duckflow(user_input)
-                
-                # ログに記録
                 self.logger.log_exchange(user_input, duckflow_response)
                 
-                # 終了条件チェック
-                if self.test_llm.should_terminate(duckflow_response):
-                    self.logger.set_completion_status("completed", "正常終了")
-                    break
-                
-                # 次のユーザー入力を生成
-                user_input = self.test_llm.generate_next_input(self.logger.log["exchanges"])
-                
-                # 明示的な終了要求チェック
-                if "テスト完了" in user_input or "テスト中断" in user_input:
-                    self.logger.set_completion_status("completed", "テスト終了要求")
-                    break
+                # AI駆動の場合のみ、次の入力を生成
+                if not turn_based:
+                    if self.test_llm.should_terminate(duckflow_response):
+                        self.logger.set_completion_status("completed", "正常終了")
+                        break
+                    user_input = self.test_llm.generate_next_input(self.logger.log["exchanges"])
+                    if "テスト完了" in user_input or "テスト中断" in user_input:
+                        self.logger.set_completion_status("completed", "テスト終了要求")
+                        break
             
-            else:
-                # ループが最大回数に達した場合
+            else: # for-else loop
                 self.logger.set_completion_status("completed", "最大対話数に達しました")
             
             duration = time.time() - start_time
-            
             return {
                 "duration": duration,
                 "exchanges": len(self.logger.log["exchanges"]),
@@ -158,9 +174,9 @@ class E2ETestRunner:
             self.logger.set_completion_status("failed", f"対話実行エラー: {str(e)}")
             self.logger.log_error(str(e), "conversation_execution")
             raise
-    
+
     async def _send_to_duckflow(self, user_input: str) -> str:
-        """Duckflowに入力を送信（現在はモック版）
+        """Duckflowに入力を送信
         
         Args:
             user_input: ユーザー入力
@@ -168,28 +184,25 @@ class E2ETestRunner:
         Returns:
             Duckflowの応答
         """
-        # TODO: 実際のDuckflowシステムとの統合
-        # 現在はモック応答を返す
-        
-        await asyncio.sleep(0.5)  # 処理時間をシミュレート
-        
-        # 簡単なパターンマッチング応答
-        if "hello.py" in user_input.lower() and "作" in user_input:
-            return "hello.pyファイルを作成します。以下の内容で作成してよろしいですか？\\n\\n```python\\nprint('Hello World')\\n```\\n\\n承認してください。"
-        
-        elif "はい" in user_input or "ok" in user_input.lower() or "進めて" in user_input:
-            # ファイル操作をログに記録
-            self.logger.log_file_operation("create", "hello.py", "print('Hello World')")
-            return "hello.pyファイルを作成しました。ファイルにはHello Worldを出力するコードが含まれています。"
-        
-        elif "ファイル" in user_input and "確認" in user_input:
-            return "hello.pyファイルの内容:\\n```python\\nprint('Hello World')\\n```\\n\\nファイルは正常に作成されています。"
-        
-        elif "テスト完了" in user_input:
-            return "テストが完了しました。お疲れさまでした。"
-        
-        else:
-            return f"申し訳ありませんが、「{user_input}」についてはよく理解できませんでした。もう少し具体的に教えてください。"
+        try:
+            # 実際のDuckflowコアの入力処理メソッドを呼び出す
+            # Note: companion_coreはv7ではenhanced_companionに名前変更
+            if not self.duckflow_system or not hasattr(self.duckflow_system, 'enhanced_companion'):
+                self.runner_logger.error("Duckflowシステムが正しく初期化されていません。")
+                return "エラー: Duckflowシステムが初期化されていません。"
+
+            response = await self.duckflow_system.enhanced_companion.process_user_input(user_input)
+            
+            # 応答がNoneの場合、空文字列に変換
+            if response is None:
+                self.runner_logger.warning("Duckflowからの応答がNoneでした。")
+                return ""
+            
+            return str(response)
+            
+        except Exception as e:
+            self.runner_logger.error(f"Duckflowへの送信中にエラーが発生しました: {e}", exc_info=True)
+            return f"エラーが発生しました: {e}"
     
     def _load_scenario(self, scenario_file: str) -> Dict:
         """シナリオファイルを読み込み
@@ -205,10 +218,14 @@ class E2ETestRunner:
                 scenario_config = yaml.safe_load(f)
             
             # 必須フィールドの検証
-            required_fields = ["name", "scenario", "evaluation_criteria"]
-            for field in required_fields:
+            base_required_fields = ["name", "evaluation_criteria"]
+            for field in base_required_fields:
                 if field not in scenario_config:
                     raise ValueError(f"Required field '{field}' missing in scenario file")
+
+            # 'scenario' または 'turns' のいずれかが存在するかを検証
+            if "scenario" not in scenario_config and "turns" not in scenario_config:
+                raise ValueError("Required field 'scenario' or 'turns' missing in scenario file")
             
             return scenario_config
             

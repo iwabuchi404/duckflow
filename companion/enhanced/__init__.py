@@ -1,14 +1,13 @@
 """
-Enhanced v2.0 専用モジュール
+Enhanced v2.0 専用モジュール (v7対応版)
 
 状態管理統一版のChatLoopとTaskLoopを提供。
-AgentStateを直接参照し、StateMachineへの依存を完全に排除。
 """
 
-from .chat_loop import EnhancedChatLoop
-from .task_loop import EnhancedTaskLoop
+from .chat_loop import EnhancedChatLoopV7
+from .task_loop import TaskLoopV7
 
 __all__ = [
-    'EnhancedChatLoop',
-    'EnhancedTaskLoop'
+    'EnhancedChatLoopV7',
+    'TaskLoopV7'
 ]
