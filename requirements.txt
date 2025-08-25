@@ -16,6 +16,8 @@ pydantic>=2.5.0
 pyyaml>=6.0.1
 python-dotenv>=1.0.0
 chardet>=5.2.0
+Jinja2>=3.1.0
+jsonschema>=4.0.0
 
 # File system and path handling
 pathlib

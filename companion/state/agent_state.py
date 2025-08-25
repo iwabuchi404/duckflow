@@ -166,12 +166,12 @@ class AgentState(BaseModel):
 
     # 既存フィールド（互換性維持）
     conversation_history: List[ConversationMessage] = Field(default_factory=list, description="対話履歴")
-    current_task: Optional[str] = Field(default=None, description="現在実行中のタスク")
+    current_task: Optional[Dict[str, Any]] = Field(default=None, description="現在実行中のタスク")
     task_steps: List[TaskStep] = Field(default_factory=list, description="タスクのステップ一覧")
     workspace: Optional[WorkspaceInfo] = Field(default=None, description="ワークスペース情報")
     tool_executions: List[ToolExecution] = Field(default_factory=list, description="ツール実行履歴")
     graph_state: GraphState = Field(default_factory=GraphState, description="グラフの実行状態")
-    session_id: str = Field(description="セッションID")
+    session_id: str = Field(default_factory=lambda: f"session_{uuid.uuid4().hex[:8]}", description="セッションID")
     created_at: datetime = Field(default_factory=datetime.now, description="セッション開始時刻")
     last_activity: datetime = Field(default_factory=datetime.now, description="最終活動時刻")
     debug_mode: bool = Field(default=False, description="デバッグモード")
@@ -189,6 +189,9 @@ class AgentState(BaseModel):
     approval_result: Optional[str] = Field(default=None, description="人間承認の結果")
     collected_context: Dict[str, Any] = Field(default_factory=dict, description="収集済みコンテキスト")
     rag_context: List[Dict[str, Any]] = Field(default_factory=list, description="直近のRAG検索結果")
+    
+    # タスク管理用フィールド
+    tasks: List[Dict[str, Any]] = Field(default_factory=list, description="タスク一覧")
 
     def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """AgentStateに会話メッセージを追加"""
@@ -201,6 +204,32 @@ class AgentState(BaseModel):
         
         # 会話メッセージからコンテキストを抽出
         self._extract_context_from_message(role, content)
+
+    def add_conversation_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """会話履歴にメッセージを追加"""
+        try:
+            message = ConversationMessage(
+                role=role,
+                content=content,
+                metadata=metadata or {}
+            )
+            self.conversation_history.append(message)
+            
+            # 会話履歴が長すぎる場合は要約を作成
+            if self.needs_memory_management():
+                self.create_memory_summary()
+                
+            # 短期記憶に会話履歴の更新を記録
+            self._update_short_term_memory_conversation_update()
+            
+        except Exception as e:
+            # エラー時はログに記録（ロガーが利用可能な場合）
+            try:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"会話履歴追加エラー: {e}")
+            except:
+                pass
 
     def set_fixed_five(self, goal: str = "", why_now: str = "", constraints: Optional[List[str]] = None,
                        plan_brief: Optional[List[str]] = None, open_questions: Optional[List[str]] = None) -> None:
@@ -298,11 +327,77 @@ class AgentState(BaseModel):
     def clear_short_term_memory(self, key: Optional[str] = None) -> None:
         """短期記憶をクリア"""
         if key is None:
-            # 全クリア
             self.short_term_memory.clear()
-        elif key in self.short_term_memory:
-            # 特定のキーのみクリア
-            del self.short_term_memory[key]
+        else:
+            self.short_term_memory.pop(key, None)
+        
+        self.last_delta = "short_term_memory_cleared"
+    
+    # --- Pecking Orderシステムの状態管理機能 ---
+    
+    # Pecking Orderシステムの状態
+    current_task: Optional[Dict[str, Any]] = Field(default=None, description="現在実行中のタスク")
+    task_hierarchy: Optional[Dict[str, Any]] = Field(default=None, description="タスク階層情報")
+    task_progress: Dict[str, Any] = Field(default_factory=dict, description="タスク進捗情報")
+    
+    def set_current_task(self, task_info: Dict[str, Any]) -> None:
+        """現在のタスクを設定"""
+        self.current_task = task_info
+        self.last_delta = "current_task_updated"
+        
+        # 短期記憶にタスク情報を保存
+        self.add_short_term_memory('current_task', task_info)
+    
+    def update_task_progress(self, progress_info: Dict[str, Any]) -> None:
+        """タスク進捗を更新"""
+        self.task_progress.update(progress_info)
+        self.last_delta = "task_progress_updated"
+        
+        # 短期記憶に進捗情報を保存
+        self.add_short_term_memory('task_progress', progress_info)
+    
+    def set_task_hierarchy(self, hierarchy_info: Dict[str, Any]) -> None:
+        """タスク階層を設定"""
+        self.task_hierarchy = hierarchy_info
+        self.last_delta = "task_hierarchy_updated"
+        
+        # 短期記憶に階層情報を保存
+        self.add_short_term_memory('task_hierarchy', hierarchy_info)
+    
+    def get_task_status_summary(self) -> str:
+        """タスク状態の要約を取得"""
+        try:
+            if not self.current_task:
+                return "現在実行中のタスクはありません"
+            
+            summary_lines = []
+            summary_lines.append(f"現在のタスク: {self.current_task.get('title', '不明')}")
+            summary_lines.append(f"説明: {self.current_task.get('description', '説明なし')}")
+            summary_lines.append(f"状態: {self.current_task.get('status', '不明')}")
+            
+            if self.task_progress:
+                total = self.task_progress.get('total', 0)
+                completed = self.task_progress.get('completed', 0)
+                if total > 0:
+                    percentage = (completed / total) * 100
+                    summary_lines.append(f"進捗: {completed}/{total} 完了 ({percentage:.1f}%)")
+            
+            return "\n".join(summary_lines)
+            
+        except Exception as e:
+            return "タスク状態の取得に失敗しました"
+    
+    def clear_task_state(self) -> None:
+        """タスク状態をクリア"""
+        self.current_task = None
+        self.task_hierarchy = None
+        self.task_progress.clear()
+        self.last_delta = "task_state_cleared"
+        
+        # 短期記憶からタスク関連情報を削除
+        self.clear_short_term_memory('current_task')
+        self.clear_short_term_memory('task_progress')
+        self.clear_short_term_memory('task_hierarchy')
 
     def _update_short_term_memory_from_conversation(self) -> None:
         """会話履歴から短期記憶を更新"""
@@ -602,6 +697,38 @@ class AgentState(BaseModel):
             # エラー時は無視
             pass
 
+    def _update_short_term_memory_conversation_update(self) -> None:
+        """短期記憶に会話履歴更新を記録"""
+        try:
+            self.add_short_term_memory(
+                "conversation_updates",
+                {
+                    "count": len(self.conversation_history),
+                    "last_update": datetime.now().isoformat()
+                }
+            )
+        except Exception:
+            pass
+
+    def get_conversation_history(self) -> List[ConversationMessage]:
+        """会話履歴を取得（互換API）"""
+        return self.conversation_history
+
+    def get_conversation_summary(self) -> str:
+        """会話履歴の要約を取得"""
+        if not self.conversation_history:
+            return "会話履歴がありません"
+        
+        recent_messages = self.conversation_history[-20:]  # 最新20件
+        summary_lines = []
+        
+        for msg in recent_messages:
+            role_emoji = "👤" if msg.role == "user" else "🤖" if msg.role == "assistant" else "⚙️"
+            content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+            summary_lines.append(f"{role_emoji} {msg.role}: {content_preview}")
+        
+        return "\n".join(summary_lines)
+
     @property
     def session_start_time(self) -> Optional[datetime]:
         """セッション開始時刻を取得（互換性のため）"""
@@ -643,16 +770,16 @@ class AgentState(BaseModel):
 
     def needs_memory_management(self) -> bool:
         """記憶管理が必要かチェック"""
-        return len(self.conversation_history) > 20
+        return len(self.conversation_history) > 30
 
     def create_memory_summary(self) -> bool:
         """記憶要約を作成"""
         try:
-            if len(self.conversation_history) <= 10:
+            if len(self.conversation_history) <= 20:
                 return False
             
-            recent_messages = self.conversation_history[-10:]
-            old_messages = self.conversation_history[:-10]
+            recent_messages = self.conversation_history[-20:]
+            old_messages = self.conversation_history[:-20]
             
             if old_messages:
                 summary_content = f"過去{len(old_messages)}件のメッセージを要約"
@@ -710,7 +837,7 @@ class AgentState(BaseModel):
         # 最新の会話履歴を取得、短期記憶と統合
         recent_messages = []
         if self.conversation_history:
-            for msg in self.conversation_history[-3:]:  # 最新3件
+            for msg in self.conversation_history[-10:]:  # 最新10件
                 recent_messages.append({
                     "role": msg.role,
                     "content": msg.content[:200] + "..." if len(msg.content) > 200 else msg.content,

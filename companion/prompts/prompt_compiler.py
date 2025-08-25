@@ -100,6 +100,86 @@ class PromptCompiler:
         
         return variables
     
+    def _load_response_templates(self) -> Dict[str, str]:
+        """応答生成用テンプレートを読み込み"""
+        return {
+            "file_analysis": self._get_file_analysis_response_template(),
+            "search_result": self._get_search_result_response_template(),
+            "plan_generation": self._get_plan_generation_response_template(),
+            "error": self._get_error_response_template(),
+            "generic": self._get_generic_response_template()
+        }
+    
+    def _get_file_analysis_response_template(self) -> str:
+        """ファイル分析結果用の応答テンプレート"""
+        return """
+ファイル分析が完了しました。以下の結果をお伝えします：
+
+{{file_analysis_summary}}
+
+分析の詳細：
+{{file_analysis_details}}
+
+{{next_steps_suggestion}}
+"""
+    
+    def _get_search_result_response_template(self) -> str:
+        """検索結果用の応答テンプレート"""
+        return """
+検索が完了しました。以下の結果が見つかりました：
+
+検索パターン: {{search_pattern}}
+対象ファイル: {{target_file}}
+マッチ件数: {{match_count}}
+
+検索結果：
+{{search_results}}
+
+{{next_steps_suggestion}}
+"""
+    
+    def _get_plan_generation_response_template(self) -> str:
+        """プラン生成用の応答テンプレート"""
+        return """
+タスク分析が完了し、実行プランが生成されました：
+
+メインタスク: {{main_task}}
+サブタスク数: {{subtask_count}}
+
+実行プラン：
+{{execution_plan}}
+
+{{next_steps_suggestion}}
+"""
+    
+    def _get_error_response_template(self) -> str:
+        """エラー用の応答テンプレート"""
+        return """
+申し訳ありません。処理中にエラーが発生しました：
+
+エラーの種類: {{error_type}}
+エラーの内容: {{error_message}}
+
+対処法：
+{{error_solution}}
+
+{{next_steps_suggestion}}
+"""
+    
+    def _get_generic_response_template(self) -> str:
+        """汎用応答テンプレート"""
+        return """
+処理が完了しました。
+
+実行されたアクション：
+{{action_summary}}
+
+結果：
+{{result_summary}}
+
+{{next_steps_suggestion}}
+"""
+    
     def compile_prompt(self, template_name: str, variables: Dict[str, Any]) -> str:
         """プロンプトをコンパイル"""
         try:
@@ -210,6 +290,41 @@ class PromptCompiler:
             self.logger.error(f"記憶統合プロンプトコンパイルエラー: {e}")
             # エラー時は基本コンテキストのみを返す
             return base_context
+    
+    def compile_response_prompt(self, 
+                              pattern: str,
+                              action_results: List[Dict[str, Any]],
+                              user_input: str,
+                              agent_state: Optional[AgentState] = None) -> str:
+        """応答生成用のプロンプトをコンパイル"""
+        
+        try:
+            self.logger.info(f"応答生成用プロンプトコンパイル開始: pattern={pattern}")
+            
+            # Base層：システム設定・制約・安全ルール
+            base_context = self._build_response_base_context(agent_state)
+            
+            # Main層：会話履歴・短期記憶・現在の状況
+            main_context = self._build_response_main_context(action_results, user_input, agent_state)
+            
+            # Specialized層：応答生成用テンプレート・専門知識
+            specialized_context = self._build_response_specialized_context(action_results, user_input)
+            
+            # 既存のcompile_with_memoryメソッドを使用
+            result = self.compile_with_memory(
+                pattern=pattern,
+                base_context=base_context,
+                main_context=main_context,
+                specialized_context=specialized_context,
+                agent_state=agent_state
+            )
+            
+            self.logger.info(f"応答生成用プロンプトコンパイル完了: pattern={pattern}, 長さ={len(result)}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"応答生成用プロンプトコンパイルエラー: {e}")
+            return f"応答生成用プロンプトコンパイルエラー: {str(e)}"
     
     def _inject_memory_to_base(self, base_context: str, memory_data: Dict[str, Any]) -> str:
         """Base層に基本記憶データを注入"""
@@ -669,6 +784,170 @@ class PromptCompiler:
             'templates': {name: template.to_dict() for name, template in self.templates.items()},
             'statistics': self.get_statistics()
         }
+    
+    def _build_response_base_context(self, agent_state: Optional[AgentState] = None) -> str:
+        """応答生成のBase層コンテキストを構築"""
+        
+        base_context = """
+あなたはDuckflowのAIアシスタントです。
+以下のルールに従って、ユーザーへの適切な応答を生成してください：
+
+1. 実行されたアクションの結果を分かりやすく説明する
+2. エラーが発生した場合は、原因と対処法を説明する
+3. 次のステップの提案がある場合は、具体的に示す
+4. 専門的すぎる用語は避け、一般ユーザーが理解できる表現を使用する
+5. 応答は自然な日本語で、親しみやすい口調にする
+
+📋 重要な指示:
+- アクション結果のデータを活用して、具体的で有用な情報を提供してください
+- ファイル分析、検索、読み込みの結果がある場合は、その内容を要約して説明してください
+- 「ファイルを参照できない」などの誤った説明は避けてください
+- 実際に実行されたアクションの結果を基に応答を生成してください
+
+ タスク管理について:
+- タスク操作ツールを使用して、適切にタスクを管理してください
+- 新しいタスクの開始が必要な場合は、start_task()を使用してください
+- タスクの完了を判断した場合は、complete_task()を使用してください
+- タスクの進行状況を把握し、効率的に作業を進めてください
+
+📚 利用可能なタスク操作ツール:
+1. start_task(title: str, description: str) - 新しいタスクを開始
+2. complete_task(task_id: str, summary: str) - タスクを完了し要約を保存
+3. add_task_result(task_id: str, result: str) - タスクに結果を追加
+4. get_task_status(task_id: str) - タスクの状態を取得
+5. list_tasks() - 全タスクの一覧を取得
+
+⚠️ 重要: ツールや関数の呼び出しは一切行わないでください。純粋なテキスト応答のみを生成してください。
+
+🚫 禁止事項:
+- tool.read_file などのツール呼び出し
+- 関数実行の指示
+- コードの実行
+- システムコマンドの実行
+- 「ファイルを参照できない」などの誤った説明
+
+✅ 許可事項:
+- テキストベースの説明
+- 結果の要約
+- 次のステップの提案
+- エラーの説明と対処法
+- アクション結果の内容を活用した具体的な説明
+"""
+        
+        # タスク状態情報を追加
+        if agent_state:
+            task_summary = self._get_task_status_summary(agent_state)
+            base_context += f"\n\n--- 現在のタスク状態 ---\n{task_summary}"
+        
+        return base_context
+    
+    def _build_response_main_context(self, action_results: List[Dict[str, Any]], user_input: str, agent_state: Optional[AgentState] = None) -> str:
+        """応答生成のMain層コンテキストを構築"""
+        
+        context_lines = [f"ユーザーの要求: {user_input}"]
+        
+        # 会話履歴を追加
+        if agent_state and hasattr(agent_state, 'conversation_history') and agent_state.conversation_history:
+            context_lines.append("\n--- 会話履歴 ---")
+            # 最新10件の会話履歴を表示
+            recent_messages = agent_state.conversation_history[-10:]
+            for i, msg in enumerate(recent_messages, 1):
+                role_emoji = "👤" if msg.role == "user" else "🤖" if msg.role == "assistant" else "⚙️"
+                content_preview = msg.content[:150] + "..." if len(msg.content) > 150 else msg.content
+                context_lines.append(f"{i}. {role_emoji} {msg.role}: {content_preview}")
+            context_lines.append("")
+        
+        context_lines.append("実行されたアクションと結果:")
+        
+        for i, result in enumerate(action_results, 1):
+            context_lines.append(f"{i}. 操作: {result.get('operation', '不明')}")
+            context_lines.append(f"   成功: {result.get('success', False)}")
+            
+            # 結果の詳細を表示
+            if result.get('data'):
+                data = result['data']
+                if isinstance(data, dict):
+                    # 辞書データの場合は主要な情報を抽出
+                    if 'file_path' in data:
+                        context_lines.append(f"   ファイル: {data['file_path']}")
+                    if 'total_lines' in data:
+                        context_lines.append(f"   総行数: {data['total_lines']}")
+                    if 'total_chars' in data:
+                        context_lines.append(f"   文字数: {data['total_chars']}")
+                    if 'headers' in data:
+                        context_lines.append(f"   ヘッダー数: {len(data['headers'])}")
+                    if 'sections' in data:
+                        context_lines.append(f"   セクション数: {len(data['sections'])}")
+                    if 'matches' in data:
+                        context_lines.append(f"   マッチ数: {len(data['matches'])}")
+                else:
+                    context_lines.append(f"   データ: {str(data)[:100]}...")
+            
+            if result.get('summary'):
+                context_lines.append(f"   要約: {result['summary']}")
+            
+            if result.get('error_message'):
+                context_lines.append(f"   エラー: {result['error_message']}")
+            context_lines.append("")
+        
+        # タスク状態情報を追加
+        if agent_state:
+            context_lines.append("--- タスク状態 ---")
+            context_lines.append(self._get_task_status_summary(agent_state))
+        
+        # タスク履歴を追加（新規）
+        if agent_state and hasattr(agent_state, 'tasks') and agent_state.tasks:
+            context_lines.append("--- タスク履歴 ---")
+            for task in agent_state.tasks[-5:]:  # 最新5件
+                status_emoji = "✅" if task.get("status") == "completed" else "🔄"
+                context_lines.append(f"{status_emoji} {task.get('title', '不明')}")
+                context_lines.append(f"   ID: {task.get('task_id', '不明')}")
+                context_lines.append(f"   説明: {task.get('description', '説明なし')}")
+                if task.get("summary"):
+                    context_lines.append(f"   完了要約: {task['summary']}")
+                context_lines.append("")
+        
+        return "\n".join(context_lines)
+    
+    def _build_response_specialized_context(self, action_results: List[Dict[str, Any]], user_input: str) -> str:
+        """応答生成のSpecialized層コンテキストを構築"""
+        
+        # アクションの種類に基づいてテンプレートを選択
+        if any("analyze_file" in str(result.get('operation', '')) for result in action_results):
+            return self._get_file_analysis_response_template()
+        elif any("search_content" in str(result.get('operation', '')) for result in action_results):
+            return self._get_search_result_response_template()
+        elif any("generate_plan" in str(result.get('operation', '')) for result in action_results):
+            return self._get_plan_generation_response_template()
+        else:
+            return self._get_generic_response_template()
+    
+    def _get_task_status_summary(self, agent_state: AgentState) -> str:
+        """タスク状態の要約を取得"""
+        try:
+            # 既存のタスク状態管理機能がある場合は使用
+            if hasattr(agent_state, 'get_task_status_summary'):
+                return agent_state.get_task_status_summary()
+            
+            # 基本的な状態情報を構築
+            summary_lines = []
+            if hasattr(agent_state, 'current_task') and agent_state.current_task:
+                summary_lines.append(f"現在のタスク: {agent_state.current_task.get('title', '不明')}")
+                summary_lines.append(f"説明: {agent_state.current_task.get('description', '説明なし')}")
+                summary_lines.append(f"状態: {agent_state.current_task.get('status', '不明')}")
+            
+            if hasattr(agent_state, 'task_progress') and agent_state.task_progress:
+                total = agent_state.task_progress.get('total', 0)
+                completed = agent_state.task_progress.get('completed', 0)
+                if total > 0:
+                    percentage = (completed / total) * 100
+                    summary_lines.append(f"進捗: {completed}/{total} 完了 ({percentage:.1f}%)")
+            
+            return "\n".join(summary_lines) if summary_lines else "現在実行中のタスクはありません"
+            
+        except Exception as e:
+            self.logger.warning(f"タスク状態要約取得エラー: {e}")
+            return "タスク状態の取得に失敗しました"
 
 
 # グローバルインスタンス

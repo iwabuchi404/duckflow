@@ -11,8 +11,11 @@ import os
 project_root = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, project_root)
 
-# UTF-8エンコーディング設定
-os.environ['PYTHONIOENCODING'] = 'utf-8'
+# 文字コード設定の一元化されたモジュールをインポート
+from companion.config.encoding_config import setup_encoding_once
+
+# メインエントリーポイントでの環境変数設定を実行
+setup_encoding_once()
 
 if __name__ == "__main__":
     try:

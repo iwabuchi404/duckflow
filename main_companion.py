@@ -13,6 +13,55 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+import sys
+import io
+
+def setup_companion_encoding_environment():
+    """Companion起動時の文字コード環境変数を設定"""
+    try:
+        # Python標準出力のエンコーディング設定
+        os.environ['PYTHONIOENCODING'] = 'utf-8'
+        os.environ['PYTHONLEGACYWINDOWSSTDIO'] = 'utf-8'
+        
+        # Windows固有の設定
+        os.environ['PYTHONUTF8'] = '1'
+        
+        # ロケール設定
+        os.environ['LC_ALL'] = 'C.UTF-8'
+        os.environ['LANG'] = 'C.UTF-8'
+        
+        # 標準出力のエンコーディングを強制設定
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+            sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+        else:
+            # 古いPythonバージョン用
+            sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        
+        # Windows環境でのコンソールコードページ設定
+        if sys.platform == "win32":
+            try:
+                os.system('chcp 65001 > nul 2>&1')
+            except Exception:
+                pass
+        
+        print("✅ Companion文字コード環境設定完了")
+        print(f"PYTHONIOENCODING: {os.environ.get('PYTHONIOENCODING', '未設定')}")
+        print(f"PYTHONLEGACYWINDOWSSTDIO: {os.environ.get('PYTHONLEGACYWINDOWSSTDIO', '未設定')}")
+        print(f"PYTHONUTF8: {os.environ.get('PYTHONUTF8', '未設定')}")
+        
+    except Exception as e:
+        print(f"⚠️ Companion文字コード環境設定でエラー: {e}")
+
+# Companion起動時の環境変数設定を実行
+setup_companion_encoding_environment()
+
+# Windows環境でのUnicodeEncodeErrorを防ぐため、標準出力のエンコーディングをUTF-8に設定
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 # プロジェクトルートをPythonパスに追加
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))

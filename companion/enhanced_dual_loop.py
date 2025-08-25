@@ -18,16 +18,13 @@ from typing import Optional, Dict, Any
 # 既存のimport
 try:
     from .state.agent_state import AgentState
-    from .enhanced_core import EnhancedCompanionCoreV7
-    from .enhanced.chat_loop import EnhancedChatLoopV7
-    from .enhanced.task_loop import TaskLoopV7
+    from .enhanced_core_v8 import EnhancedCompanionCoreV8
     from .config.encoding_config import setup_encoding_once
-except ImportError:
+except ImportError as e:
+    print(f"DEBUG: Import error: {e}")
     # フォールバック用のダミークラス
     class AgentState: pass
-    class EnhancedCompanionCoreV7: pass
-    class EnhancedChatLoopV7: pass
-    class TaskLoopV7: pass
+    class EnhancedCompanionCoreV8: pass
     def setup_encoding_once(): pass
 
 # v7アーキテクチャのコンポーネントをインポート
@@ -36,7 +33,6 @@ from .llm.llm_service import LLMService
 from .llm.llm_client import LLMClient
 from .intent_understanding.intent_analyzer_llm import IntentAnalyzerLLM
 from .prompts.prompt_context_service import PromptContextService
-from .ui import rich_ui
 
 class EnhancedDualLoopSystem:
     """v7: 中央指令型タスク実行モデルに基づくDual-Loop System"""
@@ -53,7 +49,7 @@ class EnhancedDualLoopSystem:
         self.status_queue = queue.Queue()
         
         # AgentStateを中央の状態管理として初期化
-        self.agent_state = AgentState(session_id=self.session_id)
+        self.agent_state = AgentState()
 
         # 🔥 新規: EnhancedCompanionCoreV7が必要とする属性を追加
         try:
@@ -67,10 +63,11 @@ class EnhancedDualLoopSystem:
         try:
             from .llm.llm_service import LLMService
             from .llm.llm_client import LLMClient
-            llm_client = LLMClient()
-            self.llm_service = LLMService(llm_client)
+            self.llm_client = LLMClient()
+            self.llm_service = LLMService(self.llm_client)
             self.logger.info("LLMService が初期化されました")
         except ImportError:
+            self.llm_client = None
             self.llm_service = None
             self.logger.warning("LLMService の初期化に失敗しました")
         
@@ -90,23 +87,16 @@ class EnhancedDualLoopSystem:
             self.prompt_context_service = None
             self.logger.warning("PromptContextService の初期化に失敗しました")
 
-        # v7のコアとループを初期化
-        self.enhanced_companion = EnhancedCompanionCoreV7(self) 
+        # v8のコアとループを初期化
+        self.enhanced_companion = EnhancedCompanionCoreV8(self)
         
-        self.chat_loop = EnhancedChatLoopV7(
-            task_queue=self.task_queue, 
-            status_queue=self.status_queue, 
-            companion_core=self.enhanced_companion
-        )
-        self.task_loop = TaskLoopV7(
-            task_queue=self.task_queue, 
-            status_queue=self.status_queue, 
-            agent_state=self.agent_state
-        )
+        # 簡略化されたループ（存在しないクラスの代わり）
+        self.chat_loop = None
+        self.task_loop = None
         
         self.task_thread: Optional[threading.Thread] = None
         self.running = False
-        self.logger.info("EnhancedDualLoopSystem (v7) が初期化されました。")
+        self.logger.info("EnhancedDualLoopSystem (v8) - JSON+LLM方式 が初期化されました。")
 
     def start(self):
         if self.running:
@@ -114,31 +104,145 @@ class EnhancedDualLoopSystem:
             return
 
         self.running = True
-        rich_ui.print_message("🦆 Duckflow v7 アーキテクチャで起動中...", "success")
-        rich_ui.print_message(f"📋 セッションID: {self.session_id}", "info")
-
-        self.task_thread = threading.Thread(target=self.task_loop.run, daemon=True, name="TaskLoopV7")
-        self.task_thread.start()
+        self.logger.info("🦆 Duckflow v8 アーキテクチャで起動中...")
+        self.logger.info(f"📋 セッションID: {self.session_id}")
         
+        # 対話ループを開始
         try:
-            # ChatLoopはメインスレッドで実行
-            self.chat_loop.run()
-        except KeyboardInterrupt:
-            self.logger.info("ユーザーによるシャットダウン要求。")
+            self.logger.info("対話ループを開始します...")
+            while self.running:
+                try:
+                    # ユーザー入力を受け付け
+                    user_input = input("🦆 [NO_PLAN]> ")
+                    
+                    if user_input.lower() in ['quit', 'exit', '終了']:
+                        self.logger.info("ユーザーによる終了要求")
+                        break
+                    
+                    # ヘルプコマンド
+                    if user_input.lower() in ['help', 'h', '?']:
+                        self._show_help()
+                        continue
+                    
+                    # 入力が空の場合はスキップ
+                    if not user_input.strip():
+                        continue
+                    
+                    # シェルコマンドの処理
+                    if self._is_shell_command(user_input):
+                        self._execute_shell_command(user_input)
+                        continue
+                    
+                    # EnhancedCompanionCoreV8でメッセージを処理
+                    if self.enhanced_companion:
+                        import asyncio
+                        response = asyncio.run(self.enhanced_companion.process_user_message(user_input))
+                        print(f"\n🤖 {response}\n")
+                    else:
+                        print("❌ EnhancedCompanionCoreV8が利用できません")
+                        
+                except KeyboardInterrupt:
+                    self.logger.info("ユーザーによる中断要求")
+                    break
+                except Exception as e:
+                    self.logger.error(f"対話ループエラー: {e}")
+                    print(f"❌ エラーが発生しました: {e}")
+                    
+        except Exception as e:
+            self.logger.error(f"対話ループ開始エラー: {e}")
         finally:
             self.stop()
+    
+    def _is_shell_command(self, user_input: str) -> bool:
+        """シェルコマンドかどうかを判定"""
+        # !プレフィックスの場合は強制的にシェルコマンドとして扱う
+        if user_input.startswith('!'):
+            return True
+            
+        shell_commands = [
+            'cd', 'ls', 'dir', 'pwd', 'mkdir', 'rmdir', 'cp', 'copy', 'mv', 'move',
+            'rm', 'del', 'cat', 'type', 'echo', 'clear', 'cls', 'whoami', 'hostname',
+            'date', 'time', 'git', 'python', 'pip', 'uv', 'npm', 'node'
+        ]
+        
+        # コマンドの先頭部分をチェック
+        input_parts = user_input.strip().split()
+        if not input_parts:
+            return False
+            
+        command = input_parts[0].lower()
+        return command in shell_commands
+    
+    def _execute_shell_command(self, command: str):
+        """シェルコマンドを実行"""
+        try:
+            import subprocess
+            import os
+            
+            # !プレフィックスを除去
+            if command.startswith('!'):
+                command = command[1:].strip()
+            
+            # 現在のディレクトリを保存
+            original_cwd = os.getcwd()
+            
+            # コマンドを実行
+            if command.startswith('cd '):
+                # cdコマンドの場合は特別処理
+                new_dir = command[3:].strip()
+                if new_dir == '-':
+                    # 前のディレクトリに戻る（実装は簡略化）
+                    print("⚠️ cd - は現在サポートされていません")
+                else:
+                    try:
+                        os.chdir(new_dir)
+                        print(f"📁 ディレクトリを変更しました: {os.getcwd()}")
+                    except Exception as e:
+                        print(f"❌ ディレクトリ変更エラー: {e}")
+            else:
+                # その他のコマンドはsubprocessで実行
+                result = subprocess.run(command, shell=True, capture_output=True, text=True, encoding='utf-8')
+                
+                if result.stdout:
+                    print(result.stdout)
+                if result.stderr:
+                    print(f"⚠️ エラー出力: {result.stderr}")
+                if result.returncode != 0:
+                    print(f"⚠️ コマンド終了コード: {result.returncode}")
+                    
+        except Exception as e:
+            print(f"❌ シェルコマンド実行エラー: {e}")
+            self.logger.error(f"シェルコマンド実行エラー: {e}")
+    
+    def _show_help(self):
+        """ヘルプメッセージを表示"""
+        help_text = """
+🦆 **Duckflow Companion v8 ヘルプ** 🦆
+
+💬 **チャット機能**:
+- 通常の質問や要求はそのまま入力してください
+- 例: "game_doc.mdの概要を把握してください"
+
+🖥️ **シェルコマンド**:
+- 直接入力: cd, ls, pwd, git status など
+- !プレフィックス: !cd .., !git log など
+- 例: cd .., ls -la, !python script.py
+
+🔧 **システムコマンド**:
+- help, h, ?: このヘルプを表示
+- quit, exit, 終了: システムを終了
+
+📁 **現在のディレクトリ**: {current_dir}
+""".format(current_dir=os.getcwd())
+        
+        print(help_text)
 
     def stop(self):
         if not self.running:
             return
-        self.logger.info("Stopping Dual-Loop System (v7)...")
+        self.logger.info("Stopping EnhancedDualLoopSystem (v8)...")
         self.running = False
-        self.chat_loop.stop()
-        self.task_loop.stop()
-        if self.task_thread and self.task_thread.is_alive():
-            # TaskLoopスレッドに終了を通知するためにNoneをキューに入れる
-            self.task_queue.put(None)
-            self.task_thread.join(timeout=5.0)
+        print("\n👋 システムを終了します。お疲れさまでした！")
         self.logger.info("System stopped.")
 
     def get_status(self):
