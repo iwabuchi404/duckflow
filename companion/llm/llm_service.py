@@ -495,8 +495,8 @@ class LLMService:
             # ファイル内容の要約
             file_summaries = []
             for filename, content in file_contents.items():
-                summary = content[:200] + "..." if len(content) > 200 else content
-                file_summaries.append(f"**{filename}**: {summary}")
+                # 切り詰め処理を削除 - 完全な内容を渡す
+                file_summaries.append(f"**{filename}**: {content}")
             
             prompt = f"""
 タスク: {task_description}

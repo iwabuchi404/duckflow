@@ -133,6 +133,15 @@ class GraphState(BaseModel):
     max_loops: int = Field(default=5, description="最大ループ回数")
 
 
+class FileReadState(BaseModel):
+    """ファイルごとの読み込み状態を追跡"""
+    file_path: str
+    total_size_bytes: int
+    bytes_read: int = 0
+    is_complete: bool = False
+    last_read_timestamp: datetime = Field(default_factory=datetime.now)
+
+
 class AgentState(BaseModel):
     """エージェントの全体状態（Phase 1 拡張版）"""
 
@@ -192,6 +201,69 @@ class AgentState(BaseModel):
     
     # タスク管理用フィールド
     tasks: List[Dict[str, Any]] = Field(default_factory=list, description="タスク一覧")
+    file_read_states: Dict[str, FileReadState] = Field(default_factory=dict, description="ファイルごとの読み込み状態")
+
+    def update_file_read_state(self, read_result: Dict[str, Any]):
+        """read_file_chunkの結果から読み込み状態を更新（堅牢性向上版）"""
+        logger = logging.getLogger(__name__)
+        try:
+            if not read_result.get("success"):
+                return
+
+            metadata = read_result.get("metadata", {})
+            file_path = read_result.get("file_path")
+            if not file_path or not metadata:
+                return
+
+            total_size = metadata.get("total_size_bytes")
+            offset = metadata.get("offset", 0)
+            actual_read = metadata.get("actual_read_size", 0)
+
+            if total_size is None:
+                logger.warning(f"ファイルサイズが不明なため、読み込み状態の更新をスキップ: {file_path}")
+                return
+
+            # LLMの不正な計画（ファイルサイズを超えるオフセット）を検証し、無視する
+            if offset > total_size:
+                logger.warning(f"不正な読み込み計画を無視: オフセット({offset})がファイルサイズ({total_size})を超えています。状態は更新されません。")
+                return
+
+            # 実際に読み進んだ最遠点を計算（文字ベース）
+            content_length = len(read_result.get("content", ""))
+            if content_length > 0:
+                # テキストファイルの場合、文字数ベースで計算
+                new_furthest_point = offset + content_length
+            else:
+                # バイナリファイルの場合、バイト数ベースで計算
+                new_furthest_point = offset + actual_read
+
+            # 既存の状態を取得、なければ新規作成
+            state = self.file_read_states.get(file_path, FileReadState(
+                file_path=file_path,
+                total_size_bytes=total_size
+            ))
+            
+            # total_sizeが更新されている可能性を考慮
+            state.total_size_bytes = total_size
+
+            # 読み込み位置は常に進む方向にのみ更新
+            state.bytes_read = max(state.bytes_read, new_furthest_point)
+            
+            # 完了判定を改善（テキストファイルの場合は文字数ベース）
+            if content_length > 0:
+                # テキストファイルの場合、実際の内容長で判定
+                state.is_complete = new_furthest_point >= total_size
+            else:
+                # バイナリファイルの場合、従来通り
+                state.is_complete = state.bytes_read >= total_size
+                
+            state.last_read_timestamp = datetime.now()
+
+            self.file_read_states[file_path] = state
+            logger.info(f"ファイル読み込み状態を更新: {file_path} ({state.bytes_read}/{state.total_size_bytes} bytes, 完了: {state.is_complete})")
+
+        except Exception as e:
+            logger.error(f"ファイル読み込み状態の更新中に予期せぬエラー: {e}", exc_info=True)
 
     def add_message(self, role: str, content: str, metadata: Optional[Dict[str, Any]] = None) -> None:
         """AgentStateに会話メッセージを追加"""
@@ -412,7 +484,7 @@ class AgentState(BaseModel):
                     if content:
                         conversation_summary.append({
                             'role': role,
-                            'content': content[:100] + '...' if len(content) > 100 else content,
+                            'content': content,  # 切り詰め処理を削除
                             'timestamp': getattr(msg, 'timestamp', datetime.now()).isoformat()
                         })
                 
@@ -494,7 +566,7 @@ class AgentState(BaseModel):
                 'last_read_file': file_path,
                 'last_read_content_type': content_type,
                 'last_read_timestamp': datetime.now().isoformat(),
-                'content_summary': content[:500] + "..." if len(content) > 500 else content  # サマリーは500文字制限維持
+                'content_summary': content  # 切り詰め処理を削除
             }
             
         except Exception as e:
@@ -517,6 +589,47 @@ class AgentState(BaseModel):
             
         except Exception as e:
             # エラー時は空の辞書を返す
+            return {}
+    
+    def add_file_content(self, file_path: str, content: str, metadata: Dict[str, Any]) -> None:
+        """ファイル内容とメタデータを保存"""
+        try:
+            if 'file_contents' not in self.short_term_memory:
+                self.short_term_memory['file_contents'] = {}
+            
+            self.short_term_memory['file_contents'][file_path] = {
+                "content": content,
+                "metadata": metadata,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            # ログ出力
+            logger = logging.getLogger(__name__)
+            logger.info(f"ファイル内容保存: {file_path} ({len(content)}文字, 切り詰め: {metadata.get('is_truncated', False)})")
+            
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"ファイル内容保存エラー: {e}")
+    
+    def get_file_content_with_metadata(self, file_path: str) -> Optional[Dict[str, Any]]:
+        """ファイル内容とメタデータを取得"""
+        try:
+            file_contents = self.short_term_memory.get('file_contents', {})
+            return file_contents.get(file_path)
+            
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"ファイル内容取得エラー: {e}")
+            return None
+    
+    def get_all_file_contents_with_metadata(self) -> Dict[str, Dict[str, Any]]:
+        """すべてのファイル内容とメタデータを取得"""
+        try:
+            return self.short_term_memory.get('file_contents', {})
+            
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"全ファイル内容取得エラー: {e}")
             return {}
     
     # ActionResult管理メソッド
@@ -724,7 +837,7 @@ class AgentState(BaseModel):
         
         for msg in recent_messages:
             role_emoji = "👤" if msg.role == "user" else "🤖" if msg.role == "assistant" else "⚙️"
-            content_preview = msg.content[:100] + "..." if len(msg.content) > 100 else msg.content
+            content_preview = msg.content  # 切り詰め処理を削除
             summary_lines.append(f"{role_emoji} {msg.role}: {content_preview}")
         
         return "\n".join(summary_lines)
@@ -840,7 +953,7 @@ class AgentState(BaseModel):
             for msg in self.conversation_history[-10:]:  # 最新10件
                 recent_messages.append({
                     "role": msg.role,
-                    "content": msg.content[:200] + "..." if len(msg.content) > 200 else msg.content,
+                    "content": msg.content,  # 切り詰め処理を削除
                     "timestamp": msg.timestamp.isoformat()
                 })
 

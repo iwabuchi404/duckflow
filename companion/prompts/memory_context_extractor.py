@@ -93,7 +93,7 @@ class MemoryContextExtractor:
                 session_info["start_time"] = "不明"
             
             # 作業ディレクトリ情報
-            work_dir = agent_state.workspace.get('work_dir', './work') if agent_state.workspace else './work'
+            work_dir = agent_state.workspace.get('work_dir', '.') if agent_state.workspace else '.'
             
             # 現在の状態
             current_state = {
@@ -128,6 +128,9 @@ class MemoryContextExtractor:
             # 最近のファイル操作
             recent_file_ops = self._extract_recent_file_operations(agent_state)
             
+            # ファイル内容（重要：新しく追加）
+            file_contents = self._extract_file_contents(agent_state)
+            
             # 会話履歴の要約
             conversation_summary = self._extract_conversation_summary(agent_state)
             
@@ -139,9 +142,11 @@ class MemoryContextExtractor:
             
             return {
                 "recent_file_ops": recent_file_ops,
+                "file_contents": file_contents,
                 "conversation_summary": conversation_summary,
                 "operation_history": operation_history,
-                "tool_execution_history": tool_execution_history
+                "tool_execution_history": tool_execution_history,
+                "agent_state": agent_state  # 重要：agent_stateを直接渡す
             }
             
         except Exception as e:
@@ -200,6 +205,26 @@ class MemoryContextExtractor:
         except Exception as e:
             self.logger.warning(f"ファイル操作履歴抽出エラー: {e}")
             return []
+    
+    def _extract_file_contents(self, agent_state: AgentState) -> Dict[str, Any]:
+        """ファイル内容を抽出"""
+        try:
+            # AgentStateからファイル内容を取得
+            if hasattr(agent_state, 'get_all_file_contents_with_metadata'):
+                file_contents = agent_state.get_all_file_contents_with_metadata()
+                if file_contents:
+                    self.logger.info(f"ファイル内容抽出成功: {len(file_contents)}件のファイル")
+                    return file_contents
+                else:
+                    self.logger.info("ファイル内容なし")
+                    return {}
+            else:
+                self.logger.warning("AgentStateにget_all_file_contents_with_metadataメソッドが存在しません")
+                return {}
+                
+        except Exception as e:
+            self.logger.error(f"ファイル内容抽出エラー: {e}")
+            return {}
     
     def _extract_conversation_summary(self, agent_state: AgentState) -> Dict[str, Any]:
         """会話履歴の要約を抽出"""

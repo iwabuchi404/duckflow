@@ -596,13 +596,18 @@ class EnhancedCompanionCoreV7:
                     
                     # ファイル読み込み結果をAgentStateに保存
                     if tool_name == "file_ops" and method_name == "read_file":
-                        if isinstance(result, str) and "file_path" in args:
+                        if isinstance(result, dict) and result.get("success") and "file_path" in result:
+                            file_path = result["file_path"]
+                            content = result.get("content", "")
+                            metadata = result.get("metadata", {})
+                            
+                            # 新しいメタデータ対応のメソッドを使用
                             self.agent_state.add_file_content(
-                                file_path=args["file_path"],
-                                content=result,
-                                content_type="text"
+                                file_path=file_path,
+                                content=content,
+                                metadata=metadata
                             )
-                            self.logger.info(f"ファイル読み込み結果をAgentStateに保存: {args['file_path']}")
+                            self.logger.info(f"ファイル読み込み結果をAgentStateに保存: {file_path} (切り詰め: {metadata.get('is_truncated', False)})")
                     
                     # プラン生成結果をAgentStateに保存
                     elif tool_name == "plan_tool" and method_name == "propose":
@@ -630,13 +635,17 @@ class EnhancedCompanionCoreV7:
                         # メッセージが操作の説明文の場合は、実際の内容を取得
                         if isinstance(message, str) and message.startswith("応答完了:"):
                             # 操作の説明文の場合は、実際のファイル内容を取得
-                            file_contents = self.agent_state.get_file_contents()
-                            if file_contents:
-                                # 最新のファイル内容を表示
+                            file_contents_with_metadata = self.agent_state.get_all_file_contents_with_metadata()
+                            if file_contents_with_metadata:
+                                # メタデータ付きファイル内容を表示
                                 result = "📄 **ファイル内容の要約**\n\n"
-                                for file_path, content in file_contents.items():
-                                    if isinstance(content, str) and len(content) > 100:
-                                        result += f"**{file_path}** (要約版):\n{content[:500]}...\n\n"
+                                for file_path, file_data in file_contents_with_metadata.items():
+                                    content = file_data.get("content", "")
+                                    metadata = file_data.get("metadata", {})
+                                    
+                                    if metadata.get("is_truncated"):
+                                        result += f"**{file_path}** (切り詰め済み):\n{content}\n\n"
+                                        result += f"⚠️ 完全な内容が必要な場合は `file_ops.read_file_section(file_path=\"{file_path}\", start_line=N, line_count=100)` を使用してください\n\n"
                                     else:
                                         result += f"**{file_path}**:\n{content}\n\n"
                             else:
@@ -647,18 +656,13 @@ class EnhancedCompanionCoreV7:
                         
                         # 🔥 最適化: 重複表示防止と適切な要約処理
                         if len(str(result)) > 1000:
-                            self.logger.info(f"大容量メッセージを検出: {len(str(result))}文字 -> 既存の要約機能を適用")
+                            self.logger.info(f"大容量メッセージを検出: {len(str(result))}文字 -> 要約処理を実行")
                             
-                            # 既存のスマートプロキシを適用（無限ループ防止フラグ付き）
-                            processed_message = self._apply_smart_content_proxy(
-                                result, 
-                                "response.echo", 
-                                "display",
-                                _proxy_applied=False
-                            )
+                            # シンプルな要約処理
+                            if isinstance(result, str):
+                                result = result[:800] + "...\n\n(内容が長すぎるため要約しました。詳細が必要な場合は適切なツールを使用してください。)"
                             
-                            result = processed_message
-                            self.logger.info(f"要約完了: {len(str(result))}文字 -> {len(str(result))}文字")
+                            self.logger.info(f"要約完了: {len(str(result))}文字")
                         
                         # ログ出力を最適化
                         log_preview = str(result)[:100] + "..." if len(str(result)) > 100 else str(result)
@@ -805,9 +809,8 @@ class EnhancedCompanionCoreV7:
                 replacement = self.agent_state.get_action_result_by_id(action_id, action_list_id)
                 if replacement is not None:
                     self.logger.info(f"ActionID参照成功: {action_id} -> 結果長: {len(str(replacement))}")
-                    # 🔥 スマートコンテンツプロキシを適用（無限ループ防止）
-                    processed_replacement = self._apply_smart_content_proxy(replacement, action_id, value, _proxy_applied=False)
-                    result_value = result_value.replace(match.group(0), str(processed_replacement))
+                    # シンプルな処理（古いスマートプロキシを削除）
+                    result_value = result_value.replace(match.group(0), str(replacement))
                 else:
                     self.logger.warning(f"ActionID参照失敗: {action_id}")
                     result_value = result_value.replace(match.group(0), f"参照エラー: {action_id}")
@@ -820,9 +823,8 @@ class EnhancedCompanionCoreV7:
                 replacement = self.agent_state.get_action_result_by_id(action_id, action_list_id)
                 if replacement is not None:
                     self.logger.info(f"ActionID参照成功: {action_id} -> 結果長: {len(str(replacement))}")
-                    # 🔥 スマートコンテンツプロキシを適用（無限ループ防止）
-                    processed_replacement = self._apply_smart_content_proxy(replacement, action_id, value, _proxy_applied=False)
-                    result_value = result_value.replace(match.group(0), str(processed_replacement))
+                    # シンプルな処理（古いスマートプロキシを削除）
+                    result_value = result_value.replace(match.group(0), str(replacement))
                 else:
                     self.logger.warning(f"ActionID参照失敗: {action_id}")
                     result_value = result_value.replace(match.group(0), f"参照エラー: {action_id}")
@@ -892,53 +894,7 @@ class EnhancedCompanionCoreV7:
         
         return value
     
-    def _apply_smart_content_proxy(self, content: Any, action_id: str, target_context: str, _proxy_applied: bool = False) -> Any:
-        """コンテンツを使用コンテキストに応じてインテリジェントに処理"""
-        
-        # 🔥 修正：無限ループ防止
-        if _proxy_applied:
-            self.logger.debug("プロキシ処理済みのコンテンツのため、再処理をスキップ")
-            return content
-        
-        # 🔥 改善：辞書型データは基本的にプロキシ処理
-        if isinstance(content, dict):
-            self.logger.info(f"辞書データをプロキシ処理：{len(str(content))}文字 -> スマートプロキシ処理を実行")
-            return self._summarize_dict_data(content, action_id, target_context)
-        
-        # 文字列コンテンツのサイズをチェック
-        if isinstance(content, str) and len(content) > 1000:  # 閾値
-            
-            # ファイル読み込み結果の場合
-            if 'file_ops_read_file' in action_id:
-                self.logger.info(f"大容量ファイルコンテンツを検出：{len(content)}文字 -> スマートプロキシ処理を実行")
-                
-                # ファイルパスを推測（ActionIDから）
-                file_path = self._extract_file_path_from_action_id(action_id)
-                
-                # コンテキストに応じて処理方法を決定
-                if "file_contents" in target_context or '"file_contents"' in target_context:
-                    # JSON引数として使用される場合 - 警告付きで要約版を提供
-                    guidance_message = f"""[大容量ファイル自動プロキシ - 元サイズ: {len(content)}文字]
-
-⚠️  このファイルは大きすぎるため、直接JSON引数に使用できません。
-
-📋 推奨する効率的なアクセス方法:
-1. 🔍 特定情報の検索: file_ops.search_content(file_path="{file_path}", pattern="キーワード", context_lines=3)
-2. 📄 部分読み込み: file_ops.read_file_section(file_path="{file_path}", start_line=1, line_count=50)
-3. 🏗️ 構造分析: file_ops.analyze_file_structure(file_path="{file_path}")
-4. 🧠 AI要約: llm_service.synthesize_insights_from_files(task_description="要約タスク", file_contents={{}})
-
-💡 内容プレビュー（先頭800文字）:
-{content[:800]}{'...' if len(content) > 800 else ''}
-
-🔗 フルアクセス: file_ops.read_file(file_path="{file_path}") で改めて読み込み可能"""
-                    
-                    return guidance_message
-                else:
-                    # 通常の参照では要約版を提供
-                    return self._create_content_summary(content, action_id, file_path)
-        
-        return content  # そのまま返す
+    # 🔥 古いスマートプロキシ処理を削除（新しいファイル処理システムに置き換え）
     
     def _extract_file_path_from_action_id(self, action_id: str) -> str:
         """ActionIDからファイルパスを推測"""
@@ -957,134 +913,17 @@ class EnhancedCompanionCoreV7:
         except Exception:
             return "target_file"
     
-    def _create_content_summary(self, content: str, action_id: str, file_path: str) -> str:
-        """コンテンツの要約版を作成"""
-        
-        # 先頭部分 + 構造情報 + アクセスガイドの組み合わせ
-        preview = content[:600]
-        
-        # 基本的な構造分析
-        lines = content.split('\n')
-        headers = [line for line in lines[:50] if line.strip().startswith('#')]
-        
-        summary = f"""[ファイル要約 - 元サイズ: {len(content)}文字, 行数: {len(lines)}行]
-
-📄 ファイル: {file_path}
-
-🔍 構造情報:
-{chr(10).join(headers[:5]) if headers else "（ヘッダー構造なし）"}
-
-📝 内容プレビュー:
-{preview}{'...' if len(content) > 600 else ''}
-
-💡 詳細アクセス方法:
-- 検索: file_ops.search_content(file_path="{file_path}", pattern="キーワード")
-- 部分読み込み: file_ops.read_file_section(file_path="{file_path}", start_line=N)
-- 構造分析: file_ops.analyze_file_structure(file_path="{file_path}")"""
-        
-        return summary
+    # 🔥 古い要約処理メソッドを削除（新しいファイル処理システムに置き換え）
     
     # 🔥 不要になったメソッドを削除し、シンプルな判定に統一
     
-    def _summarize_dict_data(self, data: dict, action_id: str, target_context: str) -> str:
-        """辞書データを要約して表示用に変換"""
-        
-        try:
-            # ツール結果の場合の特別処理
-            if 'file_ops_analyze_file_structure' in action_id and isinstance(data, dict):
-                return self._summarize_file_structure_result(data)
-            elif 'file_ops_search_content' in action_id and isinstance(data, dict):
-                return self._summarize_search_result(data)
-            elif 'plan_tool_propose' in action_id and isinstance(data, dict):
-                return self._summarize_plan_result(data)
-            
-            # 一般的な辞書の要約
-            summary_parts = []
-            for key, value in list(data.items())[:5]:  # 最初の5項目のみ
-                if isinstance(value, (list, dict)):
-                    summary_parts.append(f"- {key}: {type(value).__name__} ({len(value)} items)")
-                else:
-                    value_str = str(value)[:100]
-                    summary_parts.append(f"- {key}: {value_str}")
-            
-            if len(data) > 5:
-                summary_parts.append(f"... (他 {len(data) - 5} 項目)")
-                
-            return "\n".join(summary_parts)
-            
-        except Exception as e:
-            return f"[データ要約エラー: {str(e)}]"
-    
-    def _summarize_file_structure_result(self, data: dict) -> str:
-        """ファイル構造分析結果の要約（コンパクト版）"""
-        file_info = data.get('file_info', {})
-        headers = data.get('headers', [])
-        sections = data.get('sections', [])
-        
-        # 🔥 修正：コンパクトなフォーマット（1000文字以内に収める）
-        summary = f"📊 **{data.get('file_path', 'ファイル')}** 構造分析\n"
-        summary += f"📏 {file_info.get('total_lines', 'N/A')}行 / {file_info.get('total_chars', 'N/A')}文字\n\n"
-        
-        # セクション情報（最大3個、短縮）
-        if sections:
-            summary += f"🏷️ 主要セクション ({len(sections)}個):\n"
-            for i, s in enumerate(sections[:3]):
-                title = s.get('title', 'N/A')[:30] + ('...' if len(s.get('title', '')) > 30 else '')
-                summary += f"  {i+1}. {title} (L{s.get('start_line', 'N/A')})\n"
-            if len(sections) > 3:
-                summary += f"  ... 他{len(sections) - 3}個\n"
-        
-        # ヘッダー構造（最大3個、短縮）
-        if headers:
-            summary += f"\n📋 ヘッダー構造 ({len(headers)}個):\n"
-            for h in headers[:3]:
-                text = h.get('text', 'N/A')[:25] + ('...' if len(h.get('text', '')) > 25 else '')
-                summary += f"  L{h.get('line_number', 'N/A')}: {'#' * h.get('level', 1)} {text}\n"
-            if len(headers) > 3:
-                summary += f"  ... 他{len(headers) - 3}個\n"
-        
-        return summary
-    
-    def _summarize_search_result(self, data: dict) -> str:
-        """検索結果の要約（改善版）"""
-        pattern = data.get('pattern', 'N/A')
-        matches_found = data.get('matches_found', 0)
-        results = data.get('results', [])
-        
-        if matches_found == 0:
-            return f"🔍 **検索結果**: パターン '{pattern}' でマッチなし"
-        
-        summary = f"🔍 **検索結果**: パターン '{pattern}' で {matches_found}件マッチ\n"
-        
-        # マッチした内容を見やすく表示（最大3件）
-        for i, result in enumerate(results[:3]):
-            line_num = result.get('line_number', 'N/A')
-            match_text = result.get('match', '').strip()
-            if len(match_text) > 60:
-                match_text = match_text[:60] + '...'
-            summary += f"  L{line_num}: {match_text}\n"
-        
-        if len(results) > 3:
-            summary += f"  ... 他{len(results) - 3}件\n"
-            
-        return summary.rstrip()
-    
-    def _summarize_plan_result(self, data: dict) -> str:
-        """プラン結果の要約"""
-        if isinstance(data, dict) and 'plan_id' in data:
-            plan_name = data.get('name', 'N/A')
-            goal = data.get('goal', 'N/A')  
-            steps = data.get('steps', [])
-            
-            return f"""📋 **実装プラン作成完了**
-🎯 プラン: {plan_name}
-🚀 目標: {goal}
-📊 ステップ数: {len(steps)}個
 
-📝 実装ステップ:
-{chr(10).join([f"  {i+1}. {step.get('name', 'N/A')}" for i, step in enumerate(steps)])}"""
-        
-        return str(data)[:500] + "..." if len(str(data)) > 500 else str(data)
+    
+
+    
+
+    
+
 
     def _collect_file_info_from_recent_actions(self, action_list_id: str) -> Dict[str, str]:
         """直近のアクション結果からファイル情報を収集してLLMService用のfile_contentsを構築"""

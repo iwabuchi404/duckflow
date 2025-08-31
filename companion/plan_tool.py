@@ -9,6 +9,7 @@ PlanTool - プラン管理の明示的ツールAPI
 """
 
 import json
+import re
 import threading
 import uuid
 import logging
@@ -82,6 +83,20 @@ class ActionSpecExt:
 
 
 @dataclass
+class Step:
+    """プランのステップ"""
+    step_id: str
+    name: str
+    description: str
+    depends_on: List[str]
+    status: str = "pending"
+    created_at: str = ""
+    
+    def __post_init__(self):
+        if not self.created_at:
+            self.created_at = datetime.now().isoformat()
+
+@dataclass
 class Plan:
     """プラン本体"""
     id: str
@@ -92,10 +107,13 @@ class Plan:
     tags: List[str]
     created_at: str
     version: int = 1
+    steps: List[Step] = None
     
     def __post_init__(self):
         if not self.created_at:
             self.created_at = datetime.now().isoformat()
+        if self.steps is None:
+            self.steps = []
 
 
 @dataclass
@@ -161,12 +179,13 @@ class PlanTool:
     """プラン管理ツール"""
     
     def __init__(self, logs_dir: str = "logs", file_ops: Optional[SimpleFileOps] = None, 
-                 allow_external_paths: bool = False):
+                 llm_client=None, allow_external_paths: bool = False):
         """初期化
         
         Args:
             logs_dir: ログディレクトリ
             file_ops: ファイル操作インスタンス
+            llm_client: LLMクライアント（ステップ生成用）
             allow_external_paths: 外部パスを許可するか（テスト用）
         """
         self.logs_dir = Path(logs_dir)
@@ -174,6 +193,7 @@ class PlanTool:
         self.plans_dir.mkdir(parents=True, exist_ok=True)
         
         self.file_ops = file_ops or SimpleFileOps()
+        self.llm_client = llm_client
         self.logger = logging.getLogger(__name__)
         self.allow_external_paths = allow_external_paths
         # スレッド安全のためのロック
@@ -189,7 +209,7 @@ class PlanTool:
         # ディープデバッグログ（外部から有効化）
         self.enable_deep_plan_logging = False
         try:
-            self.logger.info(f"PlanTool init: id={id(self)} logs_dir={self.logs_dir} plans_dir={self.plans_dir}")
+            self.logger.info(f"PlanTool init: id={id(self)} logs_dir={self.logs_dir} plans_dir={self.plans_dir} llm_client={llm_client is not None}")
         except Exception:
             pass
 
@@ -356,9 +376,9 @@ class PlanTool:
     
     # === Public API ===
     
-    def propose(self, content: str, sources: List[MessageRef], 
+    async def propose(self, content: str, sources: List[MessageRef], 
                 rationale: str, tags: List[str]) -> str:
-        """プランを提案
+        """プランを提案（非同期版、LLMによるステップ自動生成対応）
         
         Args:
             content: プラン本文
@@ -384,6 +404,24 @@ class PlanTool:
             created_at=datetime.now().isoformat()
         )
         
+        # LLMを使用してステップを自動生成
+        if self.llm_client:
+            try:
+                steps_data = await self._generate_steps_for_goal(content)
+                for i, step_data in enumerate(steps_data):
+                    step_id = f"step_{i+1:03d}"
+                    step = Step(
+                        step_id=step_id,
+                        name=step_data.get("name", f"ステップ{i+1}"),
+                        description=step_data.get("description", ""),
+                        depends_on=step_data.get("depends_on", [])
+                    )
+                    plan.steps.append(step)
+                
+                self.logger.info(f"LLMにより{len(plan.steps)}個のステップを自動生成: {plan_id}")
+            except Exception as e:
+                self.logger.warning(f"ステップ自動生成に失敗（プランは作成されます）: {e}")
+        
         state = PlanState(
             status=PlanStatus.PROPOSED,
             action_specs=[],
@@ -399,7 +437,7 @@ class PlanTool:
         # 永続化
         self._save_plan(plan_id)
         
-        self.logger.info(f"プラン提案: {plan_id} - {title}")
+        self.logger.info(f"プラン提案: {plan_id} - {title} (ステップ数: {len(plan.steps)})")
         self._log_debug_state("after_propose")
         return plan_id
     
@@ -417,6 +455,72 @@ class PlanTool:
                 return line[:50] + ('...' if len(line) > 50 else '')
         
         return "新しいプラン"
+    
+    async def _generate_steps_for_goal(self, goal: str) -> List[Dict[str, Any]]:
+        """LLMを使用して目標からステップを生成する"""
+        try:
+            prompt = f"""あなたは優秀なプロジェクトプランナーです。
+以下の【目標】を達成するための具体的なステップを、JSON配列形式で提案してください。
+各ステップには name (短い名前), description (詳細), depends_on (依存するステップIDのリスト) を含めてください。
+
+【目標】
+{goal}
+
+【出力形式】
+[
+    {{
+        "name": "ステップ1の名前",
+        "description": "ステップ1の詳細な説明",
+        "depends_on": []
+    }},
+    {{
+        "name": "ステップ2の名前",
+        "description": "ステップ2の詳細な説明",
+        "depends_on": ["step_001"]
+    }}
+]
+"""
+            if self.llm_client and hasattr(self.llm_client, 'chat'):
+                response = await self.llm_client.chat(prompt=prompt, tools=False, tool_choice="none")
+                if response and response.content:
+                    # LLMの応答からJSON部分を抽出してパース
+                    json_str = self._extract_json_from_response(response.content)
+                    try:
+                        steps_data = json.loads(json_str)
+                        if isinstance(steps_data, list):
+                            self.logger.info(f"LLMから{len(steps_data)}個のステップを生成")
+                            return steps_data
+                        else:
+                            self.logger.warning("LLMの応答がリスト形式ではありません")
+                    except json.JSONDecodeError as e:
+                        self.logger.error(f"ステップ生成のJSONパースエラー: {e}")
+                        self.logger.debug(f"パース対象文字列: {json_str}")
+                else:
+                    self.logger.warning("LLMからの応答が空です")
+            else:
+                self.logger.warning("LLMクライアントが利用できません")
+        except Exception as e:
+            self.logger.error(f"ステップ生成エラー: {e}")
+        return []
+    
+    def _extract_json_from_response(self, text: str) -> str:
+        """LLMの応答からJSONコードブロックを抽出する補助関数"""
+        try:
+            # JSONコードブロックを探す
+            match = re.search(r"```json\s*(.*?)\s*```", text, re.DOTALL)
+            if match:
+                return match.group(1).strip()
+            
+            # コードブロックなしのJSONを探す
+            match = re.search(r"\[.*\]", text, re.DOTALL)
+            if match:
+                return match.group(0)
+            
+            # 最後の手段として、全体を返す
+            return text
+        except Exception as e:
+            self.logger.error(f"JSON抽出エラー: {e}")
+            return text
     
     def set_action_specs(self, plan_id: str, specs: List[ActionSpec]) -> ValidationReport:
         """ActionSpecを設定

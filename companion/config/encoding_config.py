@@ -101,3 +101,5 @@ def get_encoding_config():
     """文字コード設定インスタンスを取得"""
     return encoding_config
 
+
+

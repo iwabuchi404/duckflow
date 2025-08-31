@@ -494,7 +494,7 @@ FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
         variables["workspace_manifest"] = self._format_workspace_manifest(state, file_context)
         
         # ファイル内容（前回調査で発見された欠損機能を修正）
-        variables["file_contents_formatted"] = self._format_file_contents(file_context)
+        variables["file_contents_formatted"] = self._format_file_contents(file_context, state)
         
         return variables
     
@@ -516,10 +516,8 @@ FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
             language = result.get("language", "unknown")
             content = result.get("content", "")
             
-            # コンテンツを適切な長さに切り詰め
-            preview = content[:300]
-            if len(content) > 300:
-                preview += "..."
+            # 切り詰め処理を削除 - 完全な内容を表示
+            preview = content
             
             context_parts.append(f"[{i}] {file_path} ({language}):\n{preview}")
         
@@ -617,10 +615,8 @@ FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
                 "system": "システム"
             }.get(msg.role, msg.role)
             
-            # メッセージ内容を適切な長さに制限
-            content = msg.content[:300]
-            if len(msg.content) > 300:
-                content += "..."
+            # 切り詰め処理を削除 - 完全な内容を表示
+            content = msg.content
             
             conversation_parts.append(f"[{timestamp}] {role_label}: {content}")
         
@@ -691,32 +687,96 @@ FILE_OPERATION:CREATE:適切なパス/ファイル名.ext
         except Exception:
             return "(マニフェスト生成エラー)"
     
-    def _format_file_contents(self, file_context: Optional[Dict[str, Any]]) -> str:
+    def _format_file_contents(self, file_context: Optional[Dict[str, Any]], state: Optional[AgentState] = None) -> str:
         """収集されたファイル内容を整形してプロンプトに含める
         
         Args:
             file_context: ファイルコンテキスト
+            state: AgentState（新しいメタデータ対応のファイル内容取得用）
             
         Returns:
             フォーマットされたファイル内容
         """
-        if not file_context or 'file_contents' not in file_context:
+        try:
+            # 新しいメタデータ対応のファイル内容を優先的に取得
+            if state and hasattr(state, 'get_all_file_contents_with_metadata'):
+                file_contents_with_metadata = state.get_all_file_contents_with_metadata()
+                if file_contents_with_metadata:
+                    return self._format_file_contents_with_metadata(file_contents_with_metadata)
+            
+            # 従来のfile_contextからの取得（フォールバック）
+            if file_context and 'file_contents' in file_context:
+                file_contents = file_context['file_contents']
+                if file_contents:
+                    return self._format_legacy_file_contents(file_contents)
+            
             return "(ファイル内容未収集)"
-        
-        file_contents = file_context['file_contents']
-        if not file_contents:
-            return "(対象ファイル内容なし)"
+            
+        except Exception as e:
+            return f"(ファイル内容フォーマットエラー: {str(e)})"
+    
+    def _format_file_contents_with_metadata(self, file_contents_with_metadata: Dict[str, Dict[str, Any]]) -> str:
+        """メタデータ付きファイル内容を適切にフォーマット"""
+        if not file_contents_with_metadata:
+            return "(ファイル内容なし)"
         
         formatted_contents = []
-        for file_path, content in file_contents.items():
-            # 内容を適度に制限（プロンプト長制御）
-            display_content = content[:1500] if len(content) > 1500 else content
-            truncated = "...(省略)" if len(content) > 1500 else ""
+        for file_path, file_data in file_contents_with_metadata.items():
+            content = file_data.get("content", "")
+            metadata = file_data.get("metadata", {})
             
+            # 基本情報
+            file_info = f"📁 **{file_path}**"
+            
+            # 文字数情報
+            if metadata.get("is_truncated"):
+                total_chars = metadata.get('total_chars', 'N/A')
+                truncated_chars = metadata.get('truncated_chars', len(content))
+                file_info += f" ({truncated_chars}/{total_chars} 文字 - 🚨切り詰め済み)"
+            else:
+                file_info += f" ({metadata.get('total_chars', len(content))} 文字)"
+            
+            # 切り詰め警告を最初に表示（重要度を上げる）
+            if metadata.get("is_truncated"):
+                formatted_contents.append(f"""
+{file_info}
+
+🚨 **重要警告**: このファイルは切り詰められています！
+- 表示中: {truncated_chars}文字 / 全体: {total_chars}文字
+- 約{round((truncated_chars/total_chars)*100 if total_chars != 'N/A' else 0, 1)}%の内容しか表示されていません
+
+📖 **完全な内容を読むには以下のツールを使用してください**:
+1. **部分読み込み**: `file_ops.read_file_section(file_path="{file_path}", start_line=N, line_count=100)`
+2. **内容検索**: `file_ops.search_content(file_path="{file_path}", pattern="キーワード")`
+3. **構造分析**: `file_ops.analyze_file_structure(file_path="{file_path}")`
+
+⚠️ **注意**: 現在表示されている内容は不完全です。重要な情報が欠落している可能性があります。
+
+**ファイル内容（切り詰め版）**:
+```
+{content}
+```
+""")
+            else:
+                # 切り詰めされていない場合は通常表示
+                formatted_contents.append(f"""
+{file_info}
+```
+{content}
+```
+""")
+        
+        return "\n".join(formatted_contents)
+    
+    def _format_legacy_file_contents(self, file_contents: Dict[str, str]) -> str:
+        """従来のファイル内容フォーマット（フォールバック用）"""
+        formatted_contents = []
+        for file_path, content in file_contents.items():
+            # 切り詰め処理を削除 - 完全な内容を表示
             formatted_contents.append(f"""
 📁 **{file_path}** ({len(content)} 文字)
 ```
-{display_content}{truncated}
+{content}
 ```
 """)
         

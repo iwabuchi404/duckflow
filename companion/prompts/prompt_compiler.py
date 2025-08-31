@@ -382,6 +382,12 @@ class PromptCompiler:
             recent_file_ops = main_memory.get('recent_file_ops', [])
             file_ops_text = self._format_file_operations(recent_file_ops)
             
+            # ファイル内容（修正：既に抽出されたfile_contentsを直接使用）
+            file_contents_raw = main_memory.get('file_contents', {})
+            self.logger.info(f"Main層ファイル内容データ: {len(file_contents_raw) if file_contents_raw else 0}件のファイル")
+            file_contents_text = self._format_file_contents_direct(file_contents_raw)
+            self.logger.info(f"フォーマット後ファイル内容文字数: {len(file_contents_text)}")
+            
             # 会話履歴の要約
             conversation_summary = main_memory.get('conversation_summary', {})
             conv_text = self._format_conversation_summary(conversation_summary)
@@ -399,6 +405,7 @@ class PromptCompiler:
 
 --- 主要記憶 ---
 {file_ops_text}
+{file_contents_text}
 {conv_text}
 {ops_text}
 {tool_text}"""
@@ -528,6 +535,99 @@ class PromptCompiler:
                 formatted_ops.append(f"- {op_type}: {file_path} ({timestamp})")
         
         return f"最近のファイル操作:\n" + "\n".join(formatted_ops)
+    
+    def _format_file_contents(self, state: Optional[Any] = None) -> str:
+        """ファイル内容をフォーマットしてプロンプトに含める（レガシー用）"""
+        try:
+            # AgentStateからファイル内容を取得
+            if state and hasattr(state, 'get_all_file_contents_with_metadata'):
+                file_contents_with_metadata = state.get_all_file_contents_with_metadata()
+                if file_contents_with_metadata:
+                    return self._format_file_contents_with_metadata(file_contents_with_metadata)
+            
+            return "(ファイル内容なし)"
+            
+        except Exception as e:
+            self.logger.warning(f"ファイル内容フォーマットエラー: {e}")
+            return "(ファイル内容フォーマットエラー)"
+    
+    def _format_file_contents_direct(self, file_contents_data: Dict[str, Dict[str, Any]]) -> str:
+        """既に抽出されたファイル内容を直接フォーマット（修正版）"""
+        try:
+            self.logger.info(f"ファイル内容直接フォーマット開始: {len(file_contents_data) if file_contents_data else 0}件のファイル")
+            
+            if not file_contents_data or not isinstance(file_contents_data, dict):
+                self.logger.info("ファイル内容データが空または無効")
+                return "(ファイル内容なし)"
+            
+            # ファイル内容データの詳細をログ出力
+            for file_path, file_data in file_contents_data.items():
+                content_length = len(file_data.get("content", "")) if file_data.get("content") else 0
+                is_truncated = file_data.get("metadata", {}).get("is_truncated", False)
+                self.logger.info(f"ファイル詳細: {file_path} - 内容長: {content_length}文字, 切り詰め: {is_truncated}")
+            
+            # 既に抽出されたファイル内容データを使用
+            formatted_result = self._format_file_contents_with_metadata(file_contents_data)
+            
+            self.logger.info(f"ファイル内容フォーマット完了: {len(formatted_result)}文字")
+            return formatted_result
+            
+        except Exception as e:
+            self.logger.warning(f"ファイル内容直接フォーマットエラー: {e}")
+            return "(ファイル内容直接フォーマットエラー)"
+    
+    def _format_file_contents_with_metadata(self, file_contents_with_metadata: Dict[str, Dict[str, Any]]) -> str:
+        """メタデータ付きファイル内容を適切にフォーマット"""
+        if not file_contents_with_metadata:
+            return "(ファイル内容なし)"
+        
+        formatted_contents = []
+        for file_path, file_data in file_contents_with_metadata.items():
+            content = file_data.get("content", "")
+            metadata = file_data.get("metadata", {})
+            
+            # 基本情報
+            file_info = f"📁 **{file_path}**"
+            
+            # 文字数情報
+            if metadata.get("is_truncated"):
+                total_chars = metadata.get('total_chars', 'N/A')
+                truncated_chars = metadata.get('truncated_chars', len(content))
+                file_info += f" ({truncated_chars}/{total_chars} 文字 - 🚨切り詰め済み)"
+            else:
+                file_info += f" ({metadata.get('total_chars', len(content))} 文字)"
+            
+            # 切り詰め警告を最初に表示（重要度を上げる）
+            if metadata.get("is_truncated"):
+                formatted_contents.append(f"""
+{file_info}
+
+🚨 **重要警告**: このファイルは切り詰められています！
+- 表示中: {truncated_chars}文字 / 全体: {total_chars}文字
+- 約{round((truncated_chars/total_chars)*100 if total_chars != 'N/A' else 0, 1)}%の内容しか表示されていません
+
+📖 **完全な内容を読むには以下のツールを使用してください**:
+1. **部分読み込み**: `file_ops.read_file_section(file_path="{file_path}", start_line=N, line_count=100)`
+2. **内容検索**: `file_ops.search_content(file_path="{file_path}", pattern="キーワード")`
+3. **構造分析**: `file_ops.analyze_file_structure(file_path="{file_path}")`
+
+⚠️ **注意**: 現在表示されている内容は不完全です。重要な情報が欠落している可能性があります。
+
+**ファイル内容（切り詰め版）**:
+```
+{content}
+```
+""")
+            else:
+                # 切り詰めされていない場合は通常表示
+                formatted_contents.append(f"""
+{file_info}
+```
+{content}
+```
+""")
+        
+        return "\n".join(formatted_contents)
     
     def _format_conversation_summary(self, conv_summary: Dict[str, Any]) -> str:
         """会話履歴要約をフォーマット"""
@@ -789,49 +889,15 @@ class PromptCompiler:
         """応答生成のBase層コンテキストを構築"""
         
         base_context = """
-あなたはDuckflowのAIアシスタントです。
-以下のルールに従って、ユーザーへの適切な応答を生成してください：
+あなたは、ユーザーと対話しながら開発を支援するAIアシスタント「Duckflow」です。あなたは今、ユーザーとの連続した会話の最中にいます。
 
-1. 実行されたアクションの結果を分かりやすく説明する
-2. エラーが発生した場合は、原因と対処法を説明する
-3. 次のステップの提案がある場合は、具体的に示す
-4. 専門的すぎる用語は避け、一般ユーザーが理解できる表現を使用する
-5. 応答は自然な日本語で、親しみやすい口調にする
+以下の【過去の会話履歴】と【ユーザーの現在の要求】を踏まえ、自然な対話の流れを意識しつつ、提示された【ツール実行結果の詳細】に基づいて、誠実で分かりやすい応答を生成してください。
 
-📋 重要な指示:
-- アクション結果のデータを活用して、具体的で有用な情報を提供してください
-- ファイル分析、検索、読み込みの結果がある場合は、その内容を要約して説明してください
-- 「ファイルを参照できない」などの誤った説明は避けてください
-- 実際に実行されたアクションの結果を基に応答を生成してください
-
- タスク管理について:
-- タスク操作ツールを使用して、適切にタスクを管理してください
-- 新しいタスクの開始が必要な場合は、start_task()を使用してください
-- タスクの完了を判断した場合は、complete_task()を使用してください
-- タスクの進行状況を把握し、効率的に作業を進めてください
-
-📚 利用可能なタスク操作ツール:
-1. start_task(title: str, description: str) - 新しいタスクを開始
-2. complete_task(task_id: str, summary: str) - タスクを完了し要約を保存
-3. add_task_result(task_id: str, result: str) - タスクに結果を追加
-4. get_task_status(task_id: str) - タスクの状態を取得
-5. list_tasks() - 全タスクの一覧を取得
-
-⚠️ 重要: ツールや関数の呼び出しは一切行わないでください。純粋なテキスト応答のみを生成してください。
-
-🚫 禁止事項:
-- tool.read_file などのツール呼び出し
-- 関数実行の指示
-- コードの実行
-- システムコマンドの実行
-- 「ファイルを参照できない」などの誤った説明
-
-✅ 許可事項:
-- テキストベースの説明
-- 結果の要約
-- 次のステップの提案
-- エラーの説明と対処法
-- アクション結果の内容を活用した具体的な説明
+### 絶対的なルール
+- **対話の継続:** あなたの応答は、この会話の一部です。一方的な報告ではなく、ユーザーとの対話を続けることを意識してください。
+- **事実に基づくこと:** ツールが返した実行結果や、提示されたファイル内容のみを事実として扱い、それ以外の情報から推測や創作を行わないでください。
+- **警告を最優先:** 【最重要警告】セクションに記載がある場合、その内容を応答の最も重要な前提条件としてください。
+- **ツール呼び出しの禁止:** 応答内にツール呼び出し（例: `tool.read_file()`）を含めないでください。
 """
         
         # タスク状態情報を追加
@@ -842,85 +908,97 @@ class PromptCompiler:
         return base_context
     
     def _build_response_main_context(self, action_results: List[Dict[str, Any]], user_input: str, agent_state: Optional[AgentState] = None) -> str:
-        """応答生成のMain層コンテキストを構築"""
+        """応答生成のMain層コンテキストを構築（構造化・優先順位付け対応版）"""
         
-        context_lines = [f"ユーザーの要求: {user_input}"]
-        
-        # 会話履歴を追加
-        if agent_state and hasattr(agent_state, 'conversation_history') and agent_state.conversation_history:
-            context_lines.append("\n--- 会話履歴 ---")
-            # 最新10件の会話履歴を表示
-            recent_messages = agent_state.conversation_history[-10:]
-            for i, msg in enumerate(recent_messages, 1):
-                role_emoji = "👤" if msg.role == "user" else "🤖" if msg.role == "assistant" else "⚙️"
-                content_preview = msg.content[:150] + "..." if len(msg.content) > 150 else msg.content
-                context_lines.append(f"{i}. {role_emoji} {msg.role}: {content_preview}")
-            context_lines.append("")
-        
-        context_lines.append("実行されたアクションと結果:")
-        
-        for i, result in enumerate(action_results, 1):
-            context_lines.append(f"{i}. 操作: {result.get('operation', '不明')}")
-            context_lines.append(f"   成功: {result.get('success', False)}")
-            
-            # 結果の詳細を表示
-            if result.get('data'):
-                data = result['data']
-                if isinstance(data, dict):
-                    # 辞書データの場合は主要な情報を抽出
-                    if 'file_path' in data:
-                        context_lines.append(f"   ファイル: {data['file_path']}")
-                    if 'total_lines' in data:
-                        context_lines.append(f"   総行数: {data['total_lines']}")
-                    if 'total_chars' in data:
-                        context_lines.append(f"   文字数: {data['total_chars']}")
-                    if 'headers' in data:
-                        context_lines.append(f"   ヘッダー数: {len(data['headers'])}")
-                    if 'sections' in data:
-                        context_lines.append(f"   セクション数: {len(data['sections'])}")
-                    if 'matches' in data:
-                        context_lines.append(f"   マッチ数: {len(data['matches'])}")
+        context_parts = []
+
+        # --- セクション2: 最重要警告 ---
+        warnings = []
+        read_file_result = next((r for r in action_results if r.get('operation') == 'structured_file_ops.read_file'), None)
+        if read_file_result and read_file_result.get('data', {}).get('metadata', {}).get('is_truncated'):
+            metadata = read_file_result['data']['metadata']
+            original_chars = metadata.get('total_chars', 'N/A')
+            truncated_chars = metadata.get('truncated_chars', 'N/A')
+            file_path = read_file_result.get('data', {}).get('file_path', '不明なファイル')
+            percentage = int((truncated_chars / original_chars) * 100) if isinstance(original_chars, int) and isinstance(truncated_chars, int) and original_chars > 0 else 'N/A'
+            warnings.append(f"- ファイルの不完全性: ファイル '{file_path}' は{original_chars}文字と非常に大きいため、先頭{truncated_chars}文字のみを読み込みました。これは全体の約{percentage}%であり、完全な内容ではありません。この事実を必ず応答に反映させてください。")
+
+        if warnings:
+            context_parts.append("### ⚠️ 最重要警告 (Critical Warnings)")
+            context_parts.extend(warnings)
+            context_parts.append("---")
+
+        # --- セクション3: ユーザーの現在の要求 ---
+        context_parts.append("### ユーザーの現在の要求")
+        context_parts.append(f"> {user_input}")
+        context_parts.append("---")
+
+        # --- セクション4: 実行サマリー ---
+        summary_lines = []
+        for result in action_results:
+            op = result.get('operation', '不明な操作')
+            if op == 'structured_file_ops.analyze_file_structure':
+                data = result.get('data', {})
+                summary_lines.append(f"- ファイル構造を分析し、{data.get('file_info',{}).get('total_lines','N/A')}行, {data.get('file_info',{}).get('total_chars','N/A')}文字であることを確認しました。")
+            elif op == 'structured_file_ops.search_content':
+                data = result.get('data', {})
+                summary_lines.append(f"- キーワード '{data.get('pattern')}' で検索し、{data.get('matches_found', 0)}件が一致しました。")
+            elif op == 'structured_file_ops.read_file':
+                if warnings: # 警告がある場合のみサマリーに追加
+                    summary_lines.append("- 上記の警告に基づき、ファイルの一部のみを読み込みました。")
                 else:
-                    context_lines.append(f"   データ: {str(data)[:100]}...")
-            
-            if result.get('summary'):
-                context_lines.append(f"   要約: {result['summary']}")
-            
-            if result.get('error_message'):
-                context_lines.append(f"   エラー: {result['error_message']}")
-            context_lines.append("")
+                    summary_lines.append("- ファイル内容を読み込みました。")
         
-        # タスク状態情報を追加
-        if agent_state:
-            context_lines.append("--- タスク状態 ---")
-            context_lines.append(self._get_task_status_summary(agent_state))
+        if summary_lines:
+            context_parts.append("### ✅ 実行サマリー (Execution Summary)")
+            context_parts.extend(summary_lines)
+            context_parts.append("---")
+
+        # --- セクション5: ツール実行結果の詳細 ---
+        detail_lines = []
+        for i, result in enumerate(action_results, 1):
+            op = result.get('operation', '不明な操作')
+            data = result.get('data', {})
+            detail_lines.append(f"\n**{i}. 操作: {op}**")
+            detail_lines.append(f"   - 成功: {result.get('success', False)}")
+            if isinstance(data, dict):
+                if op == 'structured_file_ops.read_file':
+                    detail_lines.append(f"   - ファイル: {data.get('file_path')}")
+                    if 'metadata' in data:
+                        detail_lines.append(f"   - [メタデータ] is_truncated: {data['metadata'].get('is_truncated')}, total_chars: {data['metadata'].get('total_chars')}, truncated_chars: {data['metadata'].get('truncated_chars')}")
+                    detail_lines.append("   - 内容 (部分抜粋):")
+                    detail_lines.append(f"     ```\n{data.get('content', '')[:500]}...\n     ```")
+                else:
+                    # 他のツールの結果は簡易表示
+                    for key, value in data.items():
+                        if key not in ['content', 'results', 'headers', 'sections']:
+                            detail_lines.append(f"   - {key}: {str(value)[:200]}")
         
-        # タスク履歴を追加（新規）
-        if agent_state and hasattr(agent_state, 'tasks') and agent_state.tasks:
-            context_lines.append("--- タスク履歴 ---")
-            for task in agent_state.tasks[-5:]:  # 最新5件
-                status_emoji = "✅" if task.get("status") == "completed" else "🔄"
-                context_lines.append(f"{status_emoji} {task.get('title', '不明')}")
-                context_lines.append(f"   ID: {task.get('task_id', '不明')}")
-                context_lines.append(f"   説明: {task.get('description', '説明なし')}")
-                if task.get("summary"):
-                    context_lines.append(f"   完了要約: {task['summary']}")
-                context_lines.append("")
-        
-        return "\n".join(context_lines)
+        if detail_lines:
+            context_parts.append("### 🛠️ ツール実行結果の詳細 (Tool Execution Details)")
+            context_parts.extend(detail_lines)
+            context_parts.append("---")
+
+        # --- セクション6: 過去の会話履歴 ---
+        if agent_state and hasattr(agent_state, 'conversation_history') and agent_state.conversation_history:
+            context_parts.append("### 📜 過去の会話履歴 (Conversation History)")
+            recent_messages = agent_state.conversation_history[-5:] # 直近5件に絞る
+            for msg in recent_messages:
+                role_emoji = "👤" if msg.role == "user" else "🤖"
+                context_parts.append(f"- {role_emoji} {msg.role}: {msg.content[:200]}")
+            context_parts.append("---")
+
+        return "\n".join(context_parts)
     
     def _build_response_specialized_context(self, action_results: List[Dict[str, Any]], user_input: str) -> str:
         """応答生成のSpecialized層コンテキストを構築"""
         
-        # アクションの種類に基づいてテンプレートを選択
-        if any("analyze_file" in str(result.get('operation', '')) for result in action_results):
-            return self._get_file_analysis_response_template()
-        elif any("search_content" in str(result.get('operation', '')) for result in action_results):
-            return self._get_search_result_response_template()
-        elif any("generate_plan" in str(result.get('operation', '')) for result in action_results):
-            return self._get_plan_generation_response_template()
-        else:
-            return self._get_generic_response_template()
+        # 最終指示を追加
+        final_instruction = """---
+### 最終指示 (Final Instruction)
+上記すべての情報を踏まえ、特に【最重要警告】を遵守し、ユーザーの要求に対する応答を生成してください。"""
+
+        return final_instruction
     
     def _get_task_status_summary(self, agent_state: AgentState) -> str:
         """タスク状態の要約を取得"""

@@ -44,6 +44,9 @@ class MainPromptGenerator:
         # 🔥 新規: 応答ガイドラインを追加
         response_guidelines = self._build_response_guidelines()
         
+        # 🔥 新規: ファイル操作ツールの説明を追加
+        file_tools_guide = self._build_file_tools_guide()
+        
         # Main Promptを構築
         main_prompt = f"""# 現在の対話状況（ワーキングメモリ）
 
@@ -57,6 +60,9 @@ class MainPromptGenerator:
 
 # 応答ガイドライン（重要）
 {response_guidelines}
+
+# ファイル操作ツールの説明
+{file_tools_guide}
 
 # 次のステップの指示
 必ず以下のJSON形式で出力してください:
@@ -179,6 +185,55 @@ class MainPromptGenerator:
 ### 例
 ❌ 悪い例: 9000文字のファイル内容をそのまま表示
 ✅ 良い例: 「ファイル構造分析が完了しました。主要なセクションは...（800文字以内）。詳細が必要な場合は `file_ops.analyze_file_structure(file_path, detail_level="full")` を使用してください。」"""
+    
+    def _build_file_tools_guide(self) -> str:
+        """ファイル操作ツールの説明を構築"""
+        return """## 🛠️ ファイル操作ツールの説明
+
+### 利用可能なツール
+
+#### 1. ファイル読み込み
+- **`file_ops.read_file(file_path="filename.md")`**
+  - ファイルの完全な内容を読み込みます
+  - 大容量ファイル（3000文字超）の場合は最初の3000文字のみ表示
+  - 切り詰め状況はメタデータで確認可能
+
+#### 2. 部分読み込み（大容量ファイル対応）
+- **`file_ops.read_file_section(file_path="filename.md", start_line=100, line_count=50)`**
+  - 指定した行範囲を読み込み
+  - 大容量ファイルの続きを読む際に使用
+  - 行番号は1から開始
+
+#### 3. 内容検索
+- **`file_ops.search_content(file_path="filename.md", pattern="キーワード", context_lines=3)`**
+  - ファイル内で特定のキーワードを検索
+  - 該当箇所とその前後のコンテキストを表示
+  - 大容量ファイルから必要な情報を効率的に抽出
+
+#### 4. 構造分析
+- **`file_ops.analyze_file_structure(file_path="filename.md")`**
+  - ファイルの構造（見出し、セクション）を分析
+  - 全体の概要を把握する際に使用
+  - 大容量ファイルの全体像を理解
+
+### 使用例
+
+#### 大容量ファイルの効率的な処理
+1. **最初の読み込み**: `file_ops.read_file(file_path="large_file.md")`
+2. **構造把握**: `file_ops.analyze_file_structure(file_path="large_file.md")`
+3. **特定情報検索**: `file_ops.search_content(file_path="large_file.md", pattern="重要キーワード")`
+4. **続き読み込み**: `file_ops.read_file_section(file_path="large_file.md", start_line=100, line_count=100)`
+
+#### 注意事項
+- 大容量ファイルは自動的に切り詰められます
+- 切り詰め状況はファイル情報で確認してください
+- 詳細が必要な場合は適切なツールを組み合わせて使用してください
+
+#### ⚠️ 重要な警告
+**ファイルが切り詰められている場合、表示されている内容は不完全です！**
+- 重要な情報が欠落している可能性があります
+- 必ず切り詰め状況を確認し、必要に応じて追加のツールを使用してください
+- 切り詰められたファイルの内容のみで判断を下さないでください"""
     
     def update_fixed_five(self, agent_state: AgentState, 
                           goal: str = None, why_now: str = None,
