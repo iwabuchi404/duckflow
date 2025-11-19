@@ -22,7 +22,11 @@ class PlanTool:
         Propose a new plan based on the goal.
         Uses LLM to break down the goal into steps.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        
         print(f"🦆 Planning: Analyzing goal '{goal}'...")
+        logger.info(f"propose_plan called with goal: {goal}")
         
         prompt = f"""
         Goal: {goal}
@@ -43,24 +47,32 @@ class PlanTool:
         messages = [{"role": "user", "content": prompt}]
         
         try:
+            logger.info("Calling LLM for plan proposal...")
             # Call LLM to get steps
             proposal = await self.llm.chat(messages, response_model=PlanProposal)
+            logger.info(f"LLM returned proposal with {len(proposal.steps)} steps")
             
             # Create Plan object
             new_plan = Plan(goal=goal)
-            for step_data in proposal.steps:
+            logger.info("Created new Plan object")
+            
+            for i, step_data in enumerate(proposal.steps):
+                logger.info(f"Adding step {i+1}: {step_data.get('title', 'Untitled')}")
                 new_plan.add_step(
                     title=step_data.get("title", "Untitled Step"),
                     description=step_data.get("description", "")
                 )
             
             # Update State
+            logger.info("Updating agent state with new plan")
             self.state.current_plan = new_plan
-            self.state.phase = "PLANNING" # Or keep it as is?
             
-            return f"Plan created with {len(new_plan.steps)} steps."
+            result = f"Plan created with {len(new_plan.steps)} steps."
+            logger.info(f"propose_plan completed: {result}")
+            return result
             
         except Exception as e:
+            logger.error(f"Error in propose_plan: {e}", exc_info=True)
             return f"Failed to create plan: {e}"
 
     async def mark_step_complete(self) -> str:

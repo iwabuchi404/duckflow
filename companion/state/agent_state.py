@@ -125,8 +125,38 @@ class AgentState(BaseModel):
             current_step = self.current_plan.get_current_step()
             if current_step:
                 context.append(f"Current Step: {current_step.title} ({current_step.status.value})")
+                if current_step.tasks:
+                    pending_tasks = [t for t in current_step.tasks if t.status == TaskStatus.PENDING]
+                    completed_tasks = [t for t in current_step.tasks if t.status == TaskStatus.COMPLETED]
+                    context.append(f"Tasks: {len(completed_tasks)}/{len(current_step.tasks)} completed")
         
         if self.last_action_result:
             context.append(f"\nLast Result:\n{self.last_action_result}")
             
         return "\n".join(context)
+
+    def get_context_mode(self) -> str:
+        """
+        Determine the appropriate context mode for prompt generation.
+        Returns: "normal", "planning", or "task_execution"
+        """
+        # If no plan exists, we're in normal mode
+        if not self.current_plan:
+            return "normal"
+        
+        current_step = self.current_plan.get_current_step()
+        
+        # If we have a step but no tasks yet, we're in planning/task generation mode
+        if current_step and not current_step.tasks:
+            return "task_execution"
+        
+        # If we have tasks, we're executing them
+        if current_step and current_step.tasks:
+            return "task_execution"
+        
+        # If we're between steps or just created a plan, we're in planning mode
+        if not current_step and not self.current_plan.is_complete:
+            return "planning"
+        
+        return "normal"
+

@@ -42,6 +42,14 @@ class LLMClient:
         # Load timeout from config
         self.timeout = timeout or config.get("llm_timeout_seconds", 60.0)
         
+        # Token usage statistics
+        self.usage_stats = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "cost_estimate": 0.0  # Placeholder for cost calculation
+        }
+        
         logger.info(f"LLM Client initialized: provider={provider}, model={self.model}, base_url={self.base_url}")
 
         # Check for dummy key or empty key
@@ -74,6 +82,12 @@ class LLMClient:
                 temperature=0.1, # Low temperature for deterministic actions
             )
 
+            # Update usage stats
+            if response.usage:
+                self.usage_stats["input_tokens"] += response.usage.prompt_tokens
+                self.usage_stats["output_tokens"] += response.usage.completion_tokens
+                self.usage_stats["total_tokens"] += response.usage.total_tokens
+            
             content = response.choices[0].message.content
             return self._parse_response(content, response_model)
 
@@ -112,18 +126,48 @@ class LLMClient:
         # Simple heuristic mock
         last_msg = messages[-1]['content'].lower()
         
-        mock_content = json.dumps({
-            "reasoning": "I am running in MOCK mode because no API key was found. I will respond to the user.",
-            "actions": [
-                {
-                    "name": "response",
-                    "parameters": {
-                        "message": "I am currently running in MOCK mode (No API Key found). I cannot generate real intelligence, but I can test the loop! 🦆"
-                    },
-                    "thought": "Informing the user about mock mode."
-                }
-            ]
-        })
+        # Check if we're being asked for a PlanProposal (contains "steps")
+        if response_model and "PlanProposal" in str(response_model):
+            mock_content = json.dumps({
+                "steps": [
+                    {"title": "Mock Step 1", "description": "This is a mock step for testing"},
+                    {"title": "Mock Step 2", "description": "Another mock step"},
+                    {"title": "Mock Step 3", "description": "Final mock step"}
+                ]
+            })
+        # Check if we're being asked for a TaskListProposal (contains "tasks")
+        elif response_model and "TaskListProposal" in str(response_model):
+            mock_content = json.dumps({
+                "tasks": [
+                    {"title": "Mock Task 1", "description": "First mock task"},
+                    {"title": "Mock Task 2", "description": "Second mock task"}
+                ]
+            })
+        # Check if we're being asked for an ExecutionSummary (contains "summary")
+        elif response_model and "ExecutionSummary" in str(response_model):
+            mock_content = json.dumps({
+                "summary": "This is a mock execution summary. All tasks were processed according to the plan.",
+                "highlights": [
+                    "Successfully completed primary tasks",
+                    "No critical errors encountered",
+                    "Performance was within expected limits"
+                ],
+                "next_steps": "Proceed to the next phase of the project."
+            })
+        # Default ActionList response
+        else:
+            mock_content = json.dumps({
+                "reasoning": "I am running in MOCK mode because no API key was found. I will respond to the user.",
+                "actions": [
+                    {
+                        "name": "response",
+                        "parameters": {
+                            "message": "I am currently running in MOCK mode (No API Key found). I cannot generate real intelligence, but I can test the loop! 🦆"
+                        },
+                        "thought": "Informing the user about mock mode."
+                    }
+                ]
+            })
         
         return self._parse_response(mock_content, response_model)
 
