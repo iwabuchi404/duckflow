@@ -106,7 +106,7 @@ llm:
     max_tokens: 4096
   
   groq:
-    model: "openai/gpt-oss-20b"
+    model: "llama-3.3-70b-versatile"
     temperature: 0.1
     max_tokens: 8192
   
