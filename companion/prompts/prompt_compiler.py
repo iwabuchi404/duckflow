@@ -329,6 +329,11 @@ class PromptCompiler:
     def _inject_memory_to_base(self, base_context: str, memory_data: Dict[str, Any]) -> str:
         """Base層に基本記憶データを注入"""
         try:
+            # 型チェック: memory_dataが辞書でない場合は安全なデフォルト値を使用
+            if not isinstance(memory_data, dict):
+                self.logger.warning(f"memory_dataが辞書ではありません: {type(memory_data).__name__}, 値: {str(memory_data)[:100]}")
+                return base_context
+            
             base_memory = memory_data.get('base_memory', {})
             
             if not base_memory or 'error' in base_memory:
@@ -373,6 +378,11 @@ class PromptCompiler:
     def _inject_memory_to_main(self, main_context: str, memory_data: Dict[str, Any]) -> str:
         """Main層に主要記憶データを注入"""
         try:
+            # 型チェック: memory_dataが辞書でない場合は安全なデフォルト値を使用
+            if not isinstance(memory_data, dict):
+                self.logger.warning(f"memory_dataが辞書ではありません: {type(memory_data).__name__}, 値: {str(memory_data)[:100]}")
+                return main_context
+            
             main_memory = memory_data.get('main_memory', {})
             
             if not main_memory or 'error' in main_memory:
@@ -420,6 +430,11 @@ class PromptCompiler:
                                      memory_data: Dict[str, Any]) -> str:
         """Specialized層に専門記憶データを注入"""
         try:
+            # 型チェック: memory_dataが辞書でない場合は安全なデフォルト値を使用
+            if not isinstance(memory_data, dict):
+                self.logger.warning(f"memory_dataが辞書ではありません: {type(memory_data).__name__}, 値: {str(memory_data)[:100]}")
+                return specialized_context
+            
             specialized_memory = memory_data.get('specialized_memory', {})
             
             if not specialized_memory or 'error' in specialized_memory:

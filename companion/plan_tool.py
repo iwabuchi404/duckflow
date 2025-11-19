@@ -377,7 +377,7 @@ class PlanTool:
     # === Public API ===
     
     async def propose(self, content: str, sources: List[MessageRef], 
-                rationale: str, tags: List[str]) -> str:
+                rationale: str, tags: List[str]) -> Union[str, Dict[str, Any]]:
         """プランを提案（非同期版、LLMによるステップ自動生成対応）
         
         Args:
@@ -437,9 +437,11 @@ class PlanTool:
         # 永続化
         self._save_plan(plan_id)
         
-        self.logger.info(f"プラン提案: {plan_id} - {title} (ステップ数: {len(plan.steps)})")
+        # first_step_id を同梱（連携強化）
+        first_step_id = plan.steps[0].step_id if plan.steps else None
+        self.logger.info(f"プラン提案: {plan_id} - {title} (ステップ数: {len(plan.steps)}), first_step_id={first_step_id}")
         self._log_debug_state("after_propose")
-        return plan_id
+        return {"plan_id": plan_id, "first_step_id": first_step_id}
     
     def _generate_title(self, content: str) -> str:
         """コンテンツからタイトルを生成"""

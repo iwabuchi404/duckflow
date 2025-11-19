@@ -19,7 +19,7 @@ import logging
 import asyncio
 import inspect
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 from dataclasses import dataclass
 from pydantic import Field
 
@@ -163,6 +163,9 @@ class EnhancedCompanionCoreV8:
     
     async def process_user_message(self, user_message: str) -> str:
         """ユーザーメッセージ処理のメインエントリーポイント"""
+        # 現在のAgentStateの参照を保存（エラー回復時に使用）
+        current_agent_state = self.agent_state
+        
         try:
             self.logger.info(f"V8メッセージ処理開始: {user_message[:50]}...")
             
@@ -172,11 +175,12 @@ class EnhancedCompanionCoreV8:
                 response = await self._handle_direct_response(user_message, intent_result)
             else:
                 response = await self._handle_action_execution(user_message, intent_result)
-            
-                if hasattr(self.agent_state, 'add_conversation_message'):
-                    self.agent_state.add_conversation_message('user', user_message)
-                    self.agent_state.add_conversation_message('assistant', response)
-                    self.logger.info("会話履歴を更新しました")
+
+            # 会話履歴の保存を共通化
+            if hasattr(current_agent_state, 'add_conversation_message'):
+                current_agent_state.add_conversation_message('user', user_message)
+                current_agent_state.add_conversation_message('assistant', response)
+                self.logger.info("会話履歴を更新しました")
             
             return response
                 
@@ -184,9 +188,11 @@ class EnhancedCompanionCoreV8:
             self.logger.error(f"V8メッセージ処理エラー: {e}", exc_info=True)
             error_response = f"申し訳ありません、処理中にエラーが発生しました: {str(e)}"
             
-            if hasattr(self.agent_state, 'add_conversation_message'):
-                self.agent_state.add_conversation_message('user', user_message)
-                self.agent_state.add_conversation_message('assistant', error_response)
+            # エラー回復時も同じAgentStateインスタンスを使用
+            if hasattr(current_agent_state, 'add_conversation_message'):
+                current_agent_state.add_conversation_message('user', user_message)
+                current_agent_state.add_conversation_message('assistant', error_response)
+                self.logger.info("エラー回復時に会話履歴を更新しました")
             
             return error_response
     
@@ -214,7 +220,22 @@ class EnhancedCompanionCoreV8:
             return await self._format_final_response(raw_results, user_message)
         except Exception as e:
             self.logger.error(f"Action実行エラー: {e}", exc_info=True)
-            return f"タスク実行中にエラーが発生しました: {str(e)}"
+            # エラー時もAgentStateを維持し、適切なエラーレスポンスを返す
+            error_response = f"タスク実行中にエラーが発生しました: {str(e)}"
+            
+            # エラー情報をAgentStateに記録（利用可能な場合）
+            if hasattr(self.agent_state, 'add_error_record'):
+                try:
+                    self.agent_state.add_error_record(
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                        context="action_execution",
+                        timestamp=datetime.now().isoformat()
+                    )
+                except Exception as state_error:
+                    self.logger.warning(f"エラー記録の保存に失敗: {state_error}")
+            
+            return error_response
     
     async def _dispatch_actions(self, action_list: List[ActionV8]) -> List[Dict[str, Any]]:
         """アクションリストを実行し、結果を連携させるパイプライン処理"""
@@ -226,8 +247,61 @@ class EnhancedCompanionCoreV8:
             for action in action_list:
                 # アクションの引数を前処理（データ連携のため）
                 processed_args = self._preprocess_action_args(action.args, turn_results)
-                
-                # アクションを実行
+
+                # 未解決のrefが残っていないかチェック
+                unresolved_keys = [k for k, v in processed_args.items() if isinstance(v, str) and v.startswith("ref:")]
+                if unresolved_keys:
+                    msg = f"未解決の参照が存在します: {unresolved_keys}"
+                    self.logger.error(msg)
+                    raw_result = {"success": False, "error": msg, "operation": action.operation}
+                    raw_results.append(raw_result)
+                    if action.action_id:
+                        turn_results[action.action_id] = raw_result
+                        self.logger.debug(f"アクション結果を保存: {action.action_id} -> {type(raw_result).__name__}")
+                    break
+
+                # 解決済み引数でアクションを実行
+                action.args = processed_args
+                # 追加の軽量型ガード（主なケース）
+                try:
+                    if action.operation == "user_response_tool.generate_response":
+                        ar = action.args.get("action_results")
+                        po = action.args.get("prompt_override")
+                        if ar is not None and not isinstance(ar, list):
+                            return_err = {
+                                "success": False,
+                                "error": f"引数'action_results'の型が不正: 期待list 実際{type(ar).__name__}",
+                                "operation": action.operation
+                            }
+                            raw_results.append(return_err)
+                            if action.action_id:
+                                turn_results[action.action_id] = return_err
+                            break
+                        if po is not None and not isinstance(po, str):
+                            return_err = {
+                                "success": False,
+                                "error": f"引数'prompt_override'の型が不正: 期待str 実際{type(po).__name__}",
+                                "operation": action.operation
+                            }
+                            raw_results.append(return_err)
+                            if action.action_id:
+                                turn_results[action.action_id] = return_err
+                            break
+                    if action.operation == "task_tool.generate_list":
+                        sid = action.args.get("step_id")
+                        if sid is not None and not isinstance(sid, str):
+                            return_err = {
+                                "success": False,
+                                "error": f"引数'step_id'の型が不正: 期待str 実際{type(sid).__name__}",
+                                "operation": action.operation
+                            }
+                            raw_results.append(return_err)
+                            if action.action_id:
+                                turn_results[action.action_id] = return_err
+                            break
+                except Exception as e:
+                    self.logger.warning(f"型ガード中に例外: {e}")
+
                 raw_result = await self._execute_action_v8(action)
                 raw_results.append(raw_result)
 
@@ -254,6 +328,18 @@ class EnhancedCompanionCoreV8:
             
         except Exception as e:
             self.logger.error(f"アクションディスパッチエラー: {e}", exc_info=True)
+            # エラー時もAgentStateを維持し、空の結果リストを返す
+            if hasattr(self.agent_state, 'add_error_record'):
+                try:
+                    self.agent_state.add_error_record(
+                        error_type=type(e).__name__,
+                        error_message=str(e),
+                        context="action_dispatch",
+                        timestamp=datetime.now().isoformat()
+                    )
+                except Exception as state_error:
+                    self.logger.warning(f"エラー記録の保存に失敗: {state_error}")
+            
             return []
     
     async def _handle_file_operation_result(self, action: ActionV8, raw_result: Dict[str, Any]) -> None:
@@ -309,22 +395,72 @@ class EnhancedCompanionCoreV8:
             self.logger.error(f"ファイル操作結果処理エラー: {e}")
     
     def _preprocess_action_args(self, args: Dict[str, Any], turn_results: Dict[str, Any]) -> Dict[str, Any]:
-        """アクション引数の前処理（データ連携のため）"""
+        """アクション引数の前処理（データ連携のため）。
+        キーごとに期待型へ正規化する（action_results/prompt_override/step_id など）。
+        未解決refは上位で検出・中断されるため、ここでは警告しつつ原文を保持。
+        """
         try:
-            processed_args = {}
+            processed_args: Dict[str, Any] = {}
             for key, value in args.items():
+                # ref: 構文の一般処理
                 if isinstance(value, str) and value.startswith("ref:"):
-                    # ref:構文の処理
-                    ref_id = value[4:]  # "ref:"を除去
-                    if ref_id in turn_results:
-                        processed_args[key] = turn_results[ref_id]
-                        self.logger.debug(f"データ連携: {key} <- ref:{ref_id}")
+                    ref_id = value[4:]
+                    ref_val = turn_results.get(ref_id)
+
+                    # キー別の正規化
+                    if ref_val is not None:
+                        if key == "action_results":
+                            if isinstance(ref_val, list):
+                                processed_args[key] = ref_val
+                            elif isinstance(ref_val, dict):
+                                processed_args[key] = [ref_val]
+                            else:
+                                self.logger.warning(f"action_resultsに非対応型を検出: {type(ref_val).__name__}. フォールバックでラップします")
+                                processed_args[key] = [{"raw": ref_val}]
+                            self.logger.debug(f"データ連携(action_results): <- ref:{ref_id} -> type={type(processed_args[key]).__name__}")
+
+                        elif key == "prompt_override":
+                            chosen: str = ""
+                            try:
+                                # ファイル読み込み系の典型構造
+                                if isinstance(ref_val, dict):
+                                    data = ref_val.get("data", ref_val)
+                                    if isinstance(data, dict):
+                                        chosen = data.get("content") or ref_val.get("content") or ""
+                                    if not chosen and "response" in ref_val:
+                                        chosen = str(ref_val.get("response") or "")
+                                if not chosen:
+                                    chosen = str(ref_val)
+                            except Exception:
+                                chosen = str(ref_val)
+                            processed_args[key] = chosen
+                            self.logger.debug(f"データ連携(prompt_override): <- ref:{ref_id} -> len={len(chosen)}")
+
+                        elif key == "step_id":
+                            step_id_val: Optional[str] = None
+                            if isinstance(ref_val, dict):
+                                # 直接 step_id がある場合
+                                step_id_val = ref_val.get("step_id")
+                                # PlanToolがfirst_step_idを返す将来拡張に対応
+                                if not step_id_val:
+                                    step_id_val = ref_val.get("first_step_id")
+                            if step_id_val:
+                                processed_args[key] = step_id_val
+                                self.logger.debug(f"データ連携(step_id): <- ref:{ref_id} -> {step_id_val}")
+                            else:
+                                # 解決不能。未解決として上位に判断を委ねる
+                                processed_args[key] = value
+                                self.logger.warning(f"step_id参照の解決に失敗: ref:{ref_id}")
+
+                        else:
+                            # その他のキーは参照結果をそのまま適用
+                            processed_args[key] = ref_val
+                            self.logger.debug(f"データ連携({key}): <- ref:{ref_id} -> type={type(ref_val).__name__}")
                     else:
                         processed_args[key] = value
                         self.logger.warning(f"参照IDが見つかりません: {ref_id}")
                 else:
                     processed_args[key] = value
-            
             return processed_args
         except Exception as e:
             self.logger.error(f"アクション引数前処理エラー: {e}")
@@ -345,7 +481,8 @@ class EnhancedCompanionCoreV8:
                     operation = action_data.get("operation")
                     if not operation: continue
 
-                    action_id = f"{action_id_base}_{i}_{operation.replace('.', '_')}"
+                    # LLMが指定したaction_idを優先的に使用し、なければ自動生成する
+                    action_id = action_data.get("action_id") or f"{action_id_base}_{i}_{operation.replace('.', '_')}"
                     parameters = action_data.get("parameters", {})
                     reasoning = action_data.get("reasoning", "")
 
@@ -629,6 +766,7 @@ class EnhancedCompanionCoreV8:
                 # --- ▼▼▼ 引数検証ロジック ▼▼▼ ---
                 sig = inspect.signature(tool_func)
                 for param in sig.parameters.values():
+                    # 必須引数（デフォルト値なし）をチェック
                     if param.default is inspect.Parameter.empty and param.kind in [inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY]:
                         if param.name not in action.args:
                             error_msg = f"ツール '{action.operation}' の必須引数 '{param.name}' が不足しています。"
@@ -664,33 +802,34 @@ class EnhancedCompanionCoreV8:
 
     async def _handle_read_file_chunk(self, file_path: str, size: int, offset: int = 0, **kwargs) -> Dict[str, Any]:
         """ファイルチャンク読み込みハンドラー"""
-        return await self.structured_file_ops.read_file_chunk(file_path, offset, size, **kwargs)
+        return await self.structured_file_ops.read_file_chunk(file_path=file_path, size=size, offset=offset, **kwargs)
     
     # v4アーキテクチャ対応の新しいハンドラー
     async def _handle_plan_propose(self, goal: str, **kwargs) -> Dict[str, Any]:
-        """PlanTool.proposeのハンドラー"""
+        """PlanTool.proposeのハンドラー（本来フローへ委譲）"""
         try:
-            from .state.agent_state import Plan, Step
-            import uuid
-            
-            # 新しいPlanを作成
-            plan = Plan(
-                plan_id=f"plan_{uuid.uuid4().hex[:8]}",
-                name=f"目標: {goal[:50]}",
-                goal=goal,
-                status="draft",
-                steps=[]
-            )
-            
-            # AgentStateに追加
-            self.agent_state.plans.append(plan)
-            self.agent_state.active_plan_id = plan.plan_id
-            
-            return {
-                "success": True,
-                "plan_id": plan.plan_id,
-                "message": f"新しい計画を作成しました: {plan.name}"
-            }
+            if not getattr(self, 'plan_tool', None):
+                return {"success": False, "error": "PlanToolが初期化されていません"}
+
+            # PlanToolのAPIに合わせて引数を組み立て
+            from companion.plan_tool import MessageRef
+            sources = []  # 必要なら会話IDなどからMessageRefを構築
+            rationale = "generated by EnhancedCompanionCoreV8"
+            tags = ["auto"]
+
+            result = await self.plan_tool.propose(content=goal, sources=sources, rationale=rationale, tags=tags)
+
+            # PlanTool.propose が dict を返す場合/plan_id文字列のみ返す場合の両対応
+            if isinstance(result, dict):
+                resp = {"success": True, **result}
+            else:
+                resp = {"success": True, "plan_id": result}
+
+            # ログ補助
+            plan_id = resp.get("plan_id")
+            first_step_id = resp.get("first_step_id")
+            self.logger.info(f"plan_tool.propose 完了: plan_id={plan_id}, first_step_id={first_step_id}")
+            return resp
         except Exception as e:
             self.logger.error(f"計画作成エラー: {e}")
             return {"success": False, "error": str(e)}

@@ -21,36 +21,41 @@ class UserResponseTool:
         self.logger = logging.getLogger(__name__)
     
     async def generate_response(self, 
-                              action_results: List[Dict[str, Any]], 
                               user_input: str,
-                              agent_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                              action_results: List[Dict[str, Any]] = [], 
+                              agent_state: Optional[Any] = None, 
+                              prompt_override: Optional[str] = None) -> Dict[str, Any]:
         """
-        アクション実行結果からユーザーへの応答を生成する
+        アクション実行結果やプロンプトオーバーライドからユーザーへの応答を生成する
         
         Args:
-            action_results: 実行されたアクションの結果リスト
             user_input: ユーザーの元の要求
+            action_results: 実行されたアクションの結果リスト
             agent_state: エージェントの現在の状態
+            prompt_override: この引数が指定された場合、他の情報より優先してLLMへの指示として使用
             
         Returns:
             生成された応答の辞書
         """
         try:
-            self.logger.info(f"応答生成開始: {len(action_results)}個のアクション結果")
+            self.logger.info(f"応答生成開始: {len(action_results)}個のアクション結果, prompt_override: {prompt_override is not None}")
             
-            # agent_stateが辞書の場合は適切な形式に変換
-            if isinstance(agent_state, dict):
-                self.logger.warning("agent_stateが辞書として渡されました。適切な形式に変換します。")
-                # 辞書の場合はNoneとして扱い、PromptCompilerでデフォルト処理を使用
-                agent_state = None
-            
-            # 応答生成用のプロンプトをコンパイル
-            prompt = self.prompt_compiler.compile_response_prompt(
-                pattern="base_main_specialized",
-                action_results=action_results,
-                user_input=user_input,
-                agent_state=agent_state
-            )
+            if prompt_override:
+                # prompt_overrideが指定されている場合は、それを最優先で使用
+                prompt = prompt_override
+            else:
+                # agent_stateが辞書の場合は適切な形式に変換
+                if isinstance(agent_state, dict):
+                    self.logger.warning("agent_stateが辞書として渡されました。適切な形式に変換します。")
+                    agent_state = None
+                
+                # 応答生成用のプロンプトをコンパイル
+                prompt = self.prompt_compiler.compile_response_prompt(
+                    pattern="base_main_specialized",
+                    action_results=action_results,
+                    user_input=user_input,
+                    agent_state=agent_state
+                )
             
             # LLMに応答生成を依頼
             response = await self._call_llm_for_response(prompt)
@@ -58,7 +63,7 @@ class UserResponseTool:
             result = {
                 "success": True,
                 "response": response,
-                "generation_method": "llm_based",
+                "generation_method": "llm_based_override" if prompt_override else "llm_based_summary",
                 "prompt_length": len(prompt),
                 "response_length": len(response),
                 "action_count": len(action_results)
@@ -68,7 +73,7 @@ class UserResponseTool:
             return result
             
         except Exception as e:
-            self.logger.error(f"応答生成エラー: {e}")
+            self.logger.error(f"応答生成エラー: {e}", exc_info=True)
             fallback_response = self._generate_fallback_response(action_results, user_input)
             
             result = {
