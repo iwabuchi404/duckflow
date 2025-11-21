@@ -9,6 +9,8 @@ class TaskListProposal(BaseModel):
     """Schema for LLM response when proposing tasks."""
     tasks: List[Dict[str, str]] = Field(..., description="List of tasks. Each task has 'title' and 'description'.")
 
+from companion.ui.console import ui
+
 class TaskTool:
     """
     Manages specific tasks within a Step.
@@ -31,7 +33,7 @@ class TaskTool:
         if current_step.tasks:
             return f"Step '{current_step.title}' already has {len(current_step.tasks)} tasks."
 
-        print(f"🦆 Planning: Generating tasks for step '{current_step.title}'...")
+        ui.print_thinking(f"Planning: Generating tasks for step '{current_step.title}'...")
 
         prompt = f"""
         Current Goal: {self.state.current_plan.goal}

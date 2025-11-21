@@ -30,6 +30,13 @@ class FileOps:
             raise PermissionError(f"Duck Keeper Alert: Access denied to {path} (Outside workspace)")
         return (self.workspace_root / path).resolve()
 
+    def file_exists(self, path: str) -> bool:
+        """Check if a file exists within the workspace."""
+        try:
+            return self._get_full_path(path).exists()
+        except Exception:
+            return False
+
     async def read_file(self, path: str, offset: int = 0, limit: int = 100000) -> str:
         """
         Read content of a file with size limit and pagination support.
@@ -39,6 +46,10 @@ class FileOps:
             offset: Byte offset to start reading from (default: 0)
             limit: Maximum number of bytes to read (default: 100KB)
         """
+        # Ensure types
+        offset = int(offset)
+        limit = int(limit)
+
         full_path = self._get_full_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {path}")

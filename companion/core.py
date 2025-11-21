@@ -12,6 +12,7 @@ from companion.tools.task_tool import TaskTool
 from companion.tools.approval import ApprovalTool
 from companion.execution.task_executor import TaskExecutor
 from companion.execution.result_summarizer import ResultSummarizer
+from companion.ui import ui
 
 logger = logging.getLogger(__name__)
 
@@ -61,104 +62,145 @@ class DuckAgent:
         self.tools[name] = func
 
     def get_tool_descriptions(self) -> str:
-        """Generate descriptions for all registered tools."""
-        import inspect
+        """Generate tool descriptions for the system prompt."""
         descriptions = []
-        
         for name, func in self.tools.items():
-            doc = func.__doc__ or "No description."
+            # Get docstring
+            doc = func.__doc__ or "No description available."
+            doc = doc.strip().split("\n")[0]  # First line only
             
-            # Get function signature
-            try:
-                sig = inspect.signature(func)
-                params = []
-                for param_name, param in sig.parameters.items():
-                    if param_name not in ['self', 'cls']:
-                        # Get type annotation if available
-                        param_type = param.annotation if param.annotation != inspect.Parameter.empty else "any"
-                        param_str = f"{param_name}: {param_type}" if isinstance(param_type, type) else f"{param_name}"
-                        params.append(param_str)
-                
-                param_list = ", ".join(params) if params else "no parameters"
-                descriptions.append(f"- {name}({param_list}): {doc.strip()}")
-            except:
-                descriptions.append(f"- {name}: {doc.strip()}")
+            # Get signature (simplified)
+            import inspect
+            sig = inspect.signature(func)
+            
+            descriptions.append(f"- {name}{sig}: {doc}")
         
         return "\n".join(descriptions)
 
     async def run(self):
         """Main execution loop."""
         self.running = True
-        print("🦆 Duckflow v4 Started. Type 'exit' to quit.")
+        ui.print_welcome()
         
         while self.running:
             try:
-                # 1. Get User Input if needed
-                if self.state.phase == AgentPhase.IDLE or self.state.phase == AgentPhase.AWAITING_USER:
-                    user_input = await asyncio.to_thread(input, "You: ")
-                    if not user_input:
-                        continue
+                # 1. Input Phase
+                if self.state.phase == AgentPhase.AWAITING_USER:
+                    # Resume from user input (handled by tools usually, but here for safety)
+                    pass
+                
+                user_input = input("\nYou: ")
+                if not user_input.strip():
+                    continue
                     
-                    self.state.add_message("user", user_input)
+                if user_input.lower() in ["exit", "quit"]:
+                    await self.action_exit()
+                    break
+                
+                ui.print_user(user_input)
+                self.state.add_message("user", user_input)
+                self.state.phase = AgentPhase.THINKING
+                
+                # --- Autonomous Execution Loop ---
+                # Continue thinking and executing until we produce a response to the user
+                while True:
+                    # 2. Think & Decide Phase
                     self.state.phase = AgentPhase.THINKING
-
-                # 2. Think & Decide (LLM Call)
-                if self.state.phase == AgentPhase.THINKING:
-                    print("🦆 Thinking...")
+                    with ui.create_spinner("Thinking..."):
+                        # Determine context mode
+                        context_mode = self.state.get_context_mode()
+                        
+                        # Generate system prompt
+                        system_prompt = get_system_prompt(
+                            tool_descriptions=self.get_tool_descriptions(),
+                            state_context=self.state.to_prompt_context(),
+                            mode=context_mode
+                        )
+                        
+                        # Prepare messages
+                        messages = [
+                            {"role": "system", "content": system_prompt}
+                        ] + self.state.conversation_history
+                        
+                        # Call LLM
+                        action_list = await self.llm.chat(messages, response_model=ActionList)
                     
-                    # Determine context mode based on current state
-                    context_mode = self.state.get_context_mode()
+                    logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
                     
-                    system_prompt = get_system_prompt(
-                        tool_descriptions=self.get_tool_descriptions(),
-                        state_context=self.state.to_prompt_context(),
-                        mode=context_mode
-                    )
+                    # Display reasoning
+                    ui.print_thinking(action_list.reasoning)
                     
-                    messages = [
-                        {"role": "system", "content": system_prompt}
-                    ] + self.state.conversation_history
-
-                    # Call LLM
-                    action_list = await self.llm.chat(messages, response_model=ActionList)
-                    
-                    # Log reasoning
-                    print(f"🦆 Thought: {action_list.reasoning}")
-                    self.state.add_message("assistant", json.dumps(action_list.model_dump(), ensure_ascii=False))
-                    
-                    # 3. Execute
+                    # 3. Execute Actions
                     self.state.phase = AgentPhase.EXECUTING
-                    await self.execute_actions(action_list)
-                    
-                    # Display Token Usage
-                    stats = self.llm.usage_stats
-                    print(f"   📊 Tokens: {stats['total_tokens']} (In: {stats['input_tokens']}, Out: {stats['output_tokens']})")
-                    
-                    # Update Vitals
-                    self.state.update_vitals()
-                    self._check_pacemaker()
-                    
-                    # If no further actions needed, go back to waiting
-                    if self.state.phase == AgentPhase.EXECUTING:
-                         self.state.phase = AgentPhase.AWAITING_USER
-
+                    if action_list.actions:
+                        await self.execute_actions(action_list)
+                        
+                        # Check if we should return to user
+                        # If 'response', 'exit', or 'duck_call' action was executed, break the inner loop
+                        should_return_to_user = False
+                        for action in action_list.actions:
+                            if action.name in ["response", "exit", "duck_call"]:
+                                should_return_to_user = True
+                                break
+                        
+                        if should_return_to_user:
+                            logger.info("Autonomous loop ending: response/exit/duck_call action executed")
+                            break
+                    else:
+                        # No actions proposed, break the inner loop
+                        logger.info("Autonomous loop ending: no actions proposed")
+                        break
+                # ---------------------------------
+                
+                # Display Token Usage
+                ui.print_token_usage(self.llm.usage_stats)
+                
+                # Update Vitals
+                self.state.update_vitals()
+                self._check_pacemaker()
+                
             except KeyboardInterrupt:
-                print("\n🦆 Interrupted by user.")
+                await self.action_exit()
                 break
             except Exception as e:
-                logger.error(f"Critical Error: {e}", exc_info=True)
-                print(f"🦆 Error: {e}")
-                self.state.phase = AgentPhase.AWAITING_USER
+                logger.error("Error in main loop", exc_info=True)
+                ui.print_error(str(e))
 
     async def execute_actions(self, action_list: ActionList):
         """Dispatch and execute a list of actions."""
+        logger.info(f"Executing actions: {[a.name for a in action_list.actions]}")
+        results = []
         for action in action_list.actions:
-            print(f"🦆 Action: {action.name} ({action.thought})")
+            ui.print_action(action.name, action.parameters, action.thought)
+            
+            # --- Approval Check ---
+            requires_approval = False
+            warning_msg = ""
+            
+            if action.name in ["delete_file", "replace_in_file"]:
+                requires_approval = True
+                warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
+            
+            elif action.name == "write_file":
+                path = action.parameters.get("path")
+                if path and file_ops.file_exists(path):
+                    requires_approval = True
+                    warning_msg = f"File '{path}' already exists. Overwrite?"
+            
+            if requires_approval:
+                if not ui.request_confirmation(warning_msg):
+                    msg = f"Action '{action.name}' denied by user."
+                    ui.print_result(msg, is_error=True)
+                    self.state.last_action_result = msg
+                    results.append(msg)
+                    continue
+            # ----------------------
             
             if action.name in self.tools:
                 try:
                     # Execute tool
                     func = self.tools[action.name]
+                    logger.info(f"Calling tool: {action.name}")
                     
                     # Check if function is async
                     if asyncio.iscoroutinefunction(func):
@@ -166,46 +208,73 @@ class DuckAgent:
                     else:
                         result = func(**action.parameters)
                     
+                    logger.info(f"Tool {action.name} returned. Result length: {len(str(result))}")
+                    
                     # Record result
                     self.state.last_action_result = f"Action '{action.name}' succeeded: {result}"
                     
-                    # Auto-report result to user (except for 'response' action which already prints)
-                    if action.name != "response" and result:
-                        print(f"   ✅ Result: {result}")
+                    # Add result to conversation history (for LLM context in next cycle)
+                    # For most tools, add a summary. For response, it's already added.
+                    if action.name != "response":
+                        # Truncate very long results for conversation history
+                        result_str = str(result)
+                        max_history_length = 4000  # Limit context size
+                        if len(result_str) > max_history_length:
+                            result_summary = result_str[:max_history_length] + f"\n... (truncated {len(result_str) - max_history_length} characters)"
+                        else:
+                            result_summary = result_str
+                        
+                        self.state.add_message("assistant", f"[Tool: {action.name}] {result_summary}")
+                        ui.print_result(result_str)
                     
+                    results.append(result)
+
                 except Exception as e:
                     error_msg = f"Action '{action.name}' failed: {str(e)}"
                     logger.error(error_msg, exc_info=True)
                     self.state.last_action_result = error_msg
-                    print(f"   ❌ Error: {str(e)}")
+                    ui.print_result(str(e), is_error=True)
+                    results.append(error_msg)
             else:
                 msg = f"Unknown tool: {action.name}"
                 logger.warning(msg)
                 self.state.last_action_result = msg
-                print(f"   ⚠️  {msg}")
+                ui.print_result(msg, is_error=True)
+                results.append(msg)
+        
+        # Update token usage display
+        if ui:
+            ui.print_token_usage(self.llm.usage_stats)
+            
+        logger.info("Finished executing actions")
+        return results
 
     def _check_pacemaker(self):
         """Pacemaker: Check vitals and intervene if necessary."""
-        vitals = self.state.vitals
-        if vitals.stamina < 0.2:
-            print("\n⚠️  PACEMAKER ALERT: Stamina is low!")
-            print("   (The duck is tired. Suggesting a break.)")
-            self.state.add_message("system", "Your stamina is low (below 0.2). You should consider using 'duck_call' to ask the user for a break or guidance.")
-        
-        if vitals.focus < 0.2:
-            print("\n⚠️  PACEMAKER ALERT: Focus is low!")
-            self.state.add_message("system", "Your focus is low. You might be stuck. Consider reviewing the plan or asking for help.")
+        # Placeholder for Step 6
+        pass
 
     # --- Basic Actions ---
 
     async def action_response(self, message: str):
-        """Send a message to the user."""
-        print(f"🦆 Duck: {message}")
-        return "Message sent."
+        """Send a response to the user."""
+        # Add to history
+        self.state.add_message("assistant", message)
+        
+        # Print nicely
+        from rich.panel import Panel
+        from rich.markdown import Markdown
+        ui.console.print(Panel(
+            Markdown(message),
+            title="[duck]🦆 Duckflow[/duck]",
+            border_style="duck",
+            expand=False
+        ))
+        return "Responded to user."
 
     async def action_exit(self):
         """Exit the application."""
-        print("🦆 Goodbye!")
+        ui.print_system("Goodbye! 🦆")
         self.running = False
         return "Exiting."
 
@@ -224,24 +293,27 @@ class DuckAgent:
         if not current_step.tasks:
             return f"No tasks found for step '{current_step.title}'. Generate tasks first with 'generate_tasks'."
         
-        print(f"\n🚀 Executing {len(current_step.tasks)} tasks for step: '{current_step.title}'")
+        ui.print_system(f"Executing {len(current_step.tasks)} tasks for step: '{current_step.title}'")
         
         # Execute tasks using TaskExecutor
         summary = await self.task_executor.execute_task_list(current_step.tasks)
         
+        final_summary = ""
         # Generate AI-powered summary
         try:
             ai_summary = await self.result_summarizer.summarize_execution(summary)
-            print(ai_summary)
+            ui.print_result(ai_summary)
+            final_summary = ai_summary
         except Exception as e:
             logger.error(f"Failed to generate AI summary: {e}")
             # Fallback to simple summary
             summary_text = self.task_executor.get_summary_text(summary)
-            print(summary_text)
+            ui.print_result(summary_text)
+            final_summary = summary_text
         
         # Update step status if all tasks completed
         if summary["failed"] == 0:
             current_step.status = TaskStatus.COMPLETED
-            return f"All tasks completed successfully! Step '{current_step.title}' is now complete."
+            return f"All tasks completed successfully! Step '{current_step.title}' is now complete.\n\nExecution Summary:\n{final_summary}"
         else:
-            return f"Task execution finished with {summary['failed']} failures. Please review and retry failed tasks."
+            return f"Task execution finished with {summary['failed']} failures. Please review and retry failed tasks.\n\nExecution Summary:\n{final_summary}"

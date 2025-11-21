@@ -6,10 +6,14 @@ Tools Module - シンプルなファイル操作ツール
 このモジュールは、シンプルな辞書入出力によるファイル操作機能を提供します。
 """
 
-from .structured_file_ops import StructuredFileOps
-from .task_management_tool import TaskManagementTool
+from .file_ops import file_ops
+from .plan_tool import PlanTool
+from .task_tool import TaskTool
+from .approval import ApprovalTool
 
 __all__ = [
-    'StructuredFileOps',
-    'TaskManagementTool'
+    'file_ops',
+    'PlanTool',
+    'TaskTool',
+    'ApprovalTool'
 ]
