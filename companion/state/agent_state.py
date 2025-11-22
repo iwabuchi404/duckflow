@@ -35,6 +35,21 @@ class Vitals(BaseModel):
         self.stamina = min(1.0, self.stamina + amount)
         self.focus = min(1.0, self.focus + amount)
 
+# --- Pacemaker Intervention ---
+
+class InterventionReason(BaseModel):
+    """Pacemakerの介入理由"""
+    type: Literal[
+        "STAMINA_DEPLETED",
+        "LOOP_EXHAUSTED", 
+        "FOCUS_LOST",
+        "ERROR_CASCADE",
+        "STAGNATION",
+        "CONFIDENCE_LOW"
+    ]
+    message: str
+    severity: Literal["critical", "high", "medium", "low"]
+
 # --- Hierarchical Planning Models ---
 
 class Task(BaseModel):

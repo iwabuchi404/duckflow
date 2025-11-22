@@ -21,7 +21,7 @@ class TaskTool:
 
     async def generate_tasks(self) -> str:
         """
-        Generate tasks for the current step.
+        Generate tasks for the current step. NO PARAMETERS NEEDED - operates on the active step automatically.
         """
         if not self.state.current_plan:
             return "No active plan."

@@ -12,6 +12,7 @@ from companion.tools.task_tool import TaskTool
 from companion.tools.approval import ApprovalTool
 from companion.execution.task_executor import TaskExecutor
 from companion.execution.result_summarizer import ResultSummarizer
+from companion.modules.pacemaker import DuckPacemaker
 from companion.ui import ui
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,9 @@ class DuckAgent:
         self.approval_tool = ApprovalTool(self.state)
         self.task_executor = TaskExecutor(self.state, self.tools)
         self.result_summarizer = ResultSummarizer(self.llm)
+        
+        # Initialize Pacemaker
+        self.pacemaker = DuckPacemaker(self.state)
         
         # Register basic actions
         self.register_tool("response", self.action_response)
@@ -101,34 +105,57 @@ class DuckAgent:
                 self.state.add_message("user", user_input)
                 self.state.phase = AgentPhase.THINKING
                 
+                # Calculate max loops for this session
+                self.pacemaker.max_loops = self.pacemaker.calculate_max_loops()
+                ui.print_system(
+                    f"最大試行回数: {self.pacemaker.max_loops}回 "
+                    f"(Vitals - M:{self.state.vitals.mood:.2f}, "
+                    f"F:{self.state.vitals.focus:.2f}, S:{self.state.vitals.stamina:.2f})"
+                )
+                
                 # --- Autonomous Execution Loop ---
                 # Continue thinking and executing until we produce a response to the user
                 while True:
-                    # 2. Think & Decide Phase
-                    self.state.phase = AgentPhase.THINKING
-                    with ui.create_spinner("Thinking..."):
-                        # Determine context mode
-                        context_mode = self.state.get_context_mode()
-                        
-                        # Generate system prompt
-                        system_prompt = get_system_prompt(
-                            tool_descriptions=self.get_tool_descriptions(),
-                            state_context=self.state.to_prompt_context(),
-                            mode=context_mode
+                    # Increment loop counter
+                    self.pacemaker.loop_count += 1
+                    logger.debug(f"Autonomous loop iteration: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}")
+                    
+                    # --- Pacemaker Health Check (Before LLM Call) ---
+                    intervention = self.pacemaker.check_health()
+                    if intervention:
+                        # Force intervention via duck_call
+                        ui.print_warning(f"🦆 Pacemaker介入: {intervention.message}")
+                        action_list = ActionList(
+                            actions=[self.pacemaker.intervene(intervention)],
+                            reasoning=f"Pacemaker intervention: {intervention.type}"
                         )
+                        # Skip normal LLM call and execute intervention action
+                    else:
+                        # 2. Think & Decide Phase (Normal)
+                        self.state.phase = AgentPhase.THINKING
+                        with ui.create_spinner("Thinking..."):
+                            # Determine context mode
+                            context_mode = self.state.get_context_mode()
+                            
+                            # Generate system prompt
+                            system_prompt = get_system_prompt(
+                                tool_descriptions=self.get_tool_descriptions(),
+                                state_context=self.state.to_prompt_context(),
+                                mode=context_mode
+                            )
+                            
+                            # Prepare messages
+                            messages = [
+                                {"role": "system", "content": system_prompt}
+                            ] + self.state.conversation_history
+                            
+                            # Call LLM
+                            action_list = await self.llm.chat(messages, response_model=ActionList)
                         
-                        # Prepare messages
-                        messages = [
-                            {"role": "system", "content": system_prompt}
-                        ] + self.state.conversation_history
+                        logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
                         
-                        # Call LLM
-                        action_list = await self.llm.chat(messages, response_model=ActionList)
-                    
-                    logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
-                    
-                    # Display reasoning
-                    ui.print_thinking(action_list.reasoning)
+                        # Display reasoning
+                        ui.print_thinking(action_list.reasoning)
                     
                     # 3. Execute Actions
                     self.state.phase = AgentPhase.EXECUTING
@@ -145,19 +172,18 @@ class DuckAgent:
                         
                         if should_return_to_user:
                             logger.info("Autonomous loop ending: response/exit/duck_call action executed")
+                            # Reset pacemaker for next session
+                            self.pacemaker.reset()
                             break
                     else:
                         # No actions proposed, break the inner loop
                         logger.info("Autonomous loop ending: no actions proposed")
+                        self.pacemaker.reset()
                         break
                 # ---------------------------------
                 
                 # Display Token Usage
                 ui.print_token_usage(self.llm.usage_stats)
-                
-                # Update Vitals
-                self.state.update_vitals()
-                self._check_pacemaker()
                 
             except KeyboardInterrupt:
                 await self.action_exit()
@@ -175,6 +201,7 @@ class DuckAgent:
             
             # --- Approval Check ---
             requires_approval = False
+            was_approved = False
             warning_msg = ""
             
             if action.name in ["delete_file", "replace_in_file"]:
@@ -192,8 +219,34 @@ class DuckAgent:
                     msg = f"Action '{action.name}' denied by user."
                     ui.print_result(msg, is_error=True)
                     self.state.last_action_result = msg
+                    
+                    # Add denial to conversation history so LLM knows what happened
+                    denial_context = (
+                        f"[User denied approval for action '{action.name}'] "
+                        f"Reason: {warning_msg}. "
+                        f"The user refused to proceed with this operation. "
+                        f"Please either: 1) Ask the user what to do instead, "
+                        f"2) Try a different approach, or 3) Explain the situation."
+                    )
+                    self.state.add_message("assistant", denial_context)
+                    
+                    # Update Pacemaker vitals (denial is treated as an error)
+                    self.pacemaker.update_vitals(action, msg, is_error=True)
+                    
                     results.append(msg)
                     continue
+                else:
+                    # User approved - mark this action as approved
+                    was_approved = True
+                    params_str = ", ".join([f"{k}={v}" for k, v in action.parameters.items()])
+                    approval_msg = (
+                        f"[SYSTEM: User approved action '{action.name}'] "
+                        f"The user explicitly authorized the overwrite/modification. "
+                        f"The tool is executing now. "
+                        f"ASSUME SUCCESS. Do not retry this action. Move to the next step (e.g., responding to the user)."
+                    )
+                    self.state.add_message("assistant", approval_msg)
+                    logger.info(f"User approved action: {action.name}")
             # ----------------------
             
             if action.name in self.tools:
@@ -224,23 +277,57 @@ class DuckAgent:
                         else:
                             result_summary = result_str
                         
-                        self.state.add_message("assistant", f"[Tool: {action.name}] {result_summary}")
+                        # If this action required approval, add explicit completion message
+                        if was_approved:
+                            completion_msg = (
+                                f"[Tool: {action.name}] {result_summary}\n\n"
+                                f"[TASK COMPLETED] The user's request has been fulfilled. "
+                                f"The file operation completed successfully. "
+                                f"You should now respond to the user confirming completion."
+                            )
+                            self.state.add_message("assistant", completion_msg)
+                        else:
+                            self.state.add_message("assistant", f"[Tool: {action.name}] {result_summary}")
+                        
                         ui.print_result(result_str)
                     
                     results.append(result)
+                    
+                    # Update Pacemaker vitals (success)
+                    self.pacemaker.update_vitals(action, result, is_error=False)
 
                 except Exception as e:
                     error_msg = f"Action '{action.name}' failed: {str(e)}"
                     logger.error(error_msg, exc_info=True)
                     self.state.last_action_result = error_msg
                     ui.print_result(str(e), is_error=True)
+                    
+                    # Add error to conversation history
+                    self.state.add_message("assistant", f"[Tool Error: {action.name}] {error_msg}")
+                    
                     results.append(error_msg)
+                    
+                    # Update Pacemaker vitals (error)
+                    self.pacemaker.update_vitals(action, error_msg, is_error=True)
             else:
                 msg = f"Unknown tool: {action.name}"
                 logger.warning(msg)
                 self.state.last_action_result = msg
                 ui.print_result(msg, is_error=True)
+                
+                # Add unknown tool error to conversation history
+                available_tools = ", ".join(self.tools.keys())
+                self.state.add_message(
+                    "assistant", 
+                    f"[Error] Tool '{action.name}' does not exist. "
+                    f"Available tools: {available_tools}. "
+                    f"Please use one of the available tools."
+                )
+                
                 results.append(msg)
+                
+                # Update Pacemaker vitals (error - unknown tool)
+                self.pacemaker.update_vitals(action, msg, is_error=True)
         
         # Update token usage display
         if ui:
@@ -248,11 +335,6 @@ class DuckAgent:
             
         logger.info("Finished executing actions")
         return results
-
-    def _check_pacemaker(self):
-        """Pacemaker: Check vitals and intervene if necessary."""
-        # Placeholder for Step 6
-        pass
 
     # --- Basic Actions ---
 
@@ -280,7 +362,7 @@ class DuckAgent:
 
     async def action_execute_tasks(self) -> str:
         """
-        Execute all tasks in the current step.
+        Execute all tasks in the current step. NO PARAMETERS NEEDED - operates on the active step automatically.
         This is a batch execution that runs multiple tasks sequentially.
         """
         if not self.state.current_plan:

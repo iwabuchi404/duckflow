@@ -98,6 +98,10 @@ class DuckUI:
         """Print a general error message."""
         self.console.print(f"[error]❌ Error: {message}[/error]")
 
+    def print_warning(self, message: str):
+        """Print a warning message."""
+        self.console.print(f"[warning]⚠️  {message}[/warning]")
+
     def print_token_usage(self, stats: Dict[str, Any]):
         """Print token usage statistics."""
         total = stats.get("total_tokens", 0)
