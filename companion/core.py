@@ -13,6 +13,7 @@ from companion.tools.approval import ApprovalTool
 from companion.execution.task_executor import TaskExecutor
 from companion.execution.result_summarizer import ResultSummarizer
 from companion.modules.pacemaker import DuckPacemaker
+from companion.modules.memory import MemoryManager
 from companion.ui import ui
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,12 @@ class DuckAgent:
         
         # Initialize Pacemaker
         self.pacemaker = DuckPacemaker(self.state)
+        
+        # Initialize Memory Manager
+        self.memory_manager = MemoryManager(
+            llm_client=self.llm,
+            max_tokens=8000
+        )
         
         # Register basic actions
         self.register_tool("response", self.action_response)
@@ -102,15 +109,22 @@ class DuckAgent:
                     break
                 
                 ui.print_user(user_input)
-                self.state.add_message("user", user_input)
+                # Add user input to state with memory pruning
+                await self.state.add_message_with_pruning(
+                    "user", 
+                    user_input,
+                    memory_manager=self.memory_manager
+                )
                 self.state.phase = AgentPhase.THINKING
                 
                 # Calculate max loops for this session
                 self.pacemaker.max_loops = self.pacemaker.calculate_max_loops()
-                ui.print_system(
-                    f"最大試行回数: {self.pacemaker.max_loops}回 "
-                    f"(Vitals - M:{self.state.vitals.mood:.2f}, "
-                    f"F:{self.state.vitals.focus:.2f}, S:{self.state.vitals.stamina:.2f})"
+                self.pacemaker.loop_count = 0
+                
+                ui.print_vitals(
+                    self.state.vitals, 
+                    self.pacemaker.loop_count, 
+                    self.pacemaker.max_loops
                 )
                 
                 # --- Autonomous Execution Loop ---

@@ -118,6 +118,26 @@ class DuckUI:
         # This would be implemented to nicely display the plan table
         pass
 
+    def print_vitals(self, vitals: Any, loop_count: int, max_loops: int):
+        """Print current vitals and loop status."""
+        mood_icon = "😊" if vitals.mood > 0.7 else "😐" if vitals.mood > 0.4 else "😞"
+        focus_icon = "🧠" if vitals.focus > 0.7 else "🤔" if vitals.focus > 0.4 else "😵"
+        stamina_icon = "⚡" if vitals.stamina > 0.7 else "🔋" if vitals.stamina > 0.4 else "🪫"
+        
+        status = (
+            f"{mood_icon} Mood: {vitals.mood:.2f}  "
+            f"{focus_icon} Focus: {vitals.focus:.2f}  "
+            f"{stamina_icon} Stamina: {vitals.stamina:.2f}  "
+            f"🔄 Loop: {loop_count}/{max_loops}"
+        )
+        
+        self.console.print(Panel(
+            status,
+            title="[duck]Agent Vitals[/duck]",
+            border_style="duck",
+            expand=False
+        ))
+
     def create_spinner(self, text: str):
         """Return a status spinner context manager."""
         return self.console.status(f"[duck]{text}[/duck]", spinner="dots")

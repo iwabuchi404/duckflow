@@ -126,6 +126,33 @@ class AgentState(BaseModel):
     def add_message(self, role: str, content: str):
         self.conversation_history.append({"role": role, "content": content})
         
+    async def add_message_with_pruning(
+        self, 
+        role: str, 
+        content: str, 
+        memory_manager: Any = None
+    ):
+        """
+        メッセージを追加し、必要なら履歴を整理
+        
+        Args:
+            role: メッセージのロール ("user", "assistant", "system")
+            content: メッセージ内容
+            memory_manager: MemoryManagerインスタンス（Noneなら整理しない）
+        """
+        # 通常の追加
+        self.add_message(role, content)
+        
+        # 整理チェック
+        if memory_manager and memory_manager.should_prune(self.conversation_history):
+            self.conversation_history, stats = await memory_manager.prune_history(
+                self.conversation_history
+            )
+            
+            # 統計ログ (loggerが必要だが、ここではprintか無視)
+            if stats.get("pruned"):
+                pass # 呼び出し元でログ出力されることを期待、あるいはここでprint
+
     def update_vitals(self):
         self.vitals.decay()
 
