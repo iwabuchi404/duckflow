@@ -23,11 +23,12 @@ class DuckAgent:
     Duckflow v4 Main Agent.
     Manages the Think-Decide-Execute loop.
     """
-    def __init__(self, llm_client: LLMClient = default_client):
-        self.llm = llm_client
+    def __init__(self, llm_client: LLMClient = default_client, debug_context_mode: str = None):
         self.state = AgentState()
+        self.llm = llm_client
         self.tools: Dict[str, Callable] = {}
         self.running = False
+        self.debug_context_mode = debug_context_mode
         
         # Initialize Tools
         self.plan_tool = PlanTool(self.state, self.llm)
@@ -162,6 +163,10 @@ class DuckAgent:
                             messages = [
                                 {"role": "system", "content": system_prompt}
                             ] + self.state.conversation_history
+                            
+                            # Debug output
+                            if self.debug_context_mode:
+                                ui.print_debug_context(messages, mode=self.debug_context_mode)
                             
                             # Call LLM
                             action_list = await self.llm.chat(messages, response_model=ActionList)

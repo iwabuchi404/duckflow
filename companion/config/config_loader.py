@@ -22,15 +22,21 @@ class ConfigLoader:
     
     def _load_config(self):
         """Load config from YAML file."""
-        # Find config.yaml in project root
-        current_dir = Path(__file__).parent.parent.parent
-        config_path = current_dir / "config" / "config.yaml"
+        # Find duckflow.yaml in project root
+        root_dir = Path(__file__).parent.parent.parent
+        config_path = root_dir / "duckflow.yaml"
         
         if not config_path.exists():
-            raise FileNotFoundError(f"Config file not found: {config_path}")
+            # Fallback to empty config, using defaults in get()
+            self._config = {}
+            return
         
-        with open(config_path, 'r', encoding='utf-8') as f:
-            self._config = yaml.safe_load(f)
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self._config = yaml.safe_load(f) or {}
+        except Exception as e:
+            print(f"Warning: Failed to load config file: {e}")
+            self._config = {}
     
     def get(self, key_path: str, default: Any = None) -> Any:
         """

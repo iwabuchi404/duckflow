@@ -75,11 +75,15 @@ class LLMClient:
         try:
             logger.debug(f"Sending request to {self.model} via {self.base_url or 'default'}")
             
+            temperature = config.get("llm.temperature", 0.1)
+            max_tokens = config.get("llm.max_output_tokens", 4096)
+            
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 response_format={"type": "json_object"},
-                temperature=0.1, # Low temperature for deterministic actions
+                temperature=temperature,
+                max_tokens=max_tokens,
             )
 
             # Update usage stats

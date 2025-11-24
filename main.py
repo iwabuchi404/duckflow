@@ -1,39 +1,60 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Duckflow エントリーポイント
-4ノード統合アーキテクチャ
-"""
-import sys
+import asyncio
+import logging
 import os
+import sys
+from dotenv import load_dotenv
 
-# プロジェクトルートパス追加
-project_root = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, project_root)
+# Load environment variables
+load_dotenv()
 
-# 文字コード設定の一元化されたモジュールをインポート
-from companion.config.encoding_config import setup_encoding_once
+# Add project root to path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# メインエントリーポイントでの環境変数設定を実行
-setup_encoding_once()
+from companion.core import DuckAgent
+
+from logging.handlers import RotatingFileHandler
+from rich.traceback import install
+
+# Install rich traceback handler
+install(show_locals=False)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        RotatingFileHandler(
+            "duckflow_v4.log", 
+            maxBytes=5*1024*1024,  # 5MB
+            backupCount=3,
+            encoding='utf-8'
+        ),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+# Set external libs to WARNING to reduce noise
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("openai").setLevel(logging.WARNING)
+
+import argparse
+from companion.tools.file_ops import file_ops
+
+async def main():
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="Duckflow v4 Agent")
+    parser.add_argument("--dir", type=str, default=".", help="Working directory for the agent")
+    parser.add_argument("--debug-context", type=str, choices=["console", "file"], help="Debug: Output context messages")
+    args = parser.parse_args()
+    
+    # Set workspace
+    file_ops.set_workspace_root(args.dir)
+    
+    agent = DuckAgent(debug_context_mode=args.debug_context)
+    await agent.run()
 
 if __name__ == "__main__":
     try:
-        from codecrafter.main_v2 import main
-        
-        print("🦆 Duckflow v0.3.0-alpha - 4ノードAIコーディングエージェント")
-        print("🎯 統合アーキテクチャによる高効率AI開発支援")
-        print("🔄 4つのノード: 理解→収集→実行→評価")
-        print()
-        
-        main()
-        
-    except ImportError as e:
-        print(f"❌ インポートエラー: {e}")
-        print("依存関係をインストール: uv sync")
-        sys.exit(1)
-    except Exception as e:
-        print(f"❌ 実行エラー: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

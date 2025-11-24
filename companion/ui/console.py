@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -144,8 +144,67 @@ class DuckUI:
 
     def request_confirmation(self, message: str) -> bool:
         """Request yes/no confirmation from the user."""
-        from rich.prompt import Confirm
-        return Confirm.ask(f"[warning]⚠️  {message}[/warning]", console=self.console)
+        from rich.prompt import Prompt
+        
+        while True:
+            try:
+                # Allow full-width characters
+                response = Prompt.ask(
+                    f"[warning]⚠️  {message} [y/n][/warning]", 
+                    console=self.console
+                )
+                
+                # Normalize input
+                if not response:
+                    return False # Default to No if empty? Or loop? Prompt.ask handles default if provided.
+                
+                normalized = response.lower().strip().replace("ｙ", "y").replace("ｎ", "n")
+                
+                if normalized in ["y", "yes"]:
+                    return True
+                elif normalized in ["n", "no"]:
+                    return False
+                # If invalid, Prompt.ask loop logic isn't used here, so we loop manually
+                self.console.print("[red]Please enter y or n[/red]")
+                
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("\n[error]Input interrupted. Defaulting to No.[/error]")
+                return False
+
+    def print_debug_context(self, messages: List[Dict[str, str]], mode: str = "console"):
+        """Print the full context messages for debugging."""
+        from rich.rule import Rule
+        from datetime import datetime
+        
+        if mode == "file":
+            with open("debug_context.log", "a", encoding="utf-8") as f:
+                f.write(f"\n--- Context at {datetime.now()} ---\n")
+                for msg in messages:
+                    f.write(f"[{msg.get('role', 'unknown')}]\n{msg.get('content', '')}\n\n")
+            self.console.print("[dim]Context written to debug_context.log[/dim]")
+            return
+
+        # Console mode
+        self.console.print(Rule("[bold yellow]DEBUG CONTEXT START[/bold yellow]"))
+        for msg in messages:
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+            
+            style = "white"
+            title = role.upper()
+            
+            if role == "system":
+                style = "cyan"
+            elif role == "user":
+                style = "green"
+            elif role == "assistant":
+                style = "blue"
+            elif role == "tool":
+                style = "magenta"
+                
+            self.console.print(Panel(content, title=f"[{style}]{title}[/{style}]", border_style=style))
+            
+        self.console.print(Rule("[bold yellow]DEBUG CONTEXT END[/bold yellow]"))
 
 # Global instance
 ui = DuckUI()
