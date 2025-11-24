@@ -1,0 +1,230 @@
+"""
+Duck Pacemaker - エージェントの健康状態と実行状況を監視し、介入を行う
+"""
+from typing import List, Optional, Any
+import logging
+from companion.state.agent_state import AgentState, Action, InterventionReason
+from companion.config.config_loader import config
+
+logger = logging.getLogger(__name__)
+
+
+class DuckPacemaker:
+    """
+    エージェントの健康状態と実行状況を監視し、介入を行う自律調整システム。
+    
+    主な機能：
+    - ループ回数の動的計算と監視
+    - バイタル（Mood, Focus, Stamina）の更新と監視
+    - 異常検知（ループ枯渇、バイタル枯渇、エラー連鎖、停滞）
+    - 介入アクションの生成
+    """
+    
+    def __init__(self, state: AgentState):
+        self.state = state
+        self.loop_count = 0
+        self.max_loops = config.get("agent.max_loops", 10)
+        self.execution_history: List[Dict[str, Any]] = [] # {action, result_summary, is_error}
+        self.consecutive_errors = 0
+        
+    def calculate_max_loops(self) -> int:
+        """
+        タスクの種類とバイタルに応じて最大ループ回数を計算する。
+        """
+        # ベース値の決定
+        if self.state.current_plan:
+            current_step = self.state.current_plan.get_current_step()
+            if current_step and current_step.tasks:
+                base_loops = min(15 + len(current_step.tasks) // 2, 20)
+            else:
+                base_loops = 15
+        else:
+            base_loops = 8
+        
+        # バイタル係数の計算
+        vitals = self.state.vitals
+        vitals_score = (
+            vitals.mood * 0.4 +
+            vitals.focus * 0.4 +
+            vitals.stamina * 0.2
+        )
+        
+        if vitals_score < 0.4:
+            vitals_factor = 0.7
+        elif vitals_score > 0.8:
+            vitals_factor = 1.2
+        else:
+            vitals_factor = 1.0
+        
+        # 最終計算
+        calculated = int(base_loops * vitals_factor)
+        final_loops = max(3, min(calculated, 25))
+        
+        logger.info(
+            f"Pacemaker: max_loops={final_loops} "
+            f"(base={base_loops}, vitals_factor={vitals_factor:.2f})"
+        )
+        
+        return final_loops
+    
+    def update_vitals(self, action: Action, result: Any, is_error: bool):
+        """
+        アクション実行結果に基づいてバイタルを更新し、履歴を記録する。
+        """
+        # 履歴の記録
+        result_str = str(result)
+        summary = result_str[:200] + "..." if len(result_str) > 200 else result_str
+        
+        self.execution_history.append({
+            "action": action,
+            "result_summary": summary,
+            "is_error": is_error
+        })
+        if len(self.execution_history) > 20:
+            self.execution_history = self.execution_history[-20:]
+
+        if is_error:
+            # エラー時はStaminaとFocusが低下
+            self.state.vitals.stamina = max(0.0, self.state.vitals.stamina - 0.1)
+            self.state.vitals.focus = max(0.0, self.state.vitals.focus - 0.05)
+            self.consecutive_errors += 1
+            logger.debug("Vitals decreased (error)")
+        else:
+            # 成功時は緩やかに回復
+            self.state.vitals.stamina = min(1.0, self.state.vitals.stamina + 0.02)
+            self.consecutive_errors = 0
+        
+        # 通常のdecay
+        self.state.vitals.decay(0.03)
+    
+    def check_health(self) -> Optional[InterventionReason]:
+        """健康状態を診断し、介入が必要ならその理由を返す。"""
+        vitals = self.state.vitals
+        
+        # 1. Stamina枯渇（最優先）
+        if vitals.stamina < 0.1:
+            return InterventionReason(
+                type="STAMINA_DEPLETED",
+                message="体力が限界です。これ以上の作業は危険です。",
+                severity="critical"
+            )
+        
+        # 2. ループ回数超過
+        if self.loop_count >= self.max_loops:
+            return InterventionReason(
+                type="LOOP_EXHAUSTED",
+                message=f"最大試行回数（{self.max_loops}回）に到達しました。",
+                severity="high"
+            )
+        
+        # 3. エラー連鎖
+        if self._detect_error_cascade():
+            return InterventionReason(
+                type="ERROR_CASCADE",
+                message="エラーが頻発しています。方針を見直すべきです。",
+                severity="high"
+            )
+        
+        # 4. スタック検知（停滞）
+        if self._detect_stagnation():
+            return InterventionReason(
+                type="STAGNATION",
+                message="同じ操作または結果が繰り返されており、進捗がありません。",
+                severity="medium"
+            )
+            
+        # 5. Focus低下
+        if vitals.focus < 0.3:
+            return InterventionReason(
+                type="FOCUS_LOST",
+                message="思考が停滞しています。別のアプローチが必要かもしれません。",
+                severity="medium"
+            )
+        
+        # 6. Mood低下
+        if vitals.mood < 0.6:
+            return InterventionReason(
+                type="CONFIDENCE_LOW",
+                message="現在の計画に自信が持てていません。",
+                severity="low"
+            )
+        
+        return None
+    
+    def _detect_stagnation(self) -> bool:
+        """停滞検知：同じアクションや結果の繰り返し"""
+        if len(self.execution_history) < 3:
+            return False
+        
+        recent = self.execution_history[-3:]
+        
+        # 1. 完全一致アクションの繰り返し
+        actions = [item["action"] for item in recent]
+        action_names = [a.name for a in actions]
+        
+        if len(set(action_names)) == 1:
+            # パラメータもチェック
+            # Action.parameters は Dict なので文字列化して比較
+            params = [str(a.parameters) for a in actions]
+            if len(set(params)) == 1:
+                logger.warning("Stagnation: Same action and params repeated 3 times")
+                return True
+        
+        # 2. 同じ結果の繰り返し
+        results = [item["result_summary"] for item in recent]
+        if len(set(results)) == 1:
+            logger.warning("Stagnation: Same result repeated 3 times")
+            return True
+            
+        return False
+
+    def _detect_error_cascade(self) -> bool:
+        """エラー連鎖検知"""
+        # 連続3回エラー
+        if self.consecutive_errors >= 3:
+            return True
+            
+        # 直近10回中5回以上エラー（50%以上のエラー率）
+        if len(self.execution_history) >= 10:
+            recent_errors = sum(1 for item in self.execution_history[-10:] if item["is_error"])
+            if recent_errors >= 5:
+                logger.warning(f"Error cascade: {recent_errors}/10 recent actions failed")
+                return True
+                
+        return False
+    
+    def intervene(self, reason: InterventionReason) -> Action:
+        """介入アクションを生成する。"""
+        logger.info(f"Pacemaker intervention: {reason.type} - {reason.message}")
+        
+        vitals_info = (
+            f"\n\n📊 現在のバイタル:\n"
+            f"  Mood: {self.state.vitals.mood:.2f}\n"
+            f"  Focus: {self.state.vitals.focus:.2f}\n"
+            f"  Stamina: {self.state.vitals.stamina:.2f}\n"
+            f"  ループ: {self.loop_count}/{self.max_loops}"
+        )
+        
+        full_message = (
+            f"⚠️  Pacemaker介入 ({reason.severity})\n\n"
+            f"理由: {reason.type}\n"
+            f"{reason.message}"
+            f"{vitals_info}\n\n"
+            f"どうしますか？"
+        )
+        
+        return Action(
+            name="duck_call",
+            parameters={
+                "message": full_message
+            },
+            thought=f"Pacemakerの介入により、ユーザーに相談します（理由: {reason.type}）"
+        )
+    
+    def reset(self):
+        """セッション終了時にカウンターをリセット"""
+        self.loop_count = 0
+        self.consecutive_errors = 0
+        self.execution_history = []
+        self.state.vitals.recover(0.2)
+        logger.debug("Pacemaker reset")
