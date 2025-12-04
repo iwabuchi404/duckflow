@@ -37,18 +37,18 @@ class FileOps:
         except Exception:
             return False
 
-    async def read_file(self, path: str, offset: int = 0, limit: int = 100000) -> str:
+    async def read_file(self, path: str, start_line: int = 1, max_lines: int = 500) -> str:
         """
-        Read content of a file with size limit and pagination support.
+        Read content of a file with line-based pagination.
         
         Args:
             path: Path to the file
-            offset: Byte offset to start reading from (default: 0)
-            limit: Maximum number of bytes to read (default: 100KB)
+            start_line: Line number to start from (1-indexed, default: 1)
+            max_lines: Maximum number of lines to read (default: 500)
         """
-        # Ensure types
-        offset = int(offset)
-        limit = int(limit)
+        # Ensure types and validate
+        start_line = max(1, int(start_line))  # Ensure at least 1
+        max_lines = max(1, int(max_lines))    # Ensure at least 1
 
         full_path = self._get_full_path(path)
         if not full_path.exists():
@@ -56,39 +56,49 @@ class FileOps:
         if not full_path.is_file():
             raise IsADirectoryError(f"Path is a directory: {path}")
         
-        file_size = full_path.stat().st_size
-        
-        # Adjust limit if it exceeds remaining size
-        if offset + limit > file_size:
-            limit = file_size - offset
-            
-        if limit <= 0:
-             return f"<FILE_CONTENT path='{path}' total_size='{file_size}' read_range='{offset}-{offset}'></FILE_CONTENT>"
-
         try:
             with open(full_path, "r", encoding="utf-8") as f:
-                f.seek(offset)
-                content = f.read(limit)
-                
-            # Construct response with metadata
+                lines = f.readlines()
+            
+            total_lines = len(lines)
+            
+            # Handle empty file
+            if total_lines == 0:
+                return f"<FILE_CONTENT path='{path}' total_lines='0' showing_lines='0-0'>\n(Empty file)\n</FILE_CONTENT>"
+            
+            # Calculate indices (convert to 0-indexed)
+            start_idx = start_line - 1
+            
+            # Handle out of range start_line
+            if start_idx >= total_lines:
+                return f"<FILE_CONTENT path='{path}' total_lines='{total_lines}' showing_lines='0-0'>\nError: start_line {start_line} exceeds total lines ({total_lines}). Use start_line between 1 and {total_lines}.\n</FILE_CONTENT>"
+            
+            end_idx = min(start_idx + max_lines, total_lines)
+            
+            selected_lines = lines[start_idx:end_idx]
+            content = "".join(selected_lines)
+            
+            actual_end_line = start_line + len(selected_lines) - 1
+            
             response = [
-                f"<FILE_CONTENT path='{path}' total_size='{file_size}' read_range='{offset}-{offset+len(content)}'>",
+                f"<FILE_CONTENT path='{path}' total_lines='{total_lines}' showing_lines='{start_line}-{actual_end_line}'>",
                 content,
                 "</FILE_CONTENT>"
             ]
             
             # Add warning if there is more content
-            if offset + len(content) < file_size:
-                remaining = file_size - (offset + len(content))
+            if end_idx < total_lines:
+                remaining_lines = total_lines - end_idx
+                next_start = end_idx + 1
                 response.append(
-                    f"\n<WARNING>File is truncated. {remaining} bytes remaining. "
-                    f"Use read_file(path='{path}', offset={offset+len(content)}) to read the next chunk.</WARNING>"
+                    f"\n<WARNING>File has more content. {remaining_lines} lines remaining (lines {next_start}-{total_lines}). "
+                    f"Use read_file(path='{path}', start_line={next_start}) to read the next chunk.</WARNING>"
                 )
-                
+            
             return "\n".join(response)
             
         except UnicodeDecodeError:
-            return f"Error: File {path} is not a valid text file (encoding error)."
+            return f"Error: File {path} is not a valid UTF-8 text file (encoding error)."
 
     async def write_file(self, path: str, content: str) -> str:
         """Write content to a file. Creates directories if needed."""

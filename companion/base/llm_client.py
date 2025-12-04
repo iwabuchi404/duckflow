@@ -5,6 +5,7 @@ from typing import List, Dict, Any, Optional, Union
 from openai import OpenAI, AsyncOpenAI, APIError
 from companion.state.agent_state import ActionList, Action
 from companion.config.config_loader import config
+from companion.base.response_preprocessor import default_preprocessor
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +23,54 @@ class LLMClient:
         
         # Load provider from config
         provider = config.get("llm.provider", "groq")
+        logger.info(f"🔧 Initializing LLM Client with provider: {provider}")
         
-        # Load API key (priority: param > env > config)
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
-        
-        # Load base URL
-        if provider == "groq":
-            self.base_url = base_url or os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
+        # Load API key based on provider (priority: param > env > config)
+        api_key_env_var = None  # Track which env var we're looking for
+        if api_key:
+            self.api_key = api_key
+            logger.info(f"✅ Using API key from parameter")
+        elif provider == "groq":
+            api_key_env_var = "GROQ_API_KEY"
+            self.api_key = os.getenv("GROQ_API_KEY")
+        elif provider == "openrouter":
+            api_key_env_var = "OPENROUTER_API_KEY"
+            self.api_key = os.getenv("OPENROUTER_API_KEY")
+        elif provider == "anthropic":
+            api_key_env_var = "ANTHROPIC_API_KEY"
+            self.api_key = os.getenv("ANTHROPIC_API_KEY")
+        elif provider == "openai":
+            api_key_env_var = "OPENAI_API_KEY"
+            self.api_key = os.getenv("OPENAI_API_KEY")
+        elif provider == "google":
+            api_key_env_var = "GOOGLE_API_KEY"
+            self.api_key = os.getenv("GOOGLE_API_KEY")
         else:
-            self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
+            # Fallback: try common keys
+            api_key_env_var = "OPENAI_API_KEY or GROQ_API_KEY"
+            self.api_key = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
+        
+        # Log API key status
+        if api_key_env_var:
+            if self.api_key:
+                masked_key = self.api_key[:8] + "..." + self.api_key[-4:] if len(self.api_key) > 12 else "***"
+                logger.info(f"✅ Found {api_key_env_var}: {masked_key}")
+            else:
+                logger.warning(f"❌ Environment variable {api_key_env_var} not found or empty")
+        
+        # Load base URL based on provider
+        if base_url:
+            self.base_url = base_url
+        elif provider == "groq":
+            self.base_url = os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
+        elif provider == "openrouter":
+            self.base_url = os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+        elif provider == "anthropic":
+            self.base_url = os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com/v1"
+        elif provider == "openai":
+            self.base_url = os.getenv("OPENAI_BASE_URL")  # None is OK, uses default
+        else:
+            self.base_url = os.getenv("OPENAI_BASE_URL")
         
         # Load model from config based on provider
         if model:
@@ -81,7 +121,6 @@ class LLMClient:
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=messages,
-                response_format={"type": "json_object"},
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
@@ -92,7 +131,17 @@ class LLMClient:
                 self.usage_stats["output_tokens"] += response.usage.completion_tokens
                 self.usage_stats["total_tokens"] += response.usage.total_tokens
             
+            # Debug: Log response structure
+            logger.debug(f"Response object: {response}")
+            logger.debug(f"Response choices: {response.choices}")
+            
             content = response.choices[0].message.content
+            
+            # Debug: Log content before parsing
+            if not content:
+                logger.error(f"Empty content received. Full response: {response.model_dump_json()}")
+                logger.error(f"Message object: {response.choices[0].message}")
+            
             return self._parse_response(content, response_model)
 
         except APIError as e:
@@ -177,15 +226,25 @@ class LLMClient:
 
     def _parse_response(self, content: str, response_model: Optional[type] = None):
         if not content:
+            logger.error(f"Empty response from LLM. Content type: {type(content)}, Content value: {repr(content)}")
             raise ValueError("Empty response from LLM")
 
-        logger.debug(f"Raw LLM Response: {content}")
+        logger.info(f"📥 Raw LLM Response (FULL):\n{content}")
+        logger.info(f"📏 Response length: {len(content)} chars")
+
+        # 前処理を適用（マークダウンコードブロック除去など）
+        processed_content = default_preprocessor.process(content)
+        
+        if processed_content != content:
+            logger.info(f"🔧 After preprocessing:\n{processed_content}")
+        
+        content = processed_content
 
         # Parse JSON
         try:
             data = json.loads(content)
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON: {content}")
+            logger.error(f"Failed to parse JSON after preprocessing: {content[:500]}")
             raise ValueError(f"LLM did not return valid JSON: {e}")
 
         # Validate with Pydantic if model provided

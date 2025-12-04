@@ -98,6 +98,14 @@ class DuckUI:
         """Print a general error message."""
         self.console.print(f"[error]❌ Error: {message}[/error]")
 
+    def print_info(self, message: str):
+        """Print an info message."""
+        self.console.print(f"[info]ℹ️ {message}[/info]")
+
+    def print_success(self, message: str):
+        """Print a success message."""
+        self.console.print(f"[success]✅ {message}[/success]")
+
     def print_warning(self, message: str):
         """Print a warning message."""
         self.console.print(f"[warning]⚠️  {message}[/warning]")
@@ -205,6 +213,33 @@ class DuckUI:
             self.console.print(Panel(content, title=f"[{style}]{title}[/{style}]", border_style=style))
             
         self.console.print(Rule("[bold yellow]DEBUG CONTEXT END[/bold yellow]"))
+
+    async def get_user_input(self, prompt: str = "You: ") -> str:
+        """Get input from user with prompt_toolkit for history and completion."""
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.completion import NestedCompleter
+        from prompt_toolkit.styles import Style
+
+        # Define completer
+        completer = NestedCompleter.from_nested_dict({
+            '/config': {'show': None, 'set': None, 'reload': None},
+            '/status': None,
+            '/help': None,
+            '/exit': None,
+            '/clear': None,
+        })
+        
+        style = Style.from_dict({
+            'prompt': 'bold blue',
+        })
+
+        session = PromptSession(completer=completer, style=style)
+        
+        try:
+            self.console.print() # Newline before prompt
+            return await session.prompt_async(prompt)
+        except (EOFError, KeyboardInterrupt):
+            return "/exit"
 
 # Global instance
 ui = DuckUI()

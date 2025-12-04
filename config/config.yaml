@@ -38,9 +38,9 @@ allowed_extensions: [".py", ".md", ".txt", ".json", ".yaml"]
 backup_enabled: true
 
 # LLM設定
-llm_provider: "groq"
+llm_provider: "openrouter"
 llm_api_key: ""  # 環境変数から読み込み（.envファイルが読み込まれない場合は、ここに直接APIキーを設定）
-llm_model: "openai/gpt-oss-20b"
+llm_model: "anthropic/claude-3-5-sonnet-20241022"
 llm_temperature: 0.1
 llm_max_retries: 3
 llm_timeout_seconds: 30
@@ -87,7 +87,7 @@ response_control:
 # 詳細LLM設定（既存の構造を保持）
 llm:
   # メインプロバイダー (openai, anthropic, google, groq, openrouter)
-  provider: "groq"
+  provider: "openrouter"
   
   # プロバイダー別設定
   openai:

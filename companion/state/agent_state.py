@@ -98,7 +98,7 @@ class Action(BaseModel):
     """LLMが生成する単一の行動"""
     name: str = Field(..., description="実行するツール/アクションの名前")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="アクションの引数")
-    thought: str = Field(..., description="このアクションを選んだ理由")
+    thought: str = Field(default="", description="このアクションを選んだ理由")
 
 class ActionList(BaseModel):
     """LLMの出力全体"""

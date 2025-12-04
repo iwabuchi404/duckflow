@@ -1,9 +1,11 @@
 llm:
-  provider: "google"
+  provider: "openrouter"
   google:
     model: "gemini-1.5-pro-002"
   openai:
     model: "gpt-4o"
+  openrouter:
+    model: "openai/gpt-4o-mini"  # 最も安定。Gemini 2.5 Flashは不安定
   temperature: 0.7
   max_output_tokens: 8192
 

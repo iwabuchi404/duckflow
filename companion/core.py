@@ -18,6 +18,8 @@ from companion.ui import ui
 
 logger = logging.getLogger(__name__)
 
+from companion.ui.command_handler import CommandHandler
+
 class DuckAgent:
     """
     Duckflow v4 Main Agent.
@@ -29,6 +31,7 @@ class DuckAgent:
         self.tools: Dict[str, Callable] = {}
         self.running = False
         self.debug_context_mode = debug_context_mode
+        self.command_handler = CommandHandler(self)
         
         # Initialize Tools
         self.plan_tool = PlanTool(self.state, self.llm)
@@ -101,8 +104,13 @@ class DuckAgent:
                     # Resume from user input (handled by tools usually, but here for safety)
                     pass
                 
-                user_input = input("\nYou: ")
+                user_input = await ui.get_user_input()
                 if not user_input.strip():
+                    continue
+                
+                # Check for internal commands
+                if self.command_handler.is_command(user_input):
+                    await self.command_handler.execute(user_input)
                     continue
                     
                 if user_input.lower() in ["exit", "quit"]:
@@ -134,6 +142,13 @@ class DuckAgent:
                     # Increment loop counter
                     self.pacemaker.loop_count += 1
                     logger.debug(f"Autonomous loop iteration: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}")
+                    
+                    # Display vitals at the start of each loop iteration
+                    ui.print_vitals(
+                        self.state.vitals,
+                        self.pacemaker.loop_count,
+                        self.pacemaker.max_loops
+                    )
                     
                     # --- Pacemaker Health Check (Before LLM Call) ---
                     intervention = self.pacemaker.check_health()
