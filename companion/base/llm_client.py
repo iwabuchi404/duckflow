@@ -275,12 +275,15 @@ class LLMClient:
                     if tool_name in ("create_file", "edit_file"):
                         params["content"] = action.content
                         logger.debug(f"  → Set content (length={len(action.content)})")
-                    elif tool_name == "response":
+                    elif tool_name in ("response", "duck_call"):
                         params["message"] = action.content
                         logger.debug(f"  → Set message (length={len(action.content)})")
                     elif tool_name == "finish":
                         params["result"] = action.content
                         logger.debug(f"  → Set result (length={len(action.content)})")
+                    elif tool_name == "propose_plan":
+                        params["goal"] = action.content
+                        logger.debug(f"  → Set goal (length={len(action.content)})")
                 
                 logger.debug(f"  → Final params: {list(params.keys())}")
                 
