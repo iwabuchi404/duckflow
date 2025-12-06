@@ -51,6 +51,7 @@ class DuckAgent:
         
         # Register basic actions
         self.register_tool("response", self.action_response)
+        self.register_tool("finish", self.action_finish)
         self.register_tool("exit", self.action_exit)
         self.register_tool("duck_call", self.approval_tool.duck_call)
         
@@ -187,6 +188,16 @@ class DuckAgent:
                             action_list = await self.llm.chat(messages, response_model=ActionList)
                         
                         logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
+                        
+                        # Update vitals if provided
+                        if action_list.vitals:
+                            logger.info(f"Updating vitals from response: {action_list.vitals}")
+                            if "mood" in action_list.vitals:
+                                self.state.vitals.mood = action_list.vitals["mood"]
+                            if "focus" in action_list.vitals:
+                                self.state.vitals.focus = action_list.vitals["focus"]
+                            if "stamina" in action_list.vitals:
+                                self.state.vitals.stamina = action_list.vitals["stamina"]
                         
                         # Display reasoning
                         ui.print_thinking(action_list.reasoning)
@@ -387,6 +398,22 @@ class DuckAgent:
             expand=False
         ))
         return "Responded to user."
+
+    async def action_finish(self, result: str):
+        """Complete the task and report result."""
+        # Add to history
+        self.state.add_message("assistant", f"[FINISHED] {result}")
+        
+        # Print nicely
+        from rich.panel import Panel
+        from rich.markdown import Markdown
+        ui.console.print(Panel(
+            Markdown(result),
+            title="[duck]🦆 Task Completed[/duck]",
+            border_style="green",
+            expand=False
+        ))
+        return "Task finished. Result reported to user."
 
     async def action_exit(self):
         """Exit the application."""

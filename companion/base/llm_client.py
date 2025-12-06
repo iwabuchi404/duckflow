@@ -6,6 +6,7 @@ from openai import OpenAI, AsyncOpenAI, APIError
 from companion.state.agent_state import ActionList, Action
 from companion.config.config_loader import config
 from companion.base.response_preprocessor import default_preprocessor
+from companion.utils.sym_ops import SymOpsProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -231,31 +232,90 @@ class LLMClient:
 
         logger.info(f"📥 Raw LLM Response (FULL):\n{content}")
         logger.info(f"📏 Response length: {len(content)} chars")
-
-        # 前処理を適用（マークダウンコードブロック除去など）
-        processed_content = default_preprocessor.process(content)
         
-        if processed_content != content:
-            logger.info(f"🔧 After preprocessing:\n{processed_content}")
+        processor = SymOpsProcessor()
         
-        content = processed_content
-
-        # Parse JSON
         try:
-            data = json.loads(content)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse JSON after preprocessing: {content[:500]}")
-            raise ValueError(f"LLM did not return valid JSON: {e}")
+            # Process with Sym-Ops (Auto-Repair -> Fuzzy Parse)
+            result = processor.process(content)
+            
+            # Log warnings if any
+            if result.warnings:
+                for warning in result.warnings:
+                    logger.warning(f"⚠️ Sym-Ops Warning: {warning}")
+            
+            logger.info(f"✅ Successfully parsed Sym-Ops format. Actions: {len(result.actions)}")
+            
+            # Convert to ActionList (Internal Model)
+            actions = []
+            for action in result.actions:
+                # Map Sym-Ops action to internal Action model
+                
+                # Determine tool name and params
+                tool_name = action.type
+                params = action.params.copy() if action.params else {}
+                
+                logger.debug(f"🔍 Mapping action: type={tool_name}, path={action.path}, content_len={len(action.content) if action.content else 0}")
+                
+                # Map path/command from @ notation
+                # IMPORTANT: Tool signatures use 'path' not 'file_path'!
+                if action.path:
+                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file"):
+                        params["path"] = action.path
+                        logger.debug(f"  → Set path={action.path}")
+                    elif tool_name == "run_command":
+                        params["command"] = action.path
+                        logger.debug(f"  → Set command={action.path}")
+                    elif tool_name == "list_directory":
+                        params["path"] = action.path
+                        logger.debug(f"  → Set path={action.path}")
+                
+                # Map content
+                if action.content:
+                    if tool_name in ("create_file", "edit_file"):
+                        params["content"] = action.content
+                        logger.debug(f"  → Set content (length={len(action.content)})")
+                    elif tool_name == "response":
+                        params["message"] = action.content
+                        logger.debug(f"  → Set message (length={len(action.content)})")
+                    elif tool_name == "finish":
+                        params["result"] = action.content
+                        logger.debug(f"  → Set result (length={len(action.content)})")
+                
+                logger.debug(f"  → Final params: {list(params.keys())}")
+                
+                actions.append(Action(
+                    name=tool_name,
+                    parameters=params,
+                    thought=f"Confidence: {action.confidence}"
+                ))
+            
+            # Construct ActionList
+            # Join thoughts for reasoning
+            reasoning = "\n".join(result.thoughts) if result.thoughts else "No reasoning provided."
+            
+            action_list = ActionList(
+                reasoning=reasoning,
+                actions=actions,
+                vitals=result.vitals
+            )
+            
+            return action_list
 
-        # Validate with Pydantic if model provided
-        if response_model:
-            try:
-                return response_model.model_validate(data)
-            except Exception as e:
-                logger.error(f"Pydantic validation failed: {e}")
-                raise ValueError(f"Response did not match expected schema: {e}")
-        
-        return data
+        except Exception as e:
+            logger.error(f"Failed to parse Sym-Ops response: {e}")
+            # Fallback to raw text response
+            logger.info("⚠️ Applying Raw Text Fallback: Treating content as 'response' action.")
+            return ActionList(
+                reasoning="[FALLBACK] The LLM returned raw text that could not be parsed even with Sym-Ops.",
+                actions=[
+                    Action(
+                        name="response",
+                        parameters={"message": content},
+                        thought="Fallback for raw text response"
+                    )
+                ]
+            )
 
 # Global instance for convenience
 default_client = LLMClient()

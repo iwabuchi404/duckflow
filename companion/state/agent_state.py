@@ -104,6 +104,7 @@ class ActionList(BaseModel):
     """LLMの出力全体"""
     actions: List[Action]
     reasoning: str = Field(..., description="全体的な思考プロセス")
+    vitals: Optional[Dict[str, float]] = Field(default=None, description="アヒルのバイタル情報")
 
 # --- Main State ---
 
