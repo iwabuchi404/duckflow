@@ -8,6 +8,15 @@ codecrafterから分離し、companion内で完結するように調整
 import sys
 from typing import Optional, Any
 from datetime import datetime
+from pathlib import Path
+
+# prompt_toolkit for input history (cross-platform, works on Windows/Mac/Linux)
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import FileHistory
+    PROMPT_TOOLKIT_AVAILABLE = True
+except ImportError:
+    PROMPT_TOOLKIT_AVAILABLE = False
 
 try:
     from rich.console import Console
@@ -33,6 +42,22 @@ class SimpleUI:
     
     def __init__(self):
         self.console = sys.stdout
+        self._setup_history()
+    
+    def _setup_history(self):
+        """Setup prompt_toolkit history for up/down arrow keys"""
+        if not PROMPT_TOOLKIT_AVAILABLE:
+            self.session = None
+            return
+        
+        # History file in user's home directory
+        history_file = Path.home() / ".duckflow_history"
+        
+        try:
+            # Create PromptSession with file history
+            self.session = PromptSession(history=FileHistory(str(history_file)))
+        except Exception:
+            self.session = None  # Fallback to no history
     
     def print(self, *args, **kwargs):
         print(*args, **kwargs)
@@ -135,6 +160,16 @@ class SimpleUI:
     
     def get_user_input(self, prompt: str = "", default: str = "") -> str:
         """ユーザー入力取得（EnhancedDualLoopSystem用）"""
+        # Use prompt_toolkit if available (supports history with up/down arrows)
+        if self.session:
+            try:
+                prompt_text = f"{prompt}: " if prompt else ": "
+                user_input = self.session.prompt(prompt_text, default=default).strip()
+                return user_input if user_input else default
+            except Exception:
+                pass  # Fall through to basic input
+        
+        # Fallback to basic input
         if prompt:
             print(f"{prompt}", end="")
         if default:
@@ -151,6 +186,22 @@ class RichUI:
     def __init__(self):
         self.console = Console()
         self._setup_styles()
+        self._setup_history()
+    
+    def _setup_history(self):
+        """Setup prompt_toolkit history for up/down arrow keys"""
+        if not PROMPT_TOOLKIT_AVAILABLE:
+            self.session = None
+            return
+        
+        # History file in user's home directory
+        history_file = Path.home() / ".duckflow_history"
+        
+        try:
+            # Create PromptSession with file history
+            self.session = PromptSession(history=FileHistory(str(history_file)))
+        except Exception:
+            self.session = None  # Fallback to no history
     
     def _setup_styles(self):
         """スタイルの設定"""
@@ -283,6 +334,14 @@ class RichUI:
     
     def get_user_input(self, prompt: str = "", default: str = "") -> str:
         """ユーザー入力取得（EnhancedDualLoopSystem用）"""
+        # Use prompt_toolkit if available (supports history with up/down arrows)
+        if self.session:
+            try:
+                return self.session.prompt(f"{prompt}: " if prompt else ": ", default=default).strip()
+            except Exception:
+                pass  # Fall through to Rich Prompt
+        
+        # Fallback to Rich Prompt (no history)
         return Prompt.ask(prompt, default=default)
     
     def progress(self, description: str = "処理中..."):

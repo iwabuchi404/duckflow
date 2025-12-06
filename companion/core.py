@@ -18,7 +18,8 @@ from companion.ui import ui
 
 logger = logging.getLogger(__name__)
 
-from companion.ui.command_handler import CommandHandler
+from companion.modules.command_handler import CommandHandler
+from companion.tools.shell_tool import ShellTool
 
 class DuckAgent:
     """
@@ -58,9 +59,11 @@ class DuckAgent:
         # Register File Ops
         self.register_tool("read_file", file_ops.read_file)
         self.register_tool("write_file", file_ops.write_file)
+        self.register_tool("create_file", file_ops.write_file)  # Alias for Sym-Ops v2
         self.register_tool("list_directory", file_ops.list_files)
         self.register_tool("mkdir", file_ops.mkdir)
         self.register_tool("replace_in_file", file_ops.replace_in_file)
+        self.register_tool("edit_file", file_ops.replace_in_file)  # Alias for Sym-Ops v2
         self.register_tool("find_files", file_ops.find_files)
         self.register_tool("delete_file", file_ops.delete_file)
 
@@ -72,6 +75,7 @@ class DuckAgent:
         
         # Register Task Execution
         self.register_tool("execute_tasks", self.action_execute_tasks)
+        self.register_tool("run_command", self.action_run_command)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
@@ -383,8 +387,8 @@ class DuckAgent:
 
     # --- Basic Actions ---
 
-    async def action_response(self, message: str):
-        """Send a response to the user."""
+    async def action_response(self, message: str) -> str:
+        """Send a message to the user."""
         # Add to history
         self.state.add_message("assistant", message)
         
@@ -398,6 +402,24 @@ class DuckAgent:
             expand=False
         ))
         return "Responded to user."
+
+    async def action_run_command(self, command: str) -> str:
+        """
+        Execute a shell command with mandatory user approval.
+        """
+        ui.print_warning(f"⚠️  Permission requested to run: [bold]{command}[/bold]")
+        
+        confirmed = ui.request_confirmation(f"Execute this command?")
+        
+        if confirmed:
+            return await ShellTool.run_command(command)
+        else:
+            ui.print_error("Command execution denied by user.")
+            return (
+                f"Execution denied by user. "
+                f"The user refused to run the command: '{command}'. "
+                f"Do not retry the same command without modification or explanation."
+            )
 
     async def action_finish(self, result: str):
         """Complete the task and report result."""

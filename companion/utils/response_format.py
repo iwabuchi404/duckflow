@@ -154,6 +154,10 @@ Write unit tests and API documentation
 5. Use `>>` for ALL thoughts (NOT ~)
 6. NO markdown code blocks (use `<<<` `>>>` instead)
 7. NO JSON output - ONLY Sym-Ops v2 format
+8. **run_command requires APPROVAL**:
+   - The user must approve every command.
+   - Do NOT chain multiple dependent commands if approval failure breaks the flow.
+   - Be prepared for "Execution denied" errors.
 
 Follow this format EXACTLY. Delimiters are NOT optional.
 """

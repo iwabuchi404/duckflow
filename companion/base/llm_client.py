@@ -284,7 +284,20 @@ class LLMClient:
                     elif tool_name == "propose_plan":
                         params["goal"] = action.content
                         logger.debug(f"  → Set goal (length={len(action.content)})")
-                
+                    elif tool_name == "mark_task_complete":
+                        # Map path to task_index (e.g. ::mark_task_complete @0)
+                        if "path" in params:
+                            try:
+                                # Extract number from path if possible, or use raw path
+                                # This handles @0, @1 etc.
+                                val = params.pop("path")
+                                params["task_index"] = int(val)
+                                logger.debug(f"  → Set task_index={params['task_index']} from path")
+                            except ValueError:
+                                # Fallback if path isn't a simple number
+                                logger.warning(f"Could not parse task_index from path: {val}")
+                                params["task_index"] = 0 # Default fallback? Or maybe keep raw?
+                                
                 logger.debug(f"  → Final params: {list(params.keys())}")
                 
                 actions.append(Action(
