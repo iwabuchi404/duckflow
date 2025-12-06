@@ -87,6 +87,33 @@ This project uses a modular architecture with the following components:
 The codebase follows clean architecture principles with clear separation of concerns.
 >>>
 
+### Example 3: Propose Plan Action
+
+>> User requested implementation plan for game engine
+>> Will structure plan with clear phases and steps
+
+::c0.90 ::m0.88 ::f0.92 ::s0.85
+
+::propose_plan
+<<<
+# Game Engine Implementation Plan
+
+## Step 1: Core System Setup
+Initialize project structure and implement Engine singleton class
+
+## Step 2: Entity Component System
+Implement Entity and Component base classes with lifecycle management
+
+## Step 3: Rendering System
+Integrate PIXIJS and implement sprite rendering pipeline
+
+## Step 4: World Management
+Create tilemap system and camera controls
+
+## Step 5: Testing and Documentation
+Write unit tests and API documentation
+>>>
+
 ## Critical Rules - READ CAREFULLY
 
 1. **ALWAYS** wrap content in `<<<` and `>>>` delimiters
@@ -107,10 +134,26 @@ The codebase follows clean architecture principles with clear separation of conc
    >>>
    ```
 
-3. Use `::` prefix for ALL actions (NOT $)
-4. Use `>>` for ALL thoughts (NOT ~)
-5. NO markdown code blocks (use `<<<` `>>>` instead)
-6. NO JSON output - ONLY Sym-Ops v2 format
+3. **For propose_plan action**, use this format:
+   ```
+   ::propose_plan
+   <<<
+   ## Step 1: [Title]
+   [Description]
+   
+   ## Step 2: [Title]
+   [Description]
+   >>>
+   ```
+   - Each step MUST start with `## Step N:`
+   - Keep descriptions concise (1-2 lines)
+   - **After propose_plan, ALWAYS use ::response or ::finish**
+   - Do NOT repeat propose_plan without user feedback
+
+4. Use `::` prefix for ALL actions (NOT $)
+5. Use `>>` for ALL thoughts (NOT ~)
+6. NO markdown code blocks (use `<<<` `>>>` instead)
+7. NO JSON output - ONLY Sym-Ops v2 format
 
 Follow this format EXACTLY. Delimiters are NOT optional.
 """

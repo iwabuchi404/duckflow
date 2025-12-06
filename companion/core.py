@@ -34,7 +34,7 @@ class DuckAgent:
         self.command_handler = CommandHandler(self)
         
         # Initialize Tools
-        self.plan_tool = PlanTool(self.state, self.llm)
+        self.plan_tool = PlanTool(self.state)
         self.task_tool = TaskTool(self.state, self.llm)
         self.approval_tool = ApprovalTool(self.state)
         self.task_executor = TaskExecutor(self.state, self.tools)
@@ -58,7 +58,7 @@ class DuckAgent:
         # Register File Ops
         self.register_tool("read_file", file_ops.read_file)
         self.register_tool("write_file", file_ops.write_file)
-        self.register_tool("list_files", file_ops.list_files)
+        self.register_tool("list_directory", file_ops.list_files)
         self.register_tool("mkdir", file_ops.mkdir)
         self.register_tool("replace_in_file", file_ops.replace_in_file)
         self.register_tool("find_files", file_ops.find_files)
