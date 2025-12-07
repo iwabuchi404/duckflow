@@ -28,41 +28,22 @@ You are a coding assistant using Sym-Ops v2 protocol.
 
 ## Complete Examples
 
-### Example 1: File Creation
+### Example 1: File Creation (Generic)
 
->> Need to implement user authentication
->> Will use bcrypt for secure password hashing
+>> Need to helper function
+>> Will create a simple utility
 
 ::c0.88 ::m0.85 ::f0.95 ::s0.78
 
-::create_file @auth.py
+::create_file @utils.py
 <<<
-import bcrypt
-from typing import Optional
-
-def hash_password(password: str) -> bytes:
-    'Hash password using bcrypt'
-    salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(password.encode(), salt)
-
-def verify_password(password: str, hashed: bytes) -> bool:
-    'Verify password against hash'
-    return bcrypt.checkpw(password.encode(), hashed)
+def hello_world():
+    print("Hello from Duckflow")
 >>>
 
-::create_file @test_auth.py
-<<<
-import pytest
-from auth import hash_password, verify_password
+::run_command echo "File created successfully"
 
-def test_password_hashing():
-    password = "test123"
-    hashed = hash_password(password)
-    assert verify_verify(password, hashed)
-    assert not verify_password("wrong", hashed)
->>>
-
-::run_command @pytest test_auth.py
+>> Verified creation
 
 >> Tests should pass if bcrypt is installed
 
@@ -99,19 +80,24 @@ The codebase follows clean architecture principles with clear separation of conc
 # Game Engine Implementation Plan
 
 ## Step 1: Core System Setup
-Initialize project structure and implement Engine singleton class
+Initialize project structure and create the Engine singleton class.
+Configure basic logging and resource management subsystems.
 
 ## Step 2: Entity Component System
-Implement Entity and Component base classes with lifecycle management
+Implement Entity and Component base classes with lifecycle management.
+Create the ComponentManager to handle entity updates efficiently.
 
 ## Step 3: Rendering System
-Integrate PIXIJS and implement sprite rendering pipeline
+Integrate PIXIJS and implement sprite rendering pipeline.
+Set up the main render loop and canvas management.
 
 ## Step 4: World Management
-Create tilemap system and camera controls
+Create tilemap system and camera controls.
+Implement basic collision detection for map boundaries.
 
 ## Step 5: Testing and Documentation
-Write unit tests and API documentation
+Write unit tests for core systems using Jest.
+Generate API documentation and usage guide.
 >>>
 
 ## Critical Rules - READ CAREFULLY

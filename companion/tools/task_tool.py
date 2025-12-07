@@ -71,7 +71,7 @@ class TaskTool:
         except Exception as e:
             return f"Failed to generate tasks: {e}"
 
-    async def mark_task_complete(self, task_index: int) -> str:
+    async def mark_task_complete(self, task_index: int = 0) -> str:
         """Mark a specific task as complete."""
         if not self.state.current_plan:
             return "No active plan."

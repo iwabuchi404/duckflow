@@ -10,6 +10,7 @@ from companion.tools.file_ops import file_ops
 from companion.tools.plan_tool import PlanTool
 from companion.tools.task_tool import TaskTool
 from companion.tools.approval import ApprovalTool
+from companion.tools.memory_tool import MemoryTool
 from companion.execution.task_executor import TaskExecutor
 from companion.execution.result_summarizer import ResultSummarizer
 from companion.modules.pacemaker import DuckPacemaker
@@ -63,7 +64,7 @@ class DuckAgent:
         self.register_tool("list_directory", file_ops.list_files)
         self.register_tool("mkdir", file_ops.mkdir)
         self.register_tool("replace_in_file", file_ops.replace_in_file)
-        self.register_tool("edit_file", file_ops.replace_in_file)  # Alias for Sym-Ops v2
+        self.register_tool("edit_file", file_ops.write_file)  # Alias - Changed to write_file (overwrite) as agent uses it for full content
         self.register_tool("find_files", file_ops.find_files)
         self.register_tool("delete_file", file_ops.delete_file)
 
@@ -76,6 +77,11 @@ class DuckAgent:
         # Register Task Execution
         self.register_tool("execute_tasks", self.action_execute_tasks)
         self.register_tool("run_command", self.action_run_command)
+
+        # Register Memory Tools
+        self.memory_tool = MemoryTool()
+        self.register_tool("search_archives", self.memory_tool.search_archives)
+        self.register_tool("recall", self.memory_tool.search_archives)  # Alias
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""

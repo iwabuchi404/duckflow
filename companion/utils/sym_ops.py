@@ -288,12 +288,25 @@ class FuzzyParser:
     
     def _parse_action(self, line: str) -> Action:
         """Parse action line v2"""
-        parts = line[2:].split('@')
-        if len(parts) < 2:
-            return Action(type=parts[0].strip(), path="")
+        # Better parsing for actions without @ (like run_command python script.py)
+        # If no @, try to split by space for the action type
+        parts = line[2:].strip().split('@', 1)
         
-        action_type = parts[0].strip()
-        path_part = parts[1].strip()
+        if len(parts) == 2:
+            # Has @
+            action_type = parts[0].strip()
+            path_part = parts[1].strip()
+        else:
+            # No @, split by first space
+            # e.g. "::run_command python script.py" -> type="run_command", path="python script.py"
+            # e.g. "::finish" -> type="finish", path=""
+            content = parts[0].strip()
+            if ' ' in content:
+                action_type, path_part = content.split(' ', 1)
+            else:
+                action_type = content
+                path_part = ""
+        
         depends_on = None
         
         if '>' in path_part:

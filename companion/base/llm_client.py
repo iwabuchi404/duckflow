@@ -297,6 +297,10 @@ class LLMClient:
                                 # Fallback if path isn't a simple number
                                 logger.warning(f"Could not parse task_index from path: {val}")
                                 params["task_index"] = 0 # Default fallback? Or maybe keep raw?
+                        else:
+                             # Fallback if path is missing entirely
+                             logger.warning("Sym-Ops: 'mark_task_complete' missing path (@index). Defaulting to index 0.")
+                             params["task_index"] = 0
                                 
                 logger.debug(f"  → Final params: {list(params.keys())}")
                 

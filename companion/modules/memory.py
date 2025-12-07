@@ -2,6 +2,7 @@ from typing import List, Dict, Optional, Tuple
 from pydantic import BaseModel, Field
 import logging
 from companion.base.llm_client import LLMClient, default_client
+from companion.modules.archive import ArchiveStorage
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class MemoryManager:
         self.max_tokens = max_tokens
         self.config = config or ScoringConfig()
         self.prune_count = 0  # 整理実行回数（統計用）
+        self.archive_storage = ArchiveStorage()
         
     def should_prune(self, conversation_history: List[Dict]) -> bool:
         """整理が必要かチェック"""
@@ -97,7 +99,19 @@ class MemoryManager:
         )
         
         # インデックス順に並び替え
+        # インデックス順に並び替え
         selected_messages.sort(key=lambda x: x[0])
+        
+        # 削除されたメッセージを特定してアーカイブ
+        selected_indices = {idx for idx, _ in selected_messages}
+        removed_messages = []
+        for i in range(len(conversation_history)):
+            if i not in selected_indices:
+                removed_messages.append(conversation_history[i])
+        
+        if removed_messages:
+            logger.info(f"Archiving {len(removed_messages)} removed messages")
+            self.archive_storage.archive_messages(removed_messages)
         
         # ギャップ検出と要約挿入
         if emergency_mode:
