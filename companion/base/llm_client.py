@@ -20,30 +20,31 @@ class LLMClient:
                  api_key: Optional[str] = None, 
                  base_url: Optional[str] = None, 
                  model: Optional[str] = None,
-                 timeout: Optional[float] = None):
+                 timeout: Optional[float] = None,
+                 provider: Optional[str] = None):
         
-        # Load provider from config
-        provider = config.get("llm.provider", "groq")
-        logger.info(f"🔧 Initializing LLM Client with provider: {provider}")
+        # Load provider from config or parameter
+        self.provider = provider or config.get("llm.provider", "groq")
+        logger.info(f"🔧 Initializing LLM Client with provider: {self.provider}")
         
         # Load API key based on provider (priority: param > env > config)
         api_key_env_var = None  # Track which env var we're looking for
         if api_key:
             self.api_key = api_key
             logger.info(f"✅ Using API key from parameter")
-        elif provider == "groq":
+        elif self.provider == "groq":
             api_key_env_var = "GROQ_API_KEY"
             self.api_key = os.getenv("GROQ_API_KEY")
-        elif provider == "openrouter":
+        elif self.provider == "openrouter":
             api_key_env_var = "OPENROUTER_API_KEY"
             self.api_key = os.getenv("OPENROUTER_API_KEY")
-        elif provider == "anthropic":
+        elif self.provider == "anthropic":
             api_key_env_var = "ANTHROPIC_API_KEY"
             self.api_key = os.getenv("ANTHROPIC_API_KEY")
-        elif provider == "openai":
+        elif self.provider == "openai":
             api_key_env_var = "OPENAI_API_KEY"
             self.api_key = os.getenv("OPENAI_API_KEY")
-        elif provider == "google":
+        elif self.provider == "google":
             api_key_env_var = "GOOGLE_API_KEY"
             self.api_key = os.getenv("GOOGLE_API_KEY")
         else:
@@ -62,13 +63,13 @@ class LLMClient:
         # Load base URL based on provider
         if base_url:
             self.base_url = base_url
-        elif provider == "groq":
+        elif self.provider == "groq":
             self.base_url = os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
-        elif provider == "openrouter":
+        elif self.provider == "openrouter":
             self.base_url = os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-        elif provider == "anthropic":
+        elif self.provider == "anthropic":
             self.base_url = os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com/v1"
-        elif provider == "openai":
+        elif self.provider == "openai":
             self.base_url = os.getenv("OPENAI_BASE_URL")  # None is OK, uses default
         else:
             self.base_url = os.getenv("OPENAI_BASE_URL")
@@ -78,7 +79,7 @@ class LLMClient:
             self.model = model
         else:
             # Try environment variable first, then config
-            self.model = os.getenv("DUCKFLOW_MODEL") or config.get(f"llm.{provider}.model", "llama-3.3-70b-versatile")
+            self.model = os.getenv("DUCKFLOW_MODEL") or config.get(f"llm.{self.provider}.model", "llama-3.3-70b-versatile")
         
         # Load timeout from config
         self.timeout = timeout or config.get("llm_timeout_seconds", 60.0)
@@ -91,7 +92,7 @@ class LLMClient:
             "cost_estimate": 0.0  # Placeholder for cost calculation
         }
         
-        logger.info(f"LLM Client initialized: provider={provider}, model={self.model}, base_url={self.base_url}")
+        logger.info(f"LLM Client initialized: provider={self.provider}, model={self.model}, base_url={self.base_url}")
 
         # Check for dummy key or empty key
         if not self.api_key or self.api_key == "dummy-key":
@@ -104,6 +105,135 @@ class LLMClient:
                 base_url=self.base_url,
                 timeout=self.timeout
             )
+    
+    def reinitialize(self, provider: Optional[str] = None, model: Optional[str] = None) -> bool:
+        """
+        Reinitialize the LLM client with new provider/model settings.
+        
+        Args:
+            provider: New provider name (e.g., 'openai', 'groq', 'openrouter')
+            model: New model name (e.g., 'gpt-4o', 'llama-3.3-70b-versatile')
+            
+        Returns:
+            True if reinitialization was successful, False otherwise
+        """
+        try:
+            # Store old values for rollback
+            old_provider = self.provider
+            old_model = self.model
+            old_base_url = self.base_url
+            old_api_key = self.api_key
+            old_client = self.client if hasattr(self, 'client') else None
+            old_use_mock = self.use_mock
+            
+            # Update provider if specified
+            if provider:
+                self.provider = provider
+            
+            # Update model if specified
+            if model:
+                self.model = model
+            
+            logger.info(f"🔄 Reinitializing LLM Client: provider={self.provider}, model={self.model}")
+            
+            # Reload API key for new provider
+            api_key_env_var = None
+            if self.provider == "groq":
+                api_key_env_var = "GROQ_API_KEY"
+                self.api_key = os.getenv("GROQ_API_KEY")
+            elif self.provider == "openrouter":
+                api_key_env_var = "OPENROUTER_API_KEY"
+                self.api_key = os.getenv("OPENROUTER_API_KEY")
+            elif self.provider == "anthropic":
+                api_key_env_var = "ANTHROPIC_API_KEY"
+                self.api_key = os.getenv("ANTHROPIC_API_KEY")
+            elif self.provider == "openai":
+                api_key_env_var = "OPENAI_API_KEY"
+                self.api_key = os.getenv("OPENAI_API_KEY")
+            elif self.provider == "google":
+                api_key_env_var = "GOOGLE_API_KEY"
+                self.api_key = os.getenv("GOOGLE_API_KEY")
+            else:
+                self.api_key = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
+            
+            if not self.api_key:
+                logger.error(f"❌ API key not found for provider: {self.provider} (env var: {api_key_env_var})")
+                # Rollback
+                self.provider = old_provider
+                self.model = old_model
+                self.base_url = old_base_url
+                self.api_key = old_api_key
+                if old_client:
+                    self.client = old_client
+                self.use_mock = old_use_mock
+                return False
+            
+            # Reload base URL for new provider
+            if self.provider == "groq":
+                self.base_url = os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
+            elif self.provider == "openrouter":
+                self.base_url = os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
+            elif self.provider == "anthropic":
+                self.base_url = os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com/v1"
+            elif self.provider == "openai":
+                self.base_url = os.getenv("OPENAI_BASE_URL")
+            else:
+                self.base_url = os.getenv("OPENAI_BASE_URL")
+            
+            # Create new client
+            self.use_mock = False
+            self.client = AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url,
+                timeout=self.timeout
+            )
+            
+            logger.info(f"✅ LLM Client reinitialized successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to reinitialize LLM client: {e}")
+            # Rollback on error
+            self.provider = old_provider
+            self.model = old_model
+            self.base_url = old_base_url
+            self.api_key = old_api_key
+            if old_client:
+                self.client = old_client
+            self.use_mock = old_use_mock
+            return False
+    
+    async def test_connection(self) -> bool:
+        """
+        Test the connection to the LLM API with a simple request.
+        
+        Returns:
+            True if connection is successful, False otherwise
+        """
+        try:
+            if self.use_mock:
+                return True
+            
+            logger.info("🔍 Testing LLM connection...")
+            test_messages = [{"role": "user", "content": "ping"}]
+            
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=test_messages,
+                temperature=0.1,
+                max_tokens=10,
+            )
+            
+            if response and response.choices:
+                logger.info("✅ Connection test successful")
+                return True
+            else:
+                logger.error("❌ Connection test failed: No response")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Connection test failed: {e}")
+            return False
 
     async def chat(self, messages: List[Dict[str, str]], response_model: Optional[type] = None) -> Union[Dict[str, Any], ActionList]:
         """

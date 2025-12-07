@@ -20,6 +20,7 @@ class CommandHandler:
             "/help": self.handle_help,
             "/exit": self.handle_exit,
             "/clear": self.handle_clear,
+            "/model": self.handle_model,
         }
 
     def is_command(self, input_text: str) -> bool:
@@ -130,6 +131,10 @@ class CommandHandler:
         [cyan]/config set <k> <v>[/cyan] - Set config value (temporary)
         [cyan]/config reload[/cyan]      - Reload config from file
         [cyan]/status[/cyan]             - Show agent vitals and loop status
+        [cyan]/model[/cyan]              - Interactive model selection
+        [cyan]/model list[/cyan]         - List available models
+        [cyan]/model current[/cyan]      - Show current model
+        [cyan]/model <provider>/<model>[/cyan] - Switch to a specific model
         [cyan]/clear[/cyan]              - Clear conversation history
         [cyan]/exit[/cyan]               - Exit the agent
         [cyan]/help[/cyan]               - Show this help
@@ -146,6 +151,244 @@ class CommandHandler:
     async def handle_clear(self, args: List[str]):
         self.agent.state.conversation_history = []
         ui.print_success("Conversation history cleared.")
+    
+    async def handle_model(self, args: List[str]):
+        """Handle /model command for switching LLM models."""
+        if not args:
+            # No arguments - show interactive selection
+            await self._interactive_model_selection()
+            return
+        
+        subcmd = args[0]
+        
+        if subcmd == "list":
+            # Show available models from config
+            models_config = config.get("llm.available_models", [])
+            
+            if models_config:
+                # New format with detailed model list
+                table = Table(show_header=True, header_style="bold magenta", box=None)
+                table.add_column("Name", style="cyan", no_wrap=False)
+                table.add_column("Provider", style="yellow")
+                table.add_column("Model ID", style="white")
+                table.add_column("Status", style="green")
+                
+                current_provider = config.get("llm.provider", "unknown")
+                current_model = self.agent.llm.model
+                
+                for model_info in models_config:
+                    name = model_info.get("name", "Unknown")
+                    provider = model_info.get("provider", "N/A")
+                    model = model_info.get("model", "N/A")
+                    description = model_info.get("description", "")
+                    
+                    # Add description to name if available
+                    display_name = name
+                    if description:
+                        display_name += f"\n[dim]{description}[/dim]"
+                    
+                    status = "✓ Active" if provider == current_provider and model == current_model else ""
+                    table.add_row(display_name, provider, model, status)
+                
+                if hasattr(ui, 'console'):
+                    ui.console.print(Panel(table, title="[bold]Available Models[/bold]", border_style="green", expand=False))
+                else:
+                    print("Available models:")
+                    for model_info in models_config:
+                        print(f"  {model_info.get('name')}: {model_info.get('provider')}/{model_info.get('model')}")
+            else:
+                # Fallback to old format
+                table = Table(show_header=True, header_style="bold magenta", box=None)
+                table.add_column("Provider", style="cyan")
+                table.add_column("Model", style="white")
+                table.add_column("Status", style="green")
+                
+                current_provider = config.get("llm.provider", "unknown")
+                current_model = self.agent.llm.model
+                
+                # List models from config
+                providers = ["openai", "anthropic", "groq", "openrouter", "google"]
+                for provider in providers:
+                    model = config.get(f"llm.{provider}.model", "N/A")
+                    if model != "N/A":
+                        status = "✓ Active" if provider == current_provider and model == current_model else ""
+                        table.add_row(provider, model, status)
+                
+                if hasattr(ui, 'console'):
+                    ui.console.print(Panel(table, title="[bold]Available Models[/bold]", border_style="green", expand=False))
+                else:
+                    print("Available models:")
+                    for provider in providers:
+                        model = config.get(f"llm.{provider}.model", "N/A")
+                        if model != "N/A":
+                            print(f"  {provider}: {model}")
+        
+        elif subcmd == "current":
+            # Show current model
+            current_provider = config.get("llm.provider", "unknown")
+            current_model = self.agent.llm.model
+            
+            info_text = f"""
+            [bold]Current Model Configuration:[/bold]
+            Provider: [cyan]{current_provider}[/cyan]
+            Model: [cyan]{current_model}[/cyan]
+            Base URL: [cyan]{self.agent.llm.base_url or 'default'}[/cyan]
+            """
+            
+            if hasattr(ui, 'console'):
+                ui.console.print(Panel(info_text, title="[bold]Current Model[/bold]", border_style="blue", expand=False))
+            else:
+                print(f"Current provider: {current_provider}")
+                print(f"Current model: {current_model}")
+        
+        else:
+            # Assume it's a provider/model specification
+            if "/" not in subcmd:
+                ui.print_error("Invalid format. Use: /model <provider>/<model> (e.g., /model openai/gpt-4o)")
+                return
+            
+            try:
+                provider, model = subcmd.split("/", 1)
+                provider = provider.strip()
+                model = model.strip()
+                
+                if not provider or not model:
+                    ui.print_error("Provider and model cannot be empty")
+                    return
+                
+                # Call agent's switch_model method
+                ui.print_info(f"🔄 Switching to {provider}/{model}...")
+                success = await self.agent.switch_model(provider, model)
+                
+                if success:
+                    ui.print_success(f"✅ Successfully switched to {provider}/{model}")
+                else:
+                    ui.print_error(f"❌ Failed to switch model. Check logs for details.")
+                    
+            except ValueError:
+                ui.print_error("Invalid format. Use: /model <provider>/<model>")
+            except Exception as e:
+                ui.print_error(f"Error switching model: {e}")
+    
+    async def _interactive_model_selection(self):
+        """Interactive model selection with numbered list."""
+        # Get available models from config
+        models_config = config.get("llm.available_models", [])
+        
+        if not models_config:
+            # Fallback to old method if no model list defined
+            ui.print_warning("設定ファイルに llm.available_models が見つかりません。従来の方法を使用します。")
+            await self._interactive_model_selection_legacy()
+            return
+        
+        current_provider = config.get("llm.provider", "unknown")
+        current_model = self.agent.llm.model
+        
+        available_models = []
+        for model_info in models_config:
+            provider = model_info.get("provider")
+            model = model_info.get("model")
+            name = model_info.get("name", f"{provider}/{model}")
+            description = model_info.get("description", "")
+            
+            if not provider or not model:
+                continue
+            
+            # Check if this is the current model
+            is_current = (provider == current_provider and model == current_model)
+            
+            # Format display text
+            display_text = f"[bold]{name}[/bold]"
+            if description:
+                display_text += f"\n  [dim]{description}[/dim]"
+            if is_current:
+                display_text += "\n  [green]✓ 現在使用中[/green]"
+            
+            available_models.append((display_text, (provider, model, name)))
+        
+        if not available_models:
+            ui.print_error("利用可能なモデルが見つかりません")
+            return
+        
+        # Show selection menu
+        selection = ui.select_from_list(
+            "利用可能なモデル",
+            available_models,
+            "モデルを選択してください："
+        )
+        
+        if selection is None:
+            ui.print_info("キャンセルされました")
+            return
+        
+        # Get selected provider and model
+        _, (provider, model, name) = available_models[selection]
+        
+        # Check if already using this model
+        if provider == current_provider and model == current_model:
+            ui.print_info(f"既に {name} を使用しています")
+            return
+        
+        # Switch to selected model
+        ui.print_info(f"🔄 {name} に切り替えています...")
+        success = await self.agent.switch_model(provider, model)
+        
+        if success:
+            ui.print_success(f"✅ {name} に切り替えました")
+        else:
+            ui.print_error(f"❌ モデルの切り替えに失敗しました。ログを確認してください。")
+    
+    async def _interactive_model_selection_legacy(self):
+        """Legacy interactive model selection (fallback)."""
+        # Collect available models from config (old method)
+        providers = ["openai", "anthropic", "groq", "openrouter", "google"]
+        available_models = []
+        
+        current_provider = config.get("llm.provider", "unknown")
+        current_model = self.agent.llm.model
+        
+        for provider in providers:
+            model = config.get(f"llm.{provider}.model")
+            if model:
+                # Check if this is the current model
+                is_current = (provider == current_provider and model == current_model)
+                display_text = f"{provider}/{model}"
+                if is_current:
+                    display_text += " [green]✓ 現在使用中[/green]"
+                
+                available_models.append((display_text, (provider, model)))
+        
+        if not available_models:
+            ui.print_error("設定ファイルにモデルが見つかりません")
+            return
+        
+        # Show selection menu
+        selection = ui.select_from_list(
+            "利用可能なモデル",
+            available_models,
+            "モデルを選択してください："
+        )
+        
+        if selection is None:
+            ui.print_info("キャンセルされました")
+            return
+        
+        # Get selected provider and model
+        _, (provider, model) = available_models[selection]
+        
+        # Check if already using this model
+        if provider == current_provider and model == current_model:
+            ui.print_info(f"既に {provider}/{model} を使用しています")
+            return
+        
+        # Switch to selected model
+        ui.print_info(f"🔄 {provider}/{model} に切り替えています...")
+        success = await self.agent.switch_model(provider, model)
+        
+        if success:
+            ui.print_success(f"✅ {provider}/{model} に切り替えました")
+        else:
+            ui.print_error(f"❌ モデルの切り替えに失敗しました。ログを確認してください。")
 
     def _set_config_value(self, key_path: str, value: Any):
         # Helper to set nested dict value

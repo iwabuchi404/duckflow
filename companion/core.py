@@ -86,6 +86,59 @@ class DuckAgent:
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
         self.tools[name] = func
+    
+    async def switch_model(self, provider: str, model: str) -> bool:
+        """
+        Switch to a different LLM model and persist the change.
+        
+        Args:
+            provider: Provider name (e.g., 'openai', 'groq', 'openrouter')
+            model: Model name (e.g., 'gpt-4o', 'llama-3.3-70b-versatile')
+            
+        Returns:
+            True if switch was successful, False otherwise
+        """
+        from companion.config.config_loader import config
+        
+        try:
+            logger.info(f"🔄 Attempting to switch model to {provider}/{model}")
+            
+            # Test if the new model configuration is valid by reinitializing
+            success = self.llm.reinitialize(provider=provider, model=model)
+            
+            if not success:
+                logger.error("Failed to reinitialize LLM client")
+                return False
+            
+            # Test the connection
+            connection_ok = await self.llm.test_connection()
+            if not connection_ok:
+                logger.error("Connection test failed for new model")
+                return False
+            
+            # Update components that depend on LLM
+            logger.info("Updating dependent components...")
+            
+            # Update TaskTool
+            self.task_tool.llm = self.llm
+            
+            # Update ResultSummarizer
+            self.result_summarizer.llm = self.llm
+            
+            # Update MemoryManager
+            self.memory_manager.llm_client = self.llm
+            
+            # Persist to config file
+            logger.info("Persisting configuration to duckflow.yaml...")
+            config.update_config("llm.provider", provider)
+            config.update_config(f"llm.{provider}.model", model)
+            
+            logger.info(f"✅ Successfully switched to {provider}/{model}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error switching model: {e}")
+            return False
 
     def get_tool_descriptions(self) -> str:
         """Generate tool descriptions for the system prompt."""

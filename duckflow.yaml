@@ -1,17 +1,57 @@
 llm:
-  provider: "openrouter"
+  provider: openrouter
+  available_models:
+  - name: GPT-4o (OpenAI)
+    provider: openai
+    model: gpt-4o
+    description: 最新のGPT-4 Optimized。高性能で複雑なタスクに最適
+  - name: GPT-4o Mini (OpenAI)
+    provider: openai
+    model: gpt-4o-mini
+    description: 軽量版GPT-4o。高速で低コスト
+  - name: anthropic/claude-sonnet-4.5
+    provider: openrouter
+    model: anthropic/claude-sonnet-4.5
+    description: 最新のClaude。高度な推論能力
+  - name: Claude 3.5 Sonnet (Anthropic via OpenRouter)
+    provider: openrouter
+    model: anthropic/claude-3-5-sonnet-20241022
+    description: 最新のClaude。高度な推論能力
+  - name: anthropic/claude-haiku-4.5
+    provider: openrouter
+    model: anthropic/claude-haiku-4.5
+    description: ''
+  - name: Llama 3.3 70B (Groq)
+    provider: groq
+    model: llama-3.3-70b-versatile
+    description: 高速推論。Groqの専用ハードウェアで動作
+  - name: GLM-4.5 Air Free (OpenRouter)
+    provider: openrouter
+    model: z-ai/glm-4.5-air:free
+    description: 無料で使える高性能モデル
+  - name: Gemini 1.5 Pro (Google)
+    provider: google
+    model: gemini-1.5-pro-002
+    description: Googleの最新モデル。長いコンテキストに対応
+  - name: google/gemini-2.5-flash
+    provider: openrouter
+    model: google/gemini-2.5-flash
+    description: ''
+  - name: google/gemini-2.5-pro
+    provider: openrouter
+    model: google/gemini-2.5-pro
+    description: ''
   google:
-    model: "gemini-1.5-pro-002"
+    model: gemini-1.5-pro-002
   openai:
-    model: "gpt-4o"
+    model: gpt-4o
   openrouter:
-    model: "openai/gpt-4o-mini"  # 最も安定。Gemini 2.5 Flashは不安定
+    model: anthropic/claude-haiku-4.5
   temperature: 0.7
   max_output_tokens: 8192
-
 agent:
   max_loops: 10
-  language: "japanese"
+  language: japanese
   auto_approval:
-    - "read_file"
-    - "list_files"
+  - read_file
+  - list_files

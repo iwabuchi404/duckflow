@@ -63,6 +63,50 @@ class ConfigLoader:
                 return default
         
         return value
+    
+    def update_config(self, key_path: str, value: Any) -> bool:
+        """
+        Update config value and persist to YAML file.
+        Example: update_config('llm.provider', 'openai')
+        
+        Args:
+            key_path: Dot-separated key path (e.g., 'llm.provider')
+            value: New value to set
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Update in-memory config
+            keys = key_path.split('.')
+            current = self._config
+            
+            # Navigate to the parent dict
+            for key in keys[:-1]:
+                if key not in current:
+                    current[key] = {}
+                current = current[key]
+            
+            # Set the value
+            current[keys[-1]] = value
+            
+            # Write to file
+            root_dir = Path(__file__).parent.parent.parent
+            config_path = root_dir / "duckflow.yaml"
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                yaml.dump(self._config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error updating config: {e}")
+            return False
+    
+    def get_config_path(self) -> Path:
+        """Get the path to the config file."""
+        root_dir = Path(__file__).parent.parent.parent
+        return root_dir / "duckflow.yaml"
 
 # Global instance
 config = ConfigLoader()

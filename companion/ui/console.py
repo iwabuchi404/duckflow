@@ -178,6 +178,62 @@ class DuckUI:
             except (EOFError, KeyboardInterrupt):
                 self.console.print("\n[error]Input interrupted. Defaulting to No.[/error]")
                 return False
+    
+    def select_from_list(self, title: str, options: List[tuple], description: str = "") -> Optional[int]:
+        """
+        Display a numbered list and let the user select an option.
+        
+        Args:
+            title: Title for the selection prompt
+            options: List of tuples (display_text, value)
+            description: Optional description text
+            
+        Returns:
+            Index of selected option, or None if cancelled
+        """
+        from rich.prompt import Prompt
+        
+        # Display the options
+        if description:
+            self.console.print(f"\n[info]{description}[/info]")
+        
+        table = Table(show_header=True, header_style="bold cyan", box=None)
+        table.add_column("#", style="cyan", width=4)
+        table.add_column(title, style="white")
+        
+        for idx, (display_text, _) in enumerate(options, 1):
+            table.add_row(str(idx), display_text)
+        
+        self.console.print(Panel(
+            table,
+            title=f"[bold]{title}[/bold]",
+            border_style="cyan",
+            expand=False
+        ))
+        
+        # Get user selection
+        while True:
+            try:
+                response = Prompt.ask(
+                    f"[cyan]選択してください (1-{len(options)}, またはキャンセルするには 'c')[/cyan]",
+                    console=self.console
+                )
+                
+                if response.lower() in ['c', 'cancel', 'q', 'quit']:
+                    return None
+                
+                try:
+                    selection = int(response)
+                    if 1 <= selection <= len(options):
+                        return selection - 1  # Return 0-based index
+                    else:
+                        self.console.print(f"[red]1から{len(options)}の間の数字を入力してください[/red]")
+                except ValueError:
+                    self.console.print("[red]数字を入力してください[/red]")
+                    
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("\n[error]キャンセルされました[/error]")
+                return None
 
     def print_debug_context(self, messages: List[Dict[str, str]], mode: str = "console"):
         """Print the full context messages for debugging."""
@@ -227,6 +283,7 @@ class DuckUI:
             '/help': None,
             '/exit': None,
             '/clear': None,
+            '/model': {'list': None, 'current': None},
         })
         
         style = Style.from_dict({

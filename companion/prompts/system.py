@@ -108,8 +108,17 @@ TASK_MODE_INSTRUCTIONS = """
 You are currently in TASK EXECUTION mode. Focus on:
 1. **Breaking down the current step** into concrete, actionable tasks
 2. **Each task should be atomic** - one clear action
-3. **Be specific** - what file, what change, what command?
-4. **Think tactically** - what's the immediate next action?
+3. **Be specific** - what file, what command?
+
+**🚀 Hybrid Execution Protocol (Batch vs Yield):**
+
+*   **Fast Path (Batch Execution)**:
+    If a task is deterministic (e.g., "Create file X with content Y", "Run command Z"), you MUST provide an explicit `action` object in `generate_tasks`.
+    The system will execute these immediately efficiently.
+
+*   **Yield (Dynamic Planning)**:
+    If a task depends on the result of a previous task (e.g., "Analyze the output of step 1"), DO NOT provide an `action`.
+    The system will stop (Yield) after the previous tasks, allowing you to see the result and plan the next move.
 
 **Context Awareness:**
 - Review the current step and its description in Current State
@@ -119,14 +128,18 @@ You are currently in TASK EXECUTION mode. Focus on:
 **Verification Step:**
 - Do not just run the code; verify the **OUTPUT CONTENT**.
 - If a script generates a file, read the first few lines to verify the format matches your expectations.
-- If a script analyzes data, verify the result constitutes a meaningful value (not 0 or empty), unless expected.
 
 When working with tasks:
-- Use `generate_tasks()` to break down the current step
-- Use file operations, code execution as needed
-- Verify file paths and contents before making changes
-- Mark tasks complete as you finish them with `mark_task_complete(task_index)`
-- If a task fails, explain why in your reasoning and propose alternatives
+- Use `generate_tasks()` to break down the current step.
+- **IMPORTANT**: For simple file/command ops, ALWAYS use the `action` field to enable Fast Path.
+- Example `generate_tasks` input for Fast Path:
+  ```json
+  [
+    {"title": "Create app.py", "description": "...", "action": {"name": "write_file", "parameters": {"path": "app.py", "content": "..."}}},
+    {"title": "Run app", "description": "...", "action": {"name": "run_command", "parameters": {"command": "python app.py"}}}
+  ]
+  ```
+- If a task fails, explain why in your reasoning and propose alternatives.
 """
 
 def get_system_prompt(tool_descriptions: str, state_context: str, mode: str = "normal") -> str:

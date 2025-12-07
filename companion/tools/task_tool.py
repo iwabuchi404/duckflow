@@ -1,5 +1,5 @@
 import json
-from typing import List, Dict
+from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 from companion.state.agent_state import AgentState, Task, TaskStatus
@@ -7,9 +7,10 @@ from companion.base.llm_client import default_client, LLMClient
 
 class TaskListProposal(BaseModel):
     """Schema for LLM response when proposing tasks."""
-    tasks: List[Dict[str, str]] = Field(..., description="List of tasks. Each task has 'title' and 'description'.")
+    tasks: List[Dict[str, Any]] = Field(..., description="List of tasks. Each task has 'title', 'description', and optional 'action'.")
 
 from companion.ui.console import ui
+from companion.state.agent_state import Action
 
 class TaskTool:
     """
@@ -42,13 +43,34 @@ class TaskTool:
         
         Please break this step down into small, actionable tasks.
         Return a JSON object with a list of tasks.
-        Each task should have a 'title' and a 'description'.
+        Each task MUST have a 'title' and 'description'.
+        
+        [IMPORTANT: Explicit Action Binding]
+        If a task involves a simple, deterministic tool call (e.g., creating a file, running a specific command), you MUST provide an 'action' object.
+        This allows the system to execute it automatically without asking you again.
+        
+        Action Schema: {{ "name": "tool_name", "parameters": {{ ... }} }}
+        Available Tools for Actions: write_file, run_command, read_file
         
         Example:
         {{
             "tasks": [
-                {{"title": "Create file.py", "description": "Write initial code"}},
-                {{"title": "Run tests", "description": "Verify implementation"}}
+                {{
+                    "title": "Create main.py", 
+                    "description": "Write basic script",
+                    "action": {{
+                        "name": "write_file",
+                        "parameters": {{ "path": "main.py", "content": "print('hello')" }}
+                    }}
+                }},
+                {{
+                    "title": "Run tests", 
+                    "description": "Verify implementation",
+                    "action": {{
+                        "name": "run_command",
+                        "parameters": {{ "command": "pytest" }}
+                    }}
+                }}
             ]
         }}
         """
@@ -60,13 +82,24 @@ class TaskTool:
             proposal = await self.llm.chat(messages, response_model=TaskListProposal)
             
             # Add tasks to step
+            count = 0
             for task_data in proposal.tasks:
-                current_step.add_task(
+                task = current_step.add_task(
                     title=task_data.get("title", "Untitled Task"),
                     description=task_data.get("description", "")
                 )
+                
+                # Hydrate Action if present
+                action_data = task_data.get("action")
+                if action_data:
+                    try:
+                        task.action = Action(**action_data)
+                    except Exception as e:
+                        print(f"Warning: Failed to parse action for task '{task.title}': {e}")
+                
+                count += 1
             
-            return f"Generated {len(current_step.tasks)} tasks for step '{current_step.title}'."
+            return f"Generated {count} tasks for step '{current_step.title}'."
             
         except Exception as e:
             return f"Failed to generate tasks: {e}"

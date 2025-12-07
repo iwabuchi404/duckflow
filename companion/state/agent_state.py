@@ -61,6 +61,7 @@ class Task(BaseModel):
     result: str = ""
     command: Optional[str] = None # 実行するコマンドがあれば
     file_path: Optional[str] = None # 編集するファイルがあれば
+    action: Optional["Action"] = None # 実行するツールアクション (Explicit)
 
 class Step(BaseModel):
     """中期目標 (1つのStepは複数のTaskを持つ)"""
