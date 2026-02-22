@@ -1,15 +1,16 @@
 # Duckflow
 
-**バージョン**: v0.1.0 (ステップ1)  
-**ステータス**: ステップ1（最小限実装）完了 100%
+**バージョン**: v0.1.0 (Phase 1.5+)  
+**ステータス**: Phase 1.5（基本ファイル操作）完了 100%
 
-Duckflowは、開発者のローカル環境で動作する対話型AIコーディングエージェントです。AIとの対話を通じて、ファイルの作成・編集を支援します。
+Duckflowは、開発者のローカル環境で動作する対話型AIコーディングエージェントです。AIとの対話を通じて、ファイルの作成・編集・実行を支援します。
 
 ## 🎯 プロジェクトの目的
 
 - **効率的な文脈管理**: LLMを呼び出すたびに、関連性の高い情報を最小限の形で賢く組み立てる
-- **柔軟な実行制御**: 将来的にグラフベースの制御フローで、複雑なタスクやエラーからの自己修正を可能にする
+- **柔軟な実行制御**: グラフベースの制御フローを排し、シンプルかつ明示的なThink-Decide-Executeループで制御する
 - **開発者中心の体験**: ターミナル上で、キーボード中心のシームレスな操作感を提供する
+- **精神的支柱 (Companion)**: 単なるツールではなく、開発を共演するパートナーとしての振る舞い
 
 ## 🚀 クイックスタート
 
@@ -37,31 +38,27 @@ pip install -e .
 
 1. **LLMプロバイダーの設定**
 
-`config/config.yaml`でLLMプロバイダーを設定:
+プロジェクトルートの `duckflow.yaml` でLLMプロバイダーを設定します。環境変数 `DUCKFLOW_*` によるオーバーライドも可能です。
 
 ```yaml
 llm:
-  provider: "groq"  # openai, anthropic, google, groq, openrouter
+  provider: openrouter
+  available_models:
+    - name: GPT-4o (OpenAI)
+      provider: openai
+      model: gpt-4o
+    # ...
 ```
 
 2. **APIキーの設定**
 
-`.env`ファイルを作成してAPIキーを設定:
+`.env` ファイルを作成してAPIキーを設定します。
 
 ```bash
-# OpenAI
 OPENAI_API_KEY=your_api_key_here
-
-# Anthropic
 ANTHROPIC_API_KEY=your_api_key_here
-
-# Google AI
 GOOGLE_AI_API_KEY=your_api_key_here
-
-# Groq
 GROQ_API_KEY=your_api_key_here
-
-# OpenRouter
 OPENROUTER_API_KEY=your_api_key_here
 ```
 
@@ -84,175 +81,84 @@ python main.py
 - `quit`, `exit`, `q` - Duckflowを終了
 - `status` - エージェントの状態を表示
 - `config` - 設定情報を表示
-- `history [count]` - 対話履歴を表示 (デフォルト: 10件)
-- `test`, `tests` - テストを実行 (オプション: -v, --verbose, [path])
+- `history [count]` - 対話履歴を表示
+- `test`, `tests` - テストを実行
 
-**ファイル操作:**
-- `ls`, `list [path]` - ファイル一覧を表示
-- `read <file>` - ファイルを読み取り表示
-- `write <file>` - ファイルに書き込み (インタラクティブ)
-- `info <file>` - ファイル情報を表示
-- `mkdir <dir>` - ディレクトリを作成
-
-**AI対話:**
-- 上記以外の入力はAIとの対話として処理されます
+**AI対話とアクション:**
+- 上記以外の入力はAIへの指示として処理されます。
+- エージェントは「思考（Think）」し、一連の「行動（Action）」を決定し、実行します。
 
 ### 使用例
 
 ```bash
-# ファイル一覧を確認
 Duckflow> ls
-
-# ファイルを読み込み
-Duckflow> read example.py
-
-# AIにファイル作成を依頼
-Duckflow> example.pyファイルを作成して、Hello Worldを出力する関数を書いて
-
-# テストを実行
-Duckflow> test -v
-
-# 対話履歴を確認
-Duckflow> history 5
+Duckflow> hello.pyファイルを作成して、Hello Worldを出力する関数を書いて。作成したら実行して。
 ```
 
-## 🧪 テスト
+## 🏗️ アーキテクチャ (Duckflow v4)
 
-```bash
-# 全テストを実行
-uv run pytest tests/ -v
+現在の Duckflow は、予測可能性と透明性を重視したアーキテクチャを採用しています。
 
-# 特定のテストファイルを実行
-uv run pytest tests/test_agent_state.py -v
-
-# カバレッジ付きで実行
-uv run pytest tests/ --cov=codecrafter
-```
-
-## 🏗️ アーキテクチャ（現在：ステップ1）
-
-現在の実装は最小限のアーキテクチャを採用:
-
-- **メインループ**: シンプルな`while`ループベース
-- **UI**: `Rich`ライブラリによるターミナルUI
-- **状態管理**: `Pydantic`モデルによるエージェント状態管理
-- **ツール**: Pythonファンクションベースのファイル操作ツール群
-- **LLM統合**: 直接API呼び出しによる複数プロバイダー対応
-
-### 実装済み機能
-
-✅ **ファイル操作ツール群**
-- ファイル読み書き（バックアップ機能付き）
-- ディレクトリ操作
-- ファイル情報取得
-
-✅ **AI対話システム**  
-- 複数LLMプロバイダー対応
-- 対話履歴管理
-- ファイル操作指示の解析・実行
-
-✅ **セキュリティ機能**
-- ファイル書き込み前の承認確認
-- セキュリティポリシー設定
-
-✅ **テストスイート**
-- 包括的な単体テスト
-- 統合テスト
-- テスト実行ツール (`test` コマンド)
+- **Think-Decide-Execute ループ**: 
+  1. **Think**: 現在の状態 (`AgentState`) をコンテキストとして LLM に入力。
+  2. **Decide**: LLM が「次に実行すべき行動リスト (`ActionList`)」を JSON で出力。
+  3. **Execute**: システムがリストを順次実行し、結果を状態に反映。
+- **Hierarchical Planning**: タスクを Plan -> Step -> Task の階層で管理し、着実な進捗を実現。
+- **UI**: `Rich` による美しく読みやすいターミナル出力。
+- **Pacemaker**: エージェントの健康状態（スタミナ、集中力）やループ回数を監視し、暴走を防止。
 
 ## 🗂️ プロジェクト構造
 
 ```
 duckflow/
-├── codecrafter/              # メインパッケージ
-│   ├── main.py              # メインアプリケーション
-│   ├── base/                # 基盤モジュール
-│   │   ├── config.py        # 設定管理
-│   │   └── llm_client.py    # LLMクライアント抽象化
-│   ├── state/               # 状態管理
-│   │   └── agent_state.py   # エージェント状態Pydanticモデル
-│   ├── tools/               # ツール群
-│   │   └── file_tools.py    # ファイル操作ツール
-│   ├── ui/                  # ユーザーインターフェース
-│   │   └── rich_ui.py       # Rich UI実装
-│   ├── prompts/             # プロンプト管理（構造のみ）
-│   └── security/            # セキュリティ（構造のみ）
-├── tests/                   # テストスイート
-├── config/                  # 設定ファイル
-│   └── config.yaml
-├── main.py                  # エントリーポイント
-├── PROGRESS.md              # 開発進捗記録
-└── CLAUDE.md               # プロジェクト指示書
+├── companion/                # v4 メインパッケージ（旧 codecrafter から移行）
+│   ├── core.py               # メインエージェントロジック
+│   ├── base/                 # LLMクライアント抽象化
+│   ├── state/                # AgentState (Single Source of Truth)
+│   ├── tools/                # ツール群 (File, Plan, Task, etc.)
+│   ├── orchestration/        # 実行制御
+│   ├── modules/              # 記憶管理, Pacemaker
+│   └── ui/                   # Rich UI実装
+├── codecrafter/              # 以前のコードベース（参考用）
+├── config/                   # 設定テンプレート（レガシー）
+├── duckflow.yaml             # メイン設定ファイル
+├── .env                      # APIキー（git exclude）
+├── main.py                   # エントリーポイント
+└── PROGRESS.md               # 開発進捗記録
 ```
 
 ## 🚧 開発ロードマップ
 
-### ✅ ステップ1: 最小限実装 (100% 完了)
-- AIとの対話で単一ファイル編集
-- 基本的なファイル操作
-- セキュリティ承認機能
+詳細は [NEXT_STEPS_ROADMAP.md](NEXT_STEPS_ROADMAP.md) を参照してください。
 
-### 🔄 ステップ2: MVP（計画中）
-- `LangGraph`への移行
-- `Textual`ベースの高機能UI
-- コード検索(RAG)機能
-- 複数ファイル対応
-
-### 🔮 ステップ3: 実用的ツール（将来）
-- LSP/Tree-sitter連携
-- 高度なコード解析
-- 評価システム
+- **Phase 1: Basic AI Companion** (完了)
+- **Phase 1.5: File Operations** (完了)
+- **Phase 1.6: Code Execution** (実装中/一部完了)
+- **Phase 2: Long-term Memory** (計画中)
 
 ## ⚙️ 設定
 
-### LLMプロバイダー設定
-
-`config/config.yaml`:
+### llm (duckflow.yaml)
 
 ```yaml
 llm:
-  provider: "groq"  # 使用するプロバイダー
-  
+  provider: "openrouter"
+  google:
+    model: "gemini-1.5-pro-002"
   openai:
-    model: "gpt-4-turbo-preview"
-    temperature: 0.1
-    max_tokens: 4096
-  
-  anthropic:
-    model: "claude-3-5-sonnet-20241022"
-    temperature: 0.1
-    max_tokens: 4096
-  
-  groq:
-    model: "llama-3.1-8b-instant"
-    temperature: 0.1
-    max_tokens: 8192
+    model: "gpt-4o"
+  temperature: 0.7
 ```
 
-### セキュリティ設定
+### agent (duckflow.yaml)
 
 ```yaml
-security:
-  require_approval:
-    file_write: true        # ファイル書き込み時の承認
-    file_delete: true       # ファイル削除時の承認
-    shell_execution: true   # シェル実行時の承認
-    directory_creation: true # ディレクトリ作成時の承認
-```
-
-### ツール設定
-
-```yaml
-tools:
-  file_operations:
-    max_file_size_mb: 10    # 最大ファイルサイズ
-    backup_enabled: true    # バックアップ機能
-    allowed_extensions:     # 許可する拡張子
-      - ".py"
-      - ".js"
-      - ".ts"
-      - ".yaml"
-      - ".md"
+agent:
+  max_loops: 10
+  language: japanese
+  auto_approval:
+    - read_file
+    - list_files
 ```
 
 ## 🐛 トラブルシューティング

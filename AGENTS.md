@@ -35,14 +35,14 @@
 Duckflow v4 の動作原理は以下の1点に集約されます：
 1. **Think**: 現在の状態 (`AgentState`) を入力とし、
 2. **Decide**: LLMが「次に実行すべき行動リスト (`ActionList`)」をJSONで出力し、
-3. **Execute**: システムがリストを上から順に実行する。
+3. **Execute**: システムが `ActionList` の内容を上から順に実行する。
 
 ### 3.2. Data Structure First
 ロジックを書く前に、必ず **Pydanticモデル (`companion/state/agent_state.py`)** を定義してください。
 - 状態管理は `AgentState` が唯一の「真実の源（Single Source of Truth）」です。
 - 関数の引数でバケツリレーをするのではなく、Stateオブジェクトを参照・更新する設計にします。
 
-### 3.3. Hierarchical Planning (v7 Architecture)
+### 3.3. Hierarchical Planning (v4 Architecture)
 タスクは以下の階層で管理します：
 - **Plan**: 長期目標（例：「スネークゲームを作る」）
 - **Step**: 中期目標（例：「画面描画の実装」）
@@ -56,18 +56,18 @@ Duckflow v4 の動作原理は以下の1点に集約されます：
 
 実装は以下のドキュメントに従い、厳密な順序で進めてください。飛び級は禁止です。
 
-1. **Part 1: Brain & Nerves (現在フェーズ)**
-   - 脳（Core）と神経（JSON Protocol）の確立。
-   - まだ複雑なことはせず、「会話が成立し、JSONが返ってくる」ことだけを目指す。
+1. **Part 1: Brain & Nerves (完了)**
+   - 脳（Core）と神経（JSON Protocol: ActionList）の確立。
+   - 会話が成立し、JSONが正しくパースされることを確認。
    
-2. **Part 2: Basic Tools**
-   - ファイル操作の実装。
+2. **Part 2: Basic Tools (完了)**
+   - ファイル操作の実装 (`companion/tools/file_ops.py`)。
    
-3. **Part 3: Hierarchical Planning**
-   - Plan/Step/Task 構造の実装。
+3. **Part 3: Hierarchical Planning (完了)**
+   - Plan/Step/Task 構造の実装とツール化。
 
-4. **Part 4: Soul & Extensions**
-   - 承認システム、バイタル管理、性格付け。
+4. **Part 4: Soul & Extensions (進行中)**
+   - 承認システム、バイタル管理、性格付け、コード実行。
 
 ---
 

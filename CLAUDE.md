@@ -62,7 +62,7 @@ Duckflowは、開発者のローカル環境で動作する、対話型のAIコ�
 *   **品質保証:** 人間による承認と、自動化されたテスト
 
 ### 技術スタック（現在）
-*   **言語:** Python 3.10以降 UVの使用
+*   **言語:** Python 3.10以降 UVの使用、起動オプションに必ず-X utf8をつける
 *   **UI:** Rich（現在）, Textual（計画）
 *   **LLMプロバイダー:** OpenAI, Anthropic, Google, Groq, OpenRouter対応
 *   **状態・設定管理:** Pydantic, PyYAML, python-dotenv
