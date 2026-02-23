@@ -8,6 +8,7 @@ from rich.syntax import Syntax
 from companion.config.config_loader import config
 from companion.ui import ui
 from companion.modules.model_manager import model_manager
+from companion.tools import get_project_tree
 
 class CommandHandler:
     """
@@ -22,6 +23,7 @@ class CommandHandler:
             "/exit": self.handle_exit,
             "/clear": self.handle_clear,
             "/model": self.handle_model,
+            "/scan": self.handle_scan,
         }
 
     def is_command(self, input_text: str) -> bool:
@@ -139,6 +141,7 @@ class CommandHandler:
         [cyan]/model <provider>/<model>[/cyan] - Switch to a specific model
         [cyan]/clear[/cyan]              - Clear conversation history
         [cyan]/exit[/cyan]               - Exit the agent
+        [cyan]/scan <depth>[/cyan]     - Show project tree (default depth: 3)
         [cyan]/help[/cyan]               - Show this help
         """
         if hasattr(ui, 'console'):
@@ -153,6 +156,28 @@ class CommandHandler:
     async def handle_clear(self, args: List[str]):
         self.agent.state.conversation_history = []
         ui.print_success("Conversation history cleared.")
+    
+    async def handle_scan(self, args: List[str]):
+        """Handle /scan command to show project tree."""
+        depth = 3
+        if args:
+            try:
+                depth = int(args[0])
+            except ValueError:
+                ui.print_error(f"Invalid depth: {args[0]}. Using default (3).")
+        
+        ui.print_info(f"🔍 Scanning project tree (depth={depth})...")
+        tree = await get_project_tree(depth=depth)
+        
+        if hasattr(ui, 'console'):
+            ui.console.print(Panel(
+                tree,
+                title=f"[bold]Project Tree (depth={depth})[/bold]",
+                border_style="cyan",
+                expand=False
+            ))
+        else:
+            print(tree)
     
     async def handle_model(self, args: List[str]):
         """Handle /model command for switching LLM models."""

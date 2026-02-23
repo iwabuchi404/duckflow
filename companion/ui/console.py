@@ -64,6 +64,25 @@ class DuckUI:
             expand=False
         ))
 
+    def print_conversation_message(self, message: str, speaker: str = "user", style: str = "info"):
+        """Print a message from a conversation history turn."""
+        if speaker == "user":
+            prefix = "👤 User"
+            speaker_style = "user"
+        elif speaker == "assistant":
+            prefix = "🤖 Assistant"
+            speaker_style = "success"
+        else:
+            prefix = f"💬 {speaker}"
+            speaker_style = "info"
+        
+        self.console.print(f"[{speaker_style}]{prefix}:[/{speaker_style}]")
+        self.console.print(f"  {message}\n")
+
+    def print_separator(self):
+        """Print a separator line."""
+        self.console.print("─" * 50, style="dim")
+
     def print_thinking(self, thought: str):
         """Print the agent's thought process."""
         self.console.print(f"\n[duck]🦆 Thinking...[/duck]")

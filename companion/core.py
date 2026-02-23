@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 from companion.modules.command_handler import CommandHandler
 from companion.modules.session_manager import SessionManager
 from companion.tools.shell_tool import ShellTool
+from companion.tools import get_project_tree
 
 class DuckAgent:
     """
@@ -105,6 +106,9 @@ class DuckAgent:
 
         # Register execute_batch (Sym-Ops v3.1 Fast Path)
         self.register_tool("execute_batch", self.action_execute_batch)
+
+        # Register Project Tree Tool
+        self.register_tool("get_project_tree", get_project_tree)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
@@ -198,6 +202,18 @@ class DuckAgent:
             )
 
         ui.print_welcome()
+        
+        # セッション復元時に過去の会話を表示（最新5回分）
+        if self.state.conversation_history:
+            history_to_show = self.state.conversation_history[-10:]  # 5ターン = User/AI ペアで10件程度
+            if history_to_show:
+                ui.print_info("\n📜 過去の会話履歴を復元します:")
+                for msg in history_to_show:
+                    role = msg.get("role", "unknown")
+                    content = msg.get("content", "")
+                    if role in ["user", "assistant"]:
+                        ui.print_conversation_message(content, speaker=role)
+                ui.print_separator()
         
         while self.running:
             try:
