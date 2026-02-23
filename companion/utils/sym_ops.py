@@ -60,7 +60,8 @@ class AutoRepair:
             'create', 'edit', 'delete', 'remove', 'update',
             'run', 'execute', 'test', 'check', 'verify', 'finish', 'response',
             'propose_plan', 'duck_call', 'create_file', 'edit_file', 'delete_file',
-            'run_command', 'read_file', 'list_directory'
+            'run_command', 'read_file', 'list_directory',
+            'execute_batch',  # Sym-Ops v3.2
         }
         
         for line in lines:
@@ -89,82 +90,145 @@ class AutoRepair:
         return '\n'.join(fixed_lines)
     
     def _fix_delimiters(self, text: str) -> str:
-        """Normalize delimiters to v2 format"""
+        """Normalize delimiters to v3.2 format.
+        - `>>>` はインデントなし行頭のみをブロック終端として認識する（Python doctest保護）。
+        - execute_batch ブロック内の %%% はバッチ区切りとして保護する。
+        - `---` は変換せずコンテンツとして pass-through（Markdown水平線保護）。
+        """
         lines = text.split('\n')
         fixed = []
-        delimiter_count = 0
-        
+        in_batch_block = False   # ::execute_batch の <<< ～ >>> 内かどうか
+        in_block = False          # 通常の <<< ～ >>> 内かどうか
+
         for line in lines:
             stripped = line.strip()
-            
-            if stripped in ['--', '---', '----']:
-                delimiter_count += 1
-                fixed.append('<<<' if delimiter_count % 2 == 1 else '>>>')
-            elif stripped in ['<<<', '>>>']:
+
+            # execute_batch ブロック追跡
+            if stripped == '::execute_batch':
+                in_batch_block = True
                 fixed.append(line)
-            elif stripped.startswith('```'):
-                delimiter_count += 1
-                fixed.append('<<<' if delimiter_count % 2 == 1 else '>>>')
+                continue
+
+            if stripped == '<<<':
+                in_block = True
+                fixed.append(line)
+                continue
+
+            # v3.2: >>> は行頭（column 0）のみブロック終端として認識する
+            if line.rstrip() == '>>>':
+                if in_batch_block and in_block:
+                    in_batch_block = False
+                in_block = False
+                fixed.append(line)
+                continue
+
+            # execute_batch ブロック内の %%% はバッチ区切りとして保護
+            if in_batch_block and in_block and stripped == '%%%':
+                fixed.append('%%%')
+                continue
+
+            # バッククォートのコードブロックは <<< >>> に変換
+            if stripped.startswith('```'):
+                fixed.append('<<<')
             else:
                 fixed.append(line)
-        
+
         return '\n'.join(fixed)
     
     def _fix_indentation(self, text: str) -> str:
-        """Remove unnecessary indentation from protocol symbol lines v2"""
+        """Remove unnecessary indentation from protocol symbol lines v2.
+
+        コンテンツブロック（<<< ～ >>>）の内側はインデントを保護する。
+        LLMがプロトコル記号を誤ってインデントした場合のみ補正する。
+        """
         lines = text.split('\n')
         fixed_lines = []
-        
+        in_block = False  # <<< ～ >>> 内かどうか
+
         for line in lines:
+            stripped = line.strip()
+
+            # <<< でブロック開始
+            if stripped == '<<<':
+                in_block = True
+                fixed_lines.append(line)
+                continue
+
+            # v3.2: >>> は行頭のみブロック終端として認識（doctest保護）
+            if line.rstrip() == '>>>':
+                in_block = False
+                fixed_lines.append(line)
+                continue
+
+            # コンテンツブロック内は一切変更しない（インデント保護）
+            if in_block:
+                fixed_lines.append(line)
+                continue
+
+            # ブロック外のプロトコル記号の不要インデントを除去
             if re.match(r'^\s*[:>@!?<-]', line):
                 line = line.lstrip()
             fixed_lines.append(line)
-        
+
         return '\n'.join(fixed_lines)
     
     def _fix_vitals_format(self, text: str) -> str:
-        """Normalize Duck Vitals format to v2"""
+        """Normalize Duck Vitals format to v3.1.
+        c=confidence, s=safety, m=memory, f=focus
+        """
         text = re.sub(r'#([cmfs])', r'::\1', text)
         text = re.sub(r'\bconfidence:\s*([\d.]+)', r'::c\1', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bmood:\s*([\d.]+)', r'::m\1', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bsafety:\s*([\d.]+)', r'::s\1', text, flags=re.IGNORECASE)
+        text = re.sub(r'\bmemory:\s*([\d.]+)', r'::m\1', text, flags=re.IGNORECASE)
         text = re.sub(r'\bfocus:\s*([\d.]+)', r'::f\1', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bstamina:\s*([\d.]+)', r'::s\1', text, flags=re.IGNORECASE)
         return text
 
 class FuzzyParser:
     """Tolerant parser v2"""
     
     def strict_parse(self, text: str) -> ParsedResult:
-        """Strict parse v2 format"""
+        """Strict parse v3.1 format. execute_batch ブロックを認識する。"""
         result = ParsedResult(thoughts=[], vitals={}, actions=[], questions=[], errors=[])
         current_action = None
         in_content = False
         content_buffer = []
-        
-        for line in text.split('\n'):
+        lines = text.split('\n')
+        i = 0
+
+        while i < len(lines):
+            line = lines[i]
             stripped = line.strip()
-            
+
             if stripped == '<<<':
                 if not current_action:
                     raise ParseError("Content block without action")
                 in_content = True
+                i += 1
                 continue
-            
-            if stripped == '>>>':
+
+            # v3.2: >>> は行頭（column 0）のみブロック終端として認識する（doctest保護）
+            if line.rstrip() == '>>>':
                 if not in_content:
                     raise ParseError("Unexpected closing delimiter >>>")
                 if current_action:
-                    current_action.content = '\n'.join(content_buffer)
-                    result.actions.append(current_action)
+                    if current_action.type == 'execute_batch':
+                        # バッチブロックを --- で分割してサブアクションに展開
+                        batch_actions = self._split_batch_content('\n'.join(content_buffer))
+                        result.actions.extend(batch_actions)
+                    else:
+                        current_action.content = '\n'.join(content_buffer)
+                        result.actions.append(current_action)
                     current_action = None
                 content_buffer = []
                 in_content = False
+                i += 1
                 continue
-            
+
             if in_content:
                 content_buffer.append(line)
+                i += 1
                 continue
-            
+
             if stripped.startswith('>>'):
                 result.thoughts.append(stripped[2:].strip())
             elif stripped.startswith('::'):
@@ -178,11 +242,79 @@ class FuzzyParser:
                 result.questions.append(stripped[1:].strip())
             elif stripped.startswith('!'):
                 result.errors.append(stripped[1:].strip())
-        
+            i += 1
+
         if current_action:
             raise ParseError("Unclosed action block or missing content")
-        
+
         return result
+
+    def _split_batch_content(self, content: str) -> List[Action]:
+        """
+        execute_batch ブロックのコンテンツを %%% 区切りで分割し、
+        各セグメントを個別のActionに変換する（Sym-Ops v3.2）。
+
+        Args:
+            content: <<< と >>> の間のテキスト（%%% 区切りで複数アクション）
+
+        Returns:
+            パース済みアクションのリスト
+        """
+        # v3.2: バッチ区切り文字は %%% （--- はMarkdown水平線のため変更）
+        segments = re.split(r'\n%%%', content.strip())
+        actions = []
+        for segment in segments:
+            segment = segment.strip()
+            if not segment:
+                continue
+            action = self._parse_batch_segment(segment)
+            if action:
+                actions.append(action)
+        return actions
+
+    def _parse_batch_segment(self, segment: str) -> Optional[Action]:
+        """
+        バッチセグメント1件をActionに変換する。
+        1行目: "action_name @path" または "action_name"
+        2行目以降: content
+
+        Args:
+            segment: バッチの1セグメント文字列
+
+        Returns:
+            変換されたActionオブジェクト、または None
+        """
+        seg_lines = segment.split('\n')
+        if not seg_lines:
+            return None
+
+        first_line = seg_lines[0].strip()
+        content_lines = seg_lines[1:]
+
+        # "action_name @path" または "action_name" を解析
+        if '@' in first_line:
+            parts = first_line.split('@', 1)
+            action_type = parts[0].strip()
+            path = parts[1].strip()
+        else:
+            # @なし: 最初のスペースで分割（run_command は引数が2行目）
+            tokens = first_line.split(None, 1)
+            action_type = tokens[0]
+            path = tokens[1] if len(tokens) > 1 else ""
+
+        content = '\n'.join(content_lines).strip()
+
+        # run_command の場合、pathがなければcontentをcommandとして扱う
+        if action_type == 'run_command' and not path and content:
+            path = content
+            content = ""
+
+        return Action(
+            type=action_type,
+            path=path,
+            content=content,
+            confidence=0.95  # バッチは明示的な構文なので高信頼度
+        )
     
     def fuzzy_parse(self, text: str) -> ParsedResult:
         """Tolerant parse"""
@@ -196,62 +328,81 @@ class FuzzyParser:
         return result
     
     def _extract_actions_fuzzy(self, text: str) -> List[Action]:
-        """Extract actions using v2 format"""
+        """Extract actions using v3.1 format. execute_batch を認識する。"""
         actions = []
         pattern = r'^::\s*(\w+)(?:\s*@\s*([^\n]+))?'
         lines = text.split('\n')
         i = 0
-        
+
         while i < len(lines):
             line = lines[i]
             match = re.match(pattern, line.strip())
             if match:
-                # Skip if this line contains vitals instead of actions
+                # Vitals行はスキップ
                 if self._is_vitals(line.strip()):
                     i += 1
                     continue
-                
+
                 action_type = match.group(1)
                 path = match.group(2) if match.group(2) else ""
                 depends_on = None
-                
+
                 if path and '>' in path:
                     path, depends_on = path.split('>', 1)
                     path = path.strip()
                     depends_on = depends_on.strip()
-                
-                # Improved content extraction for fuzzy mode
+
+                # execute_batch の特別処理
+                if action_type == 'execute_batch':
+                    j = i + 1
+                    while j < len(lines) and not lines[j].strip():
+                        j += 1
+                    if j < len(lines) and lines[j].strip() == '<<<':
+                        j += 1
+                        block_lines = []
+                        while j < len(lines):
+                            # v3.2: >>> は行頭のみブロック終端（doctest保護）
+                            if lines[j].rstrip() == '>>>':
+                                j += 1
+                                break
+                            block_lines.append(lines[j])
+                            j += 1
+                        batch_actions = self._split_batch_content('\n'.join(block_lines))
+                        actions.extend(batch_actions)
+                        i = j
+                        continue
+
                 content = ""
                 j = i + 1
                 has_delimiters = False
                 content_lines = []
-                
-                # Skip empty lines first
+
                 while j < len(lines) and not lines[j].strip():
                     j += 1
-                
-                # Check if proper format with <<<
+
                 if j < len(lines) and lines[j].strip() == '<<<':
                     has_delimiters = True
                     j += 1
                     while j < len(lines):
-                        if lines[j].strip() == '>>>':
+                        # v3.2: >>> は行頭のみブロック終端（doctest保護）
+                        if lines[j].rstrip() == '>>>':
                             j += 1
                             break
                         content_lines.append(lines[j])
                         j += 1
                 else:
-                    # Fuzzy mode: no <<<, collect until next action/thought or >>>
+                    # Fuzzy mode: <<< なし
                     while j < len(lines):
-                        next_line = lines[j].strip()
-                        if next_line == '>>>':
+                        # v3.2: >>> は行頭のみブロック終端（doctest保護）
+                        if lines[j].rstrip() == '>>>':
                             j += 1
                             break
+                        next_line = lines[j].strip()
                         if next_line.startswith('::') or next_line.startswith('>>'):
                             break
                         content_lines.append(lines[j])
                         j += 1
-                
+
                 content = '\n'.join(content_lines)
                 actions.append(Action(
                     type=action_type.strip(),
@@ -263,16 +414,16 @@ class FuzzyParser:
                 i = j
             else:
                 i += 1
-        
+
         return actions
     
     def _parse_vitals(self, line: str, vitals: dict) -> None:
-        """Parse Duck Vitals v2"""
+        """Parse Duck Vitals v3.1: c=confidence, s=safety, m=memory, f=focus"""
         patterns = {
             'confidence': r'::c([\d.]+)',
-            'mood': r'::m([\d.]+)',
-            'focus': r'::f([\d.]+)',
-            'stamina': r'::s([\d.]+)'
+            'safety':     r'::s([\d.]+)',
+            'memory':     r'::m([\d.]+)',
+            'focus':      r'::f([\d.]+)',
         }
         for key, pattern in patterns.items():
             match = re.search(pattern, line)
@@ -333,9 +484,14 @@ class FuzzyParser:
         return [line.strip()[2:].strip() for line in text.split('\n') if line.strip().startswith('>>')]
     
     def _extract_vitals(self, text: str) -> dict:
-        """Extract Duck Vitals v2"""
+        """Extract Duck Vitals v3.1: c=confidence, s=safety, m=memory, f=focus"""
         vitals = {}
-        patterns = {'confidence': r'::c([\d.]+)', 'mood': r'::m([\d.]+)', 'focus': r'::f([\d.]+)', 'stamina': r'::s([\d.]+)'}
+        patterns = {
+            'confidence': r'::c([\d.]+)',
+            'safety':     r'::s([\d.]+)',
+            'memory':     r'::m([\d.]+)',
+            'focus':      r'::f([\d.]+)',
+        }
         for key, pattern in patterns.items():
             match = re.search(pattern, text)
             if match:

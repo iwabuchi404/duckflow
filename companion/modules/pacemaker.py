@@ -1,7 +1,7 @@
 """
 Duck Pacemaker - エージェントの健康状態と実行状況を監視し、介入を行う
 """
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Dict
 import logging
 from companion.state.agent_state import AgentState, Action, InterventionReason
 from companion.config.config_loader import config
@@ -30,6 +30,7 @@ class DuckPacemaker:
     def calculate_max_loops(self) -> int:
         """
         タスクの種類とバイタルに応じて最大ループ回数を計算する。
+        Sym-Ops v3.1: confidence/safety/memory/focus を使用。
         """
         # ベース値の決定
         if self.state.current_plan:
@@ -40,41 +41,43 @@ class DuckPacemaker:
                 base_loops = 15
         else:
             base_loops = 8
-        
-        # バイタル係数の計算
+
+        # バイタル係数の計算 (v3.1: c/s/m/f)
         vitals = self.state.vitals
         vitals_score = (
-            vitals.mood * 0.4 +
+            vitals.confidence * 0.3 +
             vitals.focus * 0.4 +
-            vitals.stamina * 0.2
+            vitals.safety * 0.2 +
+            vitals.memory * 0.1
         )
-        
+
         if vitals_score < 0.4:
             vitals_factor = 0.7
         elif vitals_score > 0.8:
             vitals_factor = 1.2
         else:
             vitals_factor = 1.0
-        
+
         # 最終計算
         calculated = int(base_loops * vitals_factor)
         final_loops = max(3, min(calculated, 25))
-        
+
         logger.info(
             f"Pacemaker: max_loops={final_loops} "
             f"(base={base_loops}, vitals_factor={vitals_factor:.2f})"
         )
-        
+
         return final_loops
     
     def update_vitals(self, action: Action, result: Any, is_error: bool):
         """
         アクション実行結果に基づいてバイタルを更新し、履歴を記録する。
+        Sym-Ops v3.1: safety / confidence を使用。
         """
         # 履歴の記録
         result_str = str(result)
         summary = result_str[:200] + "..." if len(result_str) > 200 else result_str
-        
+
         self.execution_history.append({
             "action": action,
             "result_summary": summary,
@@ -84,31 +87,33 @@ class DuckPacemaker:
             self.execution_history = self.execution_history[-20:]
 
         if is_error:
-            # エラー時はStaminaとFocusが低下
-            self.state.vitals.stamina = max(0.0, self.state.vitals.stamina - 0.1)
+            # エラー時は safety と focus が低下
+            self.state.vitals.safety = max(0.0, self.state.vitals.safety - 0.1)
             self.state.vitals.focus = max(0.0, self.state.vitals.focus - 0.05)
             self.consecutive_errors += 1
             logger.debug("Vitals decreased (error)")
         else:
             # 成功時は緩やかに回復
-            self.state.vitals.stamina = min(1.0, self.state.vitals.stamina + 0.02)
+            self.state.vitals.safety = min(1.0, self.state.vitals.safety + 0.02)
             self.consecutive_errors = 0
-        
+
         # 通常のdecay
         self.state.vitals.decay(0.03)
     
     def check_health(self) -> Optional[InterventionReason]:
-        """健康状態を診断し、介入が必要ならその理由を返す。"""
+        """健康状態を診断し、介入が必要ならその理由を返す。
+        Sym-Ops v3.1: safety/confidence/focus を監視、Investigationモードの仮説失敗も検知。
+        """
         vitals = self.state.vitals
-        
-        # 1. Stamina枯渇（最優先）
-        if vitals.stamina < 0.1:
+
+        # 1. Safety枯渇（最優先）
+        if vitals.safety < 0.1:
             return InterventionReason(
-                type="STAMINA_DEPLETED",
-                message="体力が限界です。これ以上の作業は危険です。",
+                type="SAFETY_DEPLETED",
+                message="安全スコアが限界です。これ以上の作業は危険です。",
                 severity="critical"
             )
-        
+
         # 2. ループ回数超過
         if self.loop_count >= self.max_loops:
             return InterventionReason(
@@ -116,39 +121,53 @@ class DuckPacemaker:
                 message=f"最大試行回数（{self.max_loops}回）に到達しました。",
                 severity="high"
             )
-        
-        # 3. エラー連鎖
+
+        # 3. Investigationモードの仮説失敗 (Stuck Protocol)
+        if (
+            self.state.investigation_state is not None
+            and self.state.investigation_state.hypothesis_attempts >= 2
+        ):
+            return InterventionReason(
+                type="INVESTIGATION_STUCK",
+                message=(
+                    f"仮説の検証に{self.state.investigation_state.hypothesis_attempts}回失敗しました。"
+                    " 新たな視点が必要です。"
+                ),
+                severity="high"
+            )
+
+        # 4. エラー連鎖
         if self._detect_error_cascade():
             return InterventionReason(
                 type="ERROR_CASCADE",
                 message="エラーが頻発しています。方針を見直すべきです。",
                 severity="high"
             )
-        
-        # 4. スタック検知（停滞）
+
+        # 5. スタック検知（停滞）
         if self._detect_stagnation():
             return InterventionReason(
                 type="STAGNATION",
                 message="同じ操作または結果が繰り返されており、進捗がありません。",
                 severity="medium"
             )
-            
-        # 5. Focus低下
+
+        # 6. Focus低下
         if vitals.focus < 0.3:
             return InterventionReason(
                 type="FOCUS_LOST",
                 message="思考が停滞しています。別のアプローチが必要かもしれません。",
                 severity="medium"
             )
-        
-        # 6. Mood低下
-        if vitals.mood < 0.6:
+
+        # 7. Confidence低下
+        if vitals.confidence < 0.6:
             return InterventionReason(
                 type="CONFIDENCE_LOW",
                 message="現在の計画に自信が持てていません。",
                 severity="low"
             )
-        
+
         return None
     
     def _detect_stagnation(self) -> bool:
@@ -196,12 +215,13 @@ class DuckPacemaker:
     def intervene(self, reason: InterventionReason) -> Action:
         """介入アクションを生成する。"""
         logger.info(f"Pacemaker intervention: {reason.type} - {reason.message}")
-        
+
         vitals_info = (
             f"\n\n📊 現在のバイタル:\n"
-            f"  Mood: {self.state.vitals.mood:.2f}\n"
+            f"  Confidence: {self.state.vitals.confidence:.2f}\n"
+            f"  Safety: {self.state.vitals.safety:.2f}\n"
+            f"  Memory: {self.state.vitals.memory:.2f}\n"
             f"  Focus: {self.state.vitals.focus:.2f}\n"
-            f"  Stamina: {self.state.vitals.stamina:.2f}\n"
             f"  ループ: {self.loop_count}/{self.max_loops}"
         )
         
