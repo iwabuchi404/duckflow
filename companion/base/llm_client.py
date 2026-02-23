@@ -235,18 +235,19 @@ class LLMClient:
             logger.error(f"❌ Connection test failed: {e}")
             return False
 
-    async def chat(self, messages: List[Dict[str, str]], response_model: Optional[type] = None) -> Union[Dict[str, Any], ActionList]:
+    async def chat(self, messages: List[Dict[str, str]], response_model: Optional[type] = None, temperature: Optional[float] = None, raw: bool = False) -> Union[Dict[str, Any], ActionList, str]:
         """
         Send messages to LLM and get a JSON response.
         If response_model is provided, validates and returns that Pydantic model.
         """
         if self.use_mock:
-            return self._mock_chat(messages, response_model)
+            return self._mock_chat(messages, response_model, raw=raw)
 
         try:
             logger.debug(f"Sending request to {self.model} via {self.base_url or 'default'}")
             
-            temperature = config.get("llm.temperature", 0.1)
+            if temperature is None:
+                temperature = config.get("llm.temperature", 0.1)
             max_tokens = config.get("llm.max_output_tokens", 4096)
             
             response = await self.client.chat.completions.create(
@@ -273,6 +274,9 @@ class LLMClient:
                 logger.error(f"Empty content received. Full response: {response.model_dump_json()}")
                 logger.error(f"Message object: {response.choices[0].message}")
             
+            if raw:
+                return content
+                
             return self._parse_response(content, response_model)
 
         except APIError as e:
@@ -303,7 +307,7 @@ class LLMClient:
                 ]
             )
 
-    def _mock_chat(self, messages: List[Dict[str, str]], response_model: Optional[type] = None) -> Union[Dict[str, Any], ActionList]:
+    def _mock_chat(self, messages: List[Dict[str, str]], response_model: Optional[type] = None, raw: bool = False) -> Union[Dict[str, Any], ActionList, str]:
         """Generate a mock response for testing."""
         logger.info("🦆 [MOCK] Generating response...")
         
@@ -353,6 +357,9 @@ class LLMClient:
                 ]
             })
         
+        if raw:
+            return mock_content
+            
         return self._parse_response(mock_content, response_model)
 
     def _parse_response(self, content: str, response_model: Optional[type] = None):
@@ -390,7 +397,7 @@ class LLMClient:
                 # Map path/command from @ notation
                 # IMPORTANT: Tool signatures use 'path' not 'file_path'!
                 if action.path:
-                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "find_files"):
+                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "find_files", "generate_code", "analyze_structure"):
                         params["path"] = action.path
                         logger.debug(f"  → Set path={action.path}")
                     elif tool_name == "run_command":
@@ -411,7 +418,7 @@ class LLMClient:
                 
                 # Map content (priority over @path for run_command & investigation)
                 if action.content:
-                    if tool_name in ("create_file", "edit_file", "write_file"):
+                    if tool_name in ("create_file", "edit_file", "write_file", "generate_code", "summarize_context"):
                         params["content"] = action.content
                         logger.debug(f"  → Set content (length={len(action.content)})")
                     elif tool_name == "run_command":

@@ -129,6 +129,16 @@ class DuckUI:
         """Print a warning message."""
         self.console.print(f"[warning]⚠️  {message}[/warning]")
 
+    def print_code(self, code: str, language: str = "python"):
+        """Print syntax highlighted code."""
+        syntax = Syntax(code, language, theme="monokai", line_numbers=True)
+        self.console.print(syntax)
+
+    def print_markdown(self, markdown_text: str):
+        """Print rendered markdown."""
+        md = Markdown(markdown_text)
+        self.console.print(md)
+
     def print_token_usage(self, stats: Dict[str, Any]):
         """Print token usage statistics."""
         total = stats.get("total_tokens", 0)
@@ -214,6 +224,10 @@ class DuckUI:
             except (EOFError, KeyboardInterrupt):
                 self.console.print("\n[error]Input interrupted. Defaulting to No.[/error]")
                 return False
+
+    def confirm_action(self, message: str, default: bool = True) -> bool:
+        """Alias for request_confirmation to match module level API."""
+        return self.request_confirmation(message)
     
     def select_from_list(self, title: str, options: List[tuple], description: str = "") -> Optional[int]:
         """

@@ -24,6 +24,8 @@ from companion.modules.session_manager import SessionManager
 from companion.tools.shell_tool import ShellTool
 from companion.tools import get_project_tree
 from companion.tools.results import ToolStatus, ToolResult, format_symops_response, serialize_to_text
+from companion.tools.sub_llm_tools import SubLLMTools
+from companion.modules.sub_llm_manager import SubLLMManager
 
 class DuckAgent:
     """
@@ -58,6 +60,10 @@ class DuckAgent:
         self.approval_tool = ApprovalTool(self.state)
         self.task_executor = TaskExecutor(self.state, self.tools)
         self.result_summarizer = ResultSummarizer(self.llm)
+        
+        # Initialize Sub-LLMs
+        self.sub_llm_manager = SubLLMManager(self.llm)
+        self.sub_llm_tools = SubLLMTools(self.sub_llm_manager)
         
         # Initialize Pacemaker
         self.pacemaker = DuckPacemaker(self.state)
@@ -100,6 +106,11 @@ class DuckAgent:
         self.register_tool("search_archives", self.memory_tool.search_archives)
         self.register_tool("recall", self.memory_tool.search_archives)  # Alias
 
+        # Register Sub-LLM Tools
+        self.register_tool("summarize_context", self.sub_llm_tools.summarize_context)
+        self.register_tool("analyze_structure", self.sub_llm_tools.analyze_structure)
+        self.register_tool("generate_code", self.sub_llm_tools.generate_code)
+
         # Register Investigation Tools (Sym-Ops v3.1)
         self.register_tool("investigate", self.action_investigate)
         self.register_tool("submit_hypothesis", self.action_submit_hypothesis)
@@ -110,6 +121,9 @@ class DuckAgent:
 
         # Register Project Tree Tool
         self.register_tool("get_project_tree", get_project_tree)
+
+        # Register Status Tool
+        self.register_tool("status", self.action_status)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
@@ -559,6 +573,73 @@ class DuckAgent:
             expand=False
         ))
         return "Responded to user."
+
+    async def action_status(self) -> str:
+        """
+        Display the current agent status including vitals, phase, and active plan/tasks.
+        This tool provides a comprehensive status overview for the user.
+        """
+        # Build status report
+        status_lines = [
+            "## 🦆 Duckflow Status Report",
+            "",
+            f"**Phase:** {self.state.phase.value}",
+            f"**Mode:** {self.state.mode.value}",
+            "",
+            "### Vitals",
+            f"  - Confidence: {self.state.vitals.confidence:.2f}",
+            f"  - Safety: {self.state.vitals.safety:.2f}",
+            f"  - Memory: {self.state.vitals.memory:.2f}",
+            f"  - Focus: {self.state.vitals.focus:.2f}",
+            "",
+        ]
+
+        # Add plan status if exists
+        if self.state.current_plan:
+            status_lines.append("### Current Plan")
+            current_step = self.state.current_plan.get_current_step()
+            if current_step:
+                status_lines.append(f"  - Step: {current_step.title} ({current_step.status.value})")
+                status_lines.append(f"  - Tasks: {len(current_step.tasks)} total")
+                completed = sum(1 for t in current_step.tasks if t.status == TaskStatus.COMPLETED)
+                pending = sum(1 for t in current_step.tasks if t.status == TaskStatus.PENDING)
+                status_lines.append(f"    - Completed: {completed}")
+                status_lines.append(f"    - Pending: {pending}")
+            else:
+                status_lines.append("  - No active step")
+            status_lines.append("")
+
+        # Add investigation status if active
+        if self.state.investigation_state:
+            inv = self.state.investigation_state
+            status_lines.append("### Investigation Mode")
+            status_lines.append(f"  - Hypotheses: {inv.hypothesis_attempts}/2")
+            status_lines.append(f"  - OODA Cycles: {inv.ooda_cycle}")
+            status_lines.append(f"  - Observations: {len(inv.observations)}")
+            if inv.hypothesis:
+                status_lines.append(f"  - Current Hypothesis: {inv.hypothesis}")
+            status_lines.append("")
+
+        # Add loop information
+        status_lines.append(f"### Execution Loop")
+        status_lines.append(f"  - Current Loop: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}")
+        status_lines.append(f"  - Session Created: {self.state.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        status_report = "\n".join(status_lines)
+
+        # Add to history and display
+        self.state.add_message("assistant", f"[STATUS REPORT]\n{status_report}")
+
+        from rich.panel import Panel
+        from rich.markdown import Markdown
+        ui.console.print(Panel(
+            Markdown(status_report),
+            title="[duck]🦆 Agent Status[/duck]",
+            border_style="duck",
+            expand=False
+        ))
+
+        return "Status report generated."
 
     async def action_run_command(self, command: str) -> str:
         """
