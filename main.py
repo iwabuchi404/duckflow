@@ -12,6 +12,7 @@ load_dotenv()
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from companion.core import DuckAgent
+from companion.modules.session_manager import SessionManager
 
 from logging.handlers import RotatingFileHandler
 from rich.traceback import install
@@ -25,7 +26,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         RotatingFileHandler(
-            "duckflow_v4.log", 
+            "duckflow_v4.log",
             maxBytes=5*1024*1024,  # 5MB
             backupCount=3,
             encoding='utf-8'
@@ -40,17 +41,80 @@ logging.getLogger("openai").setLevel(logging.WARNING)
 import argparse
 from companion.tools.file_ops import file_ops
 
+def _prompt_session_resume(session_manager: SessionManager):
+    """
+    起動時に前回セッションの継続有無をユーザーに尋ねる。
+
+    Args:
+        session_manager: セッション一覧を取得するマネージャー
+
+    Returns:
+        復元された AgentState、または None（新規セッション）
+    """
+    latest_id = session_manager.get_latest_id()
+    if not latest_id:
+        return None  # 前回セッションなし
+
+    sessions = session_manager.list_sessions()
+    if not sessions:
+        return None
+
+    latest = sessions[0]  # list_sessions() は最新順
+
+    # 日時をフォーマット
+    try:
+        from datetime import datetime
+        last_active = datetime.fromisoformat(latest["last_active"])
+        time_str = last_active.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        time_str = latest.get("last_active", "不明")
+
+    turn_count = latest.get("turn_count", 0)
+
+    print(f"\n🦆 前回のセッションが見つかりました")
+    print(f"   日時: {time_str} | ターン数: {turn_count}")
+    print(f"   Session ID: {latest_id}")
+
+    try:
+        answer = input("前回のセッションを継続しますか？ [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = "n"
+
+    if answer == "y":
+        state = session_manager.load_latest()
+        if state:
+            print(f"✅ セッションを復元しました（{len(state.conversation_history)} 件の会話履歴）\n")
+            return state
+        else:
+            print("⚠️  セッションの読み込みに失敗しました。新規セッションで起動します。\n")
+
+    return None
+
+
 async def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description="Duckflow v4 Agent")
     parser.add_argument("--dir", type=str, default=".", help="Working directory for the agent")
     parser.add_argument("--debug-context", type=str, choices=["console", "file"], help="Debug: Output context messages")
+    parser.add_argument("--no-session", action="store_true", help="セッション保存・復元を無効化して新規起動する")
     args = parser.parse_args()
-    
+
     # Set workspace
     file_ops.set_workspace_root(args.dir)
-    
-    agent = DuckAgent(debug_context_mode=args.debug_context)
+
+    # セッション管理
+    session_manager = None
+    resume_state = None
+
+    if not args.no_session:
+        session_manager = SessionManager()
+        resume_state = _prompt_session_resume(session_manager)
+
+    agent = DuckAgent(
+        debug_context_mode=args.debug_context,
+        session_manager=session_manager,
+        resume_state=resume_state,
+    )
     await agent.run()
 
 if __name__ == "__main__":
