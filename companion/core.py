@@ -3,7 +3,7 @@ import logging
 import json
 from typing import Dict, Any, Callable, List
 
-from companion.state.agent_state import AgentState, ActionList, Action, AgentPhase, TaskStatus
+from companion.state.agent_state import AgentState, ActionList, Action, AgentPhase, TaskStatus, AgentMode
 from companion.base.llm_client import default_client, LLMClient
 from companion.prompts.system import get_system_prompt
 from companion.tools.file_ops import file_ops
@@ -20,6 +20,7 @@ from companion.ui import ui
 logger = logging.getLogger(__name__)
 
 from companion.modules.command_handler import CommandHandler
+from companion.modules.session_manager import SessionManager
 from companion.tools.shell_tool import ShellTool
 
 class DuckAgent:
@@ -27,8 +28,22 @@ class DuckAgent:
     Duckflow v4 Main Agent.
     Manages the Think-Decide-Execute loop.
     """
-    def __init__(self, llm_client: LLMClient = default_client, debug_context_mode: str = None):
-        self.state = AgentState()
+    def __init__(
+        self,
+        llm_client: LLMClient = default_client,
+        debug_context_mode: str = None,
+        session_manager: 'SessionManager' = None,
+        resume_state: 'AgentState' = None,
+    ):
+        """
+        Args:
+            llm_client: 使用するLLMクライアント
+            debug_context_mode: デバッグ用コンテキスト出力モード（"console" | "file"）
+            session_manager: セッション保存を担当するマネージャー（Noneなら保存しない）
+            resume_state: 前回セッションから復元した AgentState（Noneなら新規）
+        """
+        self.state = resume_state if resume_state is not None else AgentState()
+        self.session_manager = session_manager
         self.llm = llm_client
         self.tools: Dict[str, Callable] = {}
         self.running = False
@@ -82,6 +97,14 @@ class DuckAgent:
         self.memory_tool = MemoryTool()
         self.register_tool("search_archives", self.memory_tool.search_archives)
         self.register_tool("recall", self.memory_tool.search_archives)  # Alias
+
+        # Register Investigation Tools (Sym-Ops v3.1)
+        self.register_tool("investigate", self.action_investigate)
+        self.register_tool("submit_hypothesis", self.action_submit_hypothesis)
+        self.register_tool("finish_investigation", self.action_finish_investigation)
+
+        # Register execute_batch (Sym-Ops v3.1 Fast Path)
+        self.register_tool("execute_batch", self.action_execute_batch)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
@@ -159,6 +182,21 @@ class DuckAgent:
     async def run(self):
         """Main execution loop."""
         self.running = True
+
+        # 復元セッションのサイズが大きい場合はLLM要約で圧縮する
+        if (
+            self.session_manager is not None
+            and len(self.state.conversation_history) > 0
+            and self.memory_manager.should_prune(self.state.conversation_history)
+        ):
+            logger.info("Session restore: applying restore_with_summary...")
+            self.state.conversation_history = await self.memory_manager.restore_with_summary(
+                self.state.conversation_history
+            )
+            logger.info(
+                f"Session restore complete: {len(self.state.conversation_history)} messages retained"
+            )
+
         ui.print_welcome()
         
         while self.running:
@@ -252,15 +290,17 @@ class DuckAgent:
                         
                         logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
                         
-                        # Update vitals if provided
+                        # Sym-Ops v3.1: バイタルを更新 (c=confidence, s=safety, m=memory, f=focus)
                         if action_list.vitals:
                             logger.info(f"Updating vitals from response: {action_list.vitals}")
-                            if "mood" in action_list.vitals:
-                                self.state.vitals.mood = action_list.vitals["mood"]
+                            if "confidence" in action_list.vitals:
+                                self.state.vitals.confidence = action_list.vitals["confidence"]
+                            if "safety" in action_list.vitals:
+                                self.state.vitals.safety = action_list.vitals["safety"]
+                            if "memory" in action_list.vitals:
+                                self.state.vitals.memory = action_list.vitals["memory"]
                             if "focus" in action_list.vitals:
                                 self.state.vitals.focus = action_list.vitals["focus"]
-                            if "stamina" in action_list.vitals:
-                                self.state.vitals.stamina = action_list.vitals["stamina"]
                         
                         # Display reasoning
                         ui.print_thinking(action_list.reasoning)
@@ -289,7 +329,12 @@ class DuckAgent:
                         self.pacemaker.reset()
                         break
                 # ---------------------------------
-                
+
+                # ターン完了: セッションを保存する
+                if self.session_manager is not None and self.running:
+                    self.state.touch()
+                    self.session_manager.save(self.state)
+
                 # Display Token Usage
                 ui.print_token_usage(self.llm.usage_stats)
                 
@@ -304,6 +349,24 @@ class DuckAgent:
         """Dispatch and execute a list of actions."""
         logger.info(f"Executing actions: {[a.name for a in action_list.actions]}")
         results = []
+
+        # --- Safety Score Interceptor (Sym-Ops v3.1) ---
+        # safety スコアが 0.5 未満の場合、実行前にユーザー確認を求める
+        safety_score = 1.0
+        if action_list.vitals:
+            safety_score = action_list.vitals.get("safety", 1.0)
+        if safety_score < 0.5:
+            ui.print_safety_warning(safety_score)
+            if not ui.request_confirmation("低い Safety Score で実行を続けますか？"):
+                cancel_msg = (
+                    f"Safety Score が低いため ({safety_score:.2f})、"
+                    "ユーザーがすべてのアクションをキャンセルしました。"
+                    "安全な代替手段を検討してください。"
+                )
+                self.state.add_message("assistant", cancel_msg)
+                return results
+        # ------------------------------------------------
+
         for action in action_list.actions:
             ui.print_action(action.name, action.parameters, action.thought)
             
@@ -541,3 +604,87 @@ class DuckAgent:
             return f"All tasks completed successfully! Step '{current_step.title}' is now complete.\n\nExecution Summary:\n{final_summary}"
         else:
             return f"Task execution finished with {summary['failed']} failures. Please review and retry failed tasks.\n\nExecution Summary:\n{final_summary}"
+
+    # --- Investigation Tools (Sym-Ops v3.1) ---
+
+    async def action_investigate(self, reason: str = "") -> str:
+        """
+        Investigationモードに遷移する。原因不明の問題をOODAループで調査するときに使う。
+
+        Args:
+            reason: 調査を開始する理由・背景
+
+        Returns:
+            モード遷移の確認メッセージ
+        """
+        self.state.enter_investigation_mode()
+        ui.print_system(f"🔍 Investigation Mode に切り替えました。理由: {reason}")
+        logger.info(f"Entering Investigation Mode: {reason}")
+        return f"Investigation Mode started. Reason: {reason}"
+
+    async def action_submit_hypothesis(self, hypothesis: str) -> str:
+        """
+        Investigationモード中に仮説を提出して検証サイクルを進める。
+        2回失敗するとPacemakerがduck_callを強制する。
+
+        Args:
+            hypothesis: 検証する仮説の内容
+
+        Returns:
+            仮説受領の確認メッセージ（次のステップはツール呼び出しで検証を行うこと）
+        """
+        if self.state.investigation_state is None:
+            # Investigationモードでなければ自動的に遷移
+            self.state.enter_investigation_mode()
+
+        inv = self.state.investigation_state
+        inv.hypothesis = hypothesis
+        inv.hypothesis_attempts += 1
+        inv.ooda_cycle += 1
+        inv.observations.append(f"[Hypothesis #{inv.hypothesis_attempts}] {hypothesis}")
+
+        ui.print_system(
+            f"🔍 仮説 #{inv.hypothesis_attempts}/2 を受け付けました: {hypothesis}"
+        )
+        logger.info(f"Hypothesis #{inv.hypothesis_attempts} submitted: {hypothesis}")
+        return (
+            f"Hypothesis #{inv.hypothesis_attempts} registered: '{hypothesis}'. "
+            "Now verify this hypothesis using read_file / run_command / list_directory. "
+            f"Remaining attempts before duck_call: {max(0, 2 - inv.hypothesis_attempts)}"
+        )
+
+    async def action_finish_investigation(self, conclusion: str = "") -> str:
+        """
+        調査を完了してPlanningモードに戻る。根本原因が特定されたときに呼ぶ。
+
+        Args:
+            conclusion: 調査で得られた結論・根本原因
+
+        Returns:
+            モード遷移の確認メッセージ
+        """
+        inv_state = self.state.investigation_state
+        obs_count = len(inv_state.observations) if inv_state else 0
+
+        self.state.enter_planning_mode()
+        ui.print_system(f"✅ Investigation 完了。Planning Mode に切り替えました。結論: {conclusion}")
+        logger.info(f"Finishing Investigation Mode. Conclusion: {conclusion}")
+        return (
+            f"Investigation complete after {obs_count} observations. "
+            f"Conclusion: {conclusion}. "
+            "Now switched to Planning Mode. Use propose_plan to plan the fix."
+        )
+
+    async def action_execute_batch(self, **kwargs) -> str:
+        """
+        Sym-Ops v3.1 Fast Path: 複数の独立したアクションをバッチ実行する。
+        パーサーが execute_batch ブロックを個別アクションに展開するため、
+        このツールが直接呼ばれることは通常なく、フォールバック用。
+
+        Returns:
+            バッチ実行の結果サマリー
+        """
+        return (
+            "execute_batch is handled by the parser. "
+            "If you see this message, the parser may have failed to expand the batch block."
+        )
