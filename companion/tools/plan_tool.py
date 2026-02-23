@@ -60,8 +60,8 @@ class PlanTool:
         current_step = None
         
         for line in lines:
-            # Match: ## Step N: Title
-            match = re.match(r'^##\s+Step\s+\d+:\s*(.+)$', line.strip())
+            # Match: ## Step N: Title (Allow variations in spacing and punctuation)
+            match = re.match(r'^##\s*Step\s*\d+[:\s-]*(.+)$', line.strip(), re.IGNORECASE)
             if match:
                 # Save previous step
                 if current_step:
@@ -72,9 +72,10 @@ class PlanTool:
                     'title': match.group(1).strip(),
                     'description': []
                 }
-            elif current_step and line.strip() and not line.strip().startswith('#'):
-                # Add description line (skip other headers)
-                current_step['description'].append(line.strip())
+            elif current_step and line.strip():
+                # skip other headers if they accidentally appear mid-step, but collect text
+                if not line.strip().startswith('#'):
+                    current_step['description'].append(line.strip())
         
         # Save last step
         if current_step:

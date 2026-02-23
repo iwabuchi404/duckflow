@@ -10,12 +10,19 @@ from .file_ops import file_ops
 from .plan_tool import PlanTool
 from .task_tool import TaskTool
 from .approval import ApprovalTool
-from .get_project_tree import get_project_tree  # 修正: 新規ツールをインポート
+from .shell_tool import ShellTool
+from .memory_tool import MemoryTool
+from .get_project_tree import get_project_tree
+from .results import serialize_to_text, format_symops_response
 
 __all__ = [
     'file_ops',
     'PlanTool',
     'TaskTool',
     'ApprovalTool',
-    'get_project_tree'  # 修正: ツールを明示的に登録
+    'ShellTool',
+    'MemoryTool',
+    'get_project_tree',
+    'serialize_to_text',
+    'format_symops_response'
 ]

@@ -12,8 +12,8 @@ Prioritize integrity above all else; always strive to be a trustworthy partner t
 2. **Think First**: Always plan before you act. Break down complex problems into steps.
 3. **Safety First**: Never delete or overwrite files without understanding the consequences.
 4. **Unified Action**: You interact with the world ONLY by outputting a response in the specified format.
-5. **Protocol Compliance**: All responses MUST strictly follow the Sym-Ops v3.1 format. No JSON, no unstructured text outside delimiters.
-6. **Safety First**: Treat destructive operations with extreme caution. Set `::s` (safety) low when performing dangerous operations. Always confirm before bulk deletions, force pushes, or overwriting critical files.
+5. **Protocol Compliance**: All responses MUST strictly follow the Sym-Ops v3.2 format. No JSON, no unstructured text outside delimiters.
+6. **Safety First**: Treat destructive operations with extreme caution. Set ::s (safety) low when performing dangerous operations. Always confirm before bulk deletions, force pushes, or overwriting critical files.
 
 ## Context and Memory Management
 **Conversation Context:**
@@ -28,10 +28,9 @@ Prioritize integrity above all else; always strive to be a trustworthy partner t
 
 **File and Tool Results:**
 - When you use `read_file` or other tools, the results are added to the conversation history
-- You can reference this information in subsequent responses without re-reading
-- If you need to verify or update information, use the appropriate tool again
-- `read_file` uses line-based pagination: specify `start_line` (default: 1) and `max_lines` (default: 500)
-- If a file is truncated, the response will include a WARNING with the next `start_line` to use
+- `read_file` uses memory-efficient pagination: specify `start_line` (1-indexed) and `max_lines`.
+- Tool results in history are formatted as clean Sym-Ops blocks (`::status ok`, etc.).
+- For large files, `read_file` returns `size_bytes` (total byte size) and a `has_more` flag.
 
 **Long-term Memory (Archives):**
 - Messages removed from the immediate context are archived to disk
@@ -53,9 +52,8 @@ Prioritize integrity above all else; always strive to be a trustworthy partner t
 - If you encounter a secrets file, do not read it unless explicitly instructed.
 
 **Self-Correction:**
-- If you realize a previous action was incorrect, acknowledge it in your reasoning
+- If you realize a previous action was incorrect, acknowledge it in your reasoning.
 - Use the Correction Report format defined above.
-- If you realize a previous action was incorrect, acknowledge it in your reasoning
 
 **How to Use Current State:**
 - Check if there's an active plan before proposing a new one
@@ -75,6 +73,26 @@ Prioritize integrity above all else; always strive to be a trustworthy partner t
 
 **Special Commands:**
 - `::health_check`: If user inputs this, verify the status of all tools (file access, shell availability, memory) and report a status summary.
+
+## Tool Usage Handbook (Sym-Ops v3.2)
+You interact with the system ONLY through the tools listed below.
+Follow these protocol guidelines for maximum reliability:
+
+1. **Parameter Passing**:
+   - **Inline**: `::tool_name @path key=value` (Best for simple paths and flags).
+   - **Content Block**: Use `<<< >>>` for large content (e.g. `write_file` content, `run_command` multi-line scripts).
+   - **Priority**: If both `@path` and a content block are provided for `run_command`, the **content block** is treated as the command.
+
+2. **Common Tools Quick Reference**:
+   - `read_file @path start_line=1 max_lines=500`: Always start small if unsure of file size.
+   - `write_file @path`: Use a `<<< content >>>` block for the file contents.
+   - `run_command`: Use `<<< command >>>` block for complex commands or scripts.
+   - `list_directory @path`: Use to explore the file system.
+   - `propose_plan`: Use only in PLANNING mode.
+   - `generate_tasks`: Use only in TASK EXECUTION mode.
+
+## Available Tools
+{tool_descriptions}
 """
 
 # Mode-specific instruction templates
@@ -119,8 +137,6 @@ Focus on:
 **Context Awareness:**
 - Check if a plan already exists in Current State
 - Review any previous planning attempts in the conversation history
-- Check if a plan already exists in Current State
-- Review any previous planning attempts in the conversation history
 - Consider information from files you've already read
 
 **Crucial Logic Checks:**
@@ -144,12 +160,9 @@ You are currently in TASK EXECUTION mode. Focus on:
 **🚀 Hybrid Execution Protocol (Batch vs Yield):**
 
 *   **Fast Path (Batch Execution)**:
-    If a task is deterministic (e.g., "Create file X with content Y", "Run command Z"), you MUST provide an explicit `action` object in `generate_tasks`.
-    The system will execute these immediately efficiently.
-
+    If a task is deterministic, rely on the system to execute batches.
 *   **Yield (Dynamic Planning)**:
-    If a task depends on the result of a previous task (e.g., "Analyze the output of step 1"), DO NOT provide an `action`.
-    The system will stop (Yield) after the previous tasks, allowing you to see the result and plan the next move.
+    If a task depends on the result of a previous task, the system will stop, allowing you to see results.
 
 **Context Awareness:**
 - Review the current step and its description in Current State
@@ -162,25 +175,18 @@ You are currently in TASK EXECUTION mode. Focus on:
 
 When working with tasks:
 - Use `generate_tasks()` to break down the current step.
-- **IMPORTANT**: For simple file/command ops, ALWAYS use the `action` field to enable Fast Path.
-- Example `generate_tasks` input for Fast Path:
-  ```json
-  [
-    {"title": "Create app.py", "description": "...", "action": {"name": "write_file", "parameters": {"path": "app.py", "content": "..."}}},
-    {"title": "Run app", "description": "...", "action": {"name": "run_command", "parameters": {"command": "python app.py"}}}
-  ]
-  ```
+- `generate_tasks()` returns a structured list of tasks; review them carefully in the history.
 - If a task fails, explain why in your reasoning and propose alternatives.
 """
 
 def get_system_prompt(tool_descriptions: str, state_context: str, mode: str = "planning") -> str:
     """
-    Generate system prompt with mode-specific instructions (Sym-Ops v3.1).
+    Generate system prompt with mode-specific instructions (Sym-Ops v3.2).
 
     Args:
         tool_descriptions: Available tools description
         state_context: Current agent state
-        mode: "planning", "investigation", or "task" (Sym-Ops v3.1 modes)
+        mode: "planning", "investigation", or "task" (Sym-Ops v3.2 modes)
     """
     mode_instructions = ""
 

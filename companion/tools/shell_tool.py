@@ -13,13 +13,13 @@ class ShellTool:
     @staticmethod
     async def run_command(command: str) -> str:
         """
-        Execute a shell command and return output.
+        Execute a shell command.
+        
+        NOTE: For complex commands, pipes, or multi-line scripts, 
+        provide the command in a Sym-Ops content block (<<< >>>).
         
         Args:
-            command: The command line string to execute
-            
-        Returns:
-            Command output or error message
+            command: The full command line to execute.
         """
         logger.info(f"Executing shell command: {command}")
         
@@ -30,8 +30,13 @@ class ShellTool:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            
-            stdout, stderr = await process.communicate()
+
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30.0)
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                return f"Error: Command timed out after 30 seconds: {command}"
             
             output = ""
             if stdout:

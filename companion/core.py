@@ -23,6 +23,7 @@ from companion.modules.command_handler import CommandHandler
 from companion.modules.session_manager import SessionManager
 from companion.tools.shell_tool import ShellTool
 from companion.tools import get_project_tree
+from companion.tools.results import ToolStatus, ToolResult, format_symops_response, serialize_to_text
 
 class DuckAgent:
     """
@@ -168,20 +169,22 @@ class DuckAgent:
             return False
 
     def get_tool_descriptions(self) -> str:
-        """Generate tool descriptions for the system prompt."""
+        """Generate tool descriptions for the system prompt (Sym-Ops v3.2)."""
         descriptions = []
+        import inspect
         for name, func in self.tools.items():
-            # Get docstring
-            doc = func.__doc__ or "No description available."
-            doc = doc.strip().split("\n")[0]  # First line only
+            # Get cleaned docstring
+            doc = inspect.getdoc(func) or "No description available."
             
-            # Get signature (simplified)
-            import inspect
-            sig = inspect.signature(func)
+            # Get signature
+            try:
+                sig = inspect.signature(func)
+            except ValueError:
+                sig = "(...)"
             
-            descriptions.append(f"- {name}{sig}: {doc}")
+            descriptions.append(f"### {name}{sig}\n{doc}")
         
-        return "\n".join(descriptions)
+        return "\n\n".join(descriptions)
 
     async def run(self):
         """Main execution loop."""
@@ -454,29 +457,35 @@ class DuckAgent:
                     self.state.last_action_result = f"Action '{action.name}' succeeded: {result}"
                     
                     # Add result to conversation history (for LLM context in next cycle)
-                    # For most tools, add a summary. For response, it's already added.
                     if action.name != "response":
-                        # Truncate very long results for conversation history
-                        result_str = str(result)
-                        max_history_length = 4000  # Limit context size
-                        if len(result_str) > max_history_length:
-                            result_summary = result_str[:max_history_length] + f"\n... (truncated {len(result_str) - max_history_length} characters)"
-                        else:
-                            result_summary = result_str
+                        # Prepare tool result for conversion
+                        tool_status = ToolStatus.OK
+                        # We could implement truncation check here if needed later
                         
+                        tool_res = ToolResult(
+                            status=tool_status,
+                            tool_name=action.name,
+                            target=action.parameters.get("path", action.parameters.get("command", "task")),
+                            content=result
+                        )
+                        formatted_res = format_symops_response(tool_res)
+
                         # If this action required approval, add explicit completion message
                         if was_approved:
                             completion_msg = (
-                                f"[Tool: {action.name}] {result_summary}\n\n"
+                                f"{formatted_res}\n\n"
                                 f"[TASK COMPLETED] The user's request has been fulfilled. "
                                 f"The file operation completed successfully. "
                                 f"You should now respond to the user confirming completion."
                             )
                             self.state.add_message("assistant", completion_msg)
                         else:
-                            self.state.add_message("assistant", f"[Tool: {action.name}] {result_summary}")
+                            self.state.add_message("assistant", formatted_res)
                         
-                        ui.print_result(result_str)
+                        if isinstance(result, str):
+                            ui.print_result(result)
+                        else:
+                            ui.print_result(serialize_to_text(result))
                     
                     results.append(result)
                     
@@ -489,8 +498,14 @@ class DuckAgent:
                     self.state.last_action_result = error_msg
                     ui.print_result(str(e), is_error=True)
                     
-                    # Add error to conversation history
-                    self.state.add_message("assistant", f"[Tool Error: {action.name}] {error_msg}")
+                    # Add error to conversation history in Sym-Ops format
+                    err_res = ToolResult(
+                        status=ToolStatus.ERROR,
+                        tool_name=action.name,
+                        target=action.parameters.get("path", action.parameters.get("command", "task")),
+                        content=e
+                    )
+                    self.state.add_message("assistant", format_symops_response(err_res))
                     
                     results.append(error_msg)
                     
@@ -526,7 +541,11 @@ class DuckAgent:
     # --- Basic Actions ---
 
     async def action_response(self, message: str) -> str:
-        """Send a message to the user."""
+        """
+        Send a final response to the user. 
+        Use this to answer questions or report that a task is finished 
+        (if no detailed 'finish' result is needed).
+        """
         # Add to history
         self.state.add_message("assistant", message)
         
@@ -560,7 +579,10 @@ class DuckAgent:
             )
 
     async def action_finish(self, result: str):
-        """Complete the task and report result."""
+        """
+        Mark the entire objective as accomplished. 
+        Provide a concise summary of the work done in the 'result' parameter.
+        """
         # Add to history
         self.state.add_message("assistant", f"[FINISHED] {result}")
         
@@ -625,13 +647,9 @@ class DuckAgent:
 
     async def action_investigate(self, reason: str = "") -> str:
         """
-        Investigationモードに遷移する。原因不明の問題をOODAループで調査するときに使う。
-
-        Args:
-            reason: 調査を開始する理由・背景
-
-        Returns:
-            モード遷移の確認メッセージ
+        Switch to INVESTIGATION mode. 
+        Use this when you encounter an unknown error or need to explore 
+        to find a root cause before planning.
         """
         self.state.enter_investigation_mode()
         ui.print_system(f"🔍 Investigation Mode に切り替えました。理由: {reason}")
@@ -640,14 +658,8 @@ class DuckAgent:
 
     async def action_submit_hypothesis(self, hypothesis: str) -> str:
         """
-        Investigationモード中に仮説を提出して検証サイクルを進める。
-        2回失敗するとPacemakerがduck_callを強制する。
-
-        Args:
-            hypothesis: 検証する仮説の内容
-
-        Returns:
-            仮説受領の確認メッセージ（次のステップはツール呼び出しで検証を行うこと）
+        Submit a testable hypothesis during an investigation.
+        Describe what you think is wrong and what you will test next.
         """
         if self.state.investigation_state is None:
             # Investigationモードでなければ自動的に遷移

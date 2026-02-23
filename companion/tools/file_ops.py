@@ -37,18 +37,23 @@ class FileOps:
         except Exception:
             return False
 
-    async def read_file(self, path: str, start_line: int = 1, max_lines: int = 500) -> str:
+    async def read_file(self, path: str, start_line: int = 1, max_lines: int = 500) -> dict:
         """
-        Read content of a file with line-based pagination.
+        Read file content with line-based pagination.
+        Use this to explore code or data. For large files, use start_line to paginate.
         
         Args:
-            path: Path to the file
-            start_line: Line number to start from (1-indexed, default: 1)
-            max_lines: Maximum number of lines to read (default: 500)
+            path: Path to the target file.
+            start_line: Line number to start reading from (1-indexed).
+            max_lines: Number of lines to read in this chunk (default 500).
+        
+        Returns:
+            Dict containing 'content', 'size_bytes', and 'has_more' flag.
         """
-        # Ensure types and validate
-        start_line = max(1, int(start_line))  # Ensure at least 1
-        max_lines = max(1, int(max_lines))    # Ensure at least 1
+        import itertools
+        
+        start_line = max(1, int(start_line))
+        max_lines = max(1, int(max_lines))
 
         full_path = self._get_full_path(path)
         if not full_path.exists():
@@ -56,52 +61,49 @@ class FileOps:
         if not full_path.is_file():
             raise IsADirectoryError(f"Path is a directory: {path}")
         
+        size_bytes = os.path.getsize(full_path)
+        
         try:
             with open(full_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+                # 1-indexed to 0-indexed slce
+                # islice(iterable, start, stop)
+                # To read lines from start_line, we skip start_line - 1 lines.
+                lines_it = itertools.islice(f, start_line - 1, start_line - 1 + max_lines)
+                content_lines = list(lines_it)
+                
+                # Check if there is more content (has_more)
+                # Next line check
+                try:
+                    next(f)
+                    has_more = True
+                except StopIteration:
+                    has_more = False
             
-            total_lines = len(lines)
+            content = "".join(content_lines)
             
-            # Handle empty file
-            if total_lines == 0:
-                return f"<FILE_CONTENT path='{path}' total_lines='0' showing_lines='0-0'>\n(Empty file)\n</FILE_CONTENT>"
-            
-            # Calculate indices (convert to 0-indexed)
-            start_idx = start_line - 1
-            
-            # Handle out of range start_line
-            if start_idx >= total_lines:
-                return f"<FILE_CONTENT path='{path}' total_lines='{total_lines}' showing_lines='0-0'>\nError: start_line {start_line} exceeds total lines ({total_lines}). Use start_line between 1 and {total_lines}.\n</FILE_CONTENT>"
-            
-            end_idx = min(start_idx + max_lines, total_lines)
-            
-            selected_lines = lines[start_idx:end_idx]
-            content = "".join(selected_lines)
-            
-            actual_end_line = start_line + len(selected_lines) - 1
-            
-            response = [
-                f"<FILE_CONTENT path='{path}' total_lines='{total_lines}' showing_lines='{start_line}-{actual_end_line}'>",
-                content,
-                "</FILE_CONTENT>"
-            ]
-            
-            # Add warning if there is more content
-            if end_idx < total_lines:
-                remaining_lines = total_lines - end_idx
-                next_start = end_idx + 1
-                response.append(
-                    f"\n<WARNING>File has more content. {remaining_lines} lines remaining (lines {next_start}-{total_lines}). "
-                    f"Use read_file(path='{path}', start_line={next_start}) to read the next chunk.</WARNING>"
-                )
-            
-            return "\n".join(response)
+            # If empty but file exists
+            if not content and start_line == 1:
+                content = "(Empty file)"
+
+            return {
+                "path": path,
+                "size_bytes": size_bytes,
+                "showing_lines": f"{start_line}-{start_line + len(content_lines) - 1}",
+                "content": content,
+                "has_more": has_more
+            }
             
         except UnicodeDecodeError:
-            return f"Error: File {path} is not a valid UTF-8 text file (encoding error)."
+            return {"error": f"File {path} is not a valid UTF-8 text file (encoding error)."}
 
     async def write_file(self, path: str, content: str) -> str:
-        """Write content to a file. Creates directories if needed."""
+        """
+        Write or overwrite a file with the provided content.
+        Creates parent directories automatically. 
+        
+        NOTE: Use a Sym-Ops content block (<<< >>>) for the 'content' parameter 
+        when writing multi-line files or code.
+        """
         full_path = self._get_full_path(path)
         
         # Create parent directories
@@ -137,7 +139,11 @@ class FileOps:
         return f"Created directory {path}"
 
     async def replace_in_file(self, path: str, search: str, replace: str) -> str:
-        """Replace text in a file. Replaces all occurrences of search with replace."""
+        """
+        Perform a simple string replacement in a file.
+        Replaces ALL occurrences of 'search' with 'replace'.
+        Use this for quick fixes when full file rewrite is unnecessary.
+        """
         full_path = self._get_full_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {path}")

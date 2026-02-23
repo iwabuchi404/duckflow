@@ -390,21 +390,45 @@ class LLMClient:
                 # Map path/command from @ notation
                 # IMPORTANT: Tool signatures use 'path' not 'file_path'!
                 if action.path:
-                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file"):
+                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "find_files"):
                         params["path"] = action.path
                         logger.debug(f"  → Set path={action.path}")
                     elif tool_name == "run_command":
                         params["command"] = action.path
                         logger.debug(f"  → Set command={action.path}")
-                    elif tool_name == "list_directory":
-                        params["path"] = action.path
-                        logger.debug(f"  → Set path={action.path}")
+                    elif tool_name == "investigate":
+                        params["reason"] = action.path
+                        logger.debug(f"  → Set reason={action.path}")
+                    elif tool_name == "submit_hypothesis":
+                        params["hypothesis"] = action.path
+                        logger.debug(f"  → Set hypothesis={action.path}")
+                    elif tool_name == "finish_investigation":
+                        params["conclusion"] = action.path
+                        logger.debug(f"  → Set conclusion={action.path}")
+                    elif tool_name in ("search_archives", "recall"):
+                        params["query"] = action.path
+                        logger.debug(f"  → Set query={action.path}")
                 
-                # Map content
+                # Map content (priority over @path for run_command & investigation)
                 if action.content:
-                    if tool_name in ("create_file", "edit_file"):
+                    if tool_name in ("create_file", "edit_file", "write_file"):
                         params["content"] = action.content
                         logger.debug(f"  → Set content (length={len(action.content)})")
+                    elif tool_name == "run_command":
+                        params["command"] = action.content
+                        logger.debug(f"  → Set command from content block (length={len(action.content)})")
+                    elif tool_name == "investigate":
+                        params["reason"] = action.content
+                        logger.debug(f"  → Set reason from content block")
+                    elif tool_name == "submit_hypothesis":
+                        params["hypothesis"] = action.content
+                        logger.debug(f"  → Set hypothesis from content block")
+                    elif tool_name == "finish_investigation":
+                        params["conclusion"] = action.content
+                        logger.debug(f"  → Set conclusion from content block")
+                    elif tool_name in ("search_archives", "recall"):
+                        params["query"] = action.content
+                        logger.debug(f"  → Set query from content block")
                     elif tool_name in ("response", "duck_call"):
                         params["message"] = action.content
                         logger.debug(f"  → Set message (length={len(action.content)})")

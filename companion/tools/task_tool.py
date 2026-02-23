@@ -37,38 +37,32 @@ class TaskTool:
         ui.print_thinking(f"Planning: Generating tasks for step '{current_step.title}'...")
 
         prompt = f"""
+        # Sym-Ops v3.2: Task Generation Context
         Current Goal: {self.state.current_plan.goal}
         Current Step: {current_step.title}
         Step Description: {current_step.description}
         
         Please break this step down into small, actionable tasks.
+        Use Sym-Ops v3.2 thinking: evaluate confidence (::c) and safety (::s) for each task.
+        
         Return a JSON object with a list of tasks.
         Each task MUST have a 'title' and 'description'.
         
-        [IMPORTANT: Explicit Action Binding]
-        If a task involves a simple, deterministic tool call (e.g., creating a file, running a specific command), you MUST provide an 'action' object.
-        This allows the system to execute it automatically without asking you again.
+        [Explicit Action Binding]
+        If a task involves a deterministic tool call, provide an 'action' object.
+        Available Tools: write_file, run_command, read_file
         
         Action Schema: {{ "name": "tool_name", "parameters": {{ ... }} }}
-        Available Tools for Actions: write_file, run_command, read_file
         
         Example:
         {{
             "tasks": [
                 {{
-                    "title": "Create main.py", 
-                    "description": "Write basic script",
+                    "title": "Setup main module", 
+                    "description": "Create entrance script",
                     "action": {{
                         "name": "write_file",
-                        "parameters": {{ "path": "main.py", "content": "print('hello')" }}
-                    }}
-                }},
-                {{
-                    "title": "Run tests", 
-                    "description": "Verify implementation",
-                    "action": {{
-                        "name": "run_command",
-                        "parameters": {{ "command": "pytest" }}
+                        "parameters": {{ "path": "main.py", "content": "print('init')" }}
                     }}
                 }}
             ]
@@ -82,7 +76,7 @@ class TaskTool:
             proposal = await self.llm.chat(messages, response_model=TaskListProposal)
             
             # Add tasks to step
-            count = 0
+            tasks_formatted = []
             for task_data in proposal.tasks:
                 task = current_step.add_task(
                     title=task_data.get("title", "Untitled Task"),
@@ -97,9 +91,13 @@ class TaskTool:
                     except Exception as e:
                         print(f"Warning: Failed to parse action for task '{task.title}': {e}")
                 
-                count += 1
+                tasks_formatted.append({
+                    "title": task.title,
+                    "description": task.description,
+                    "action": action_data
+                })
             
-            return f"Generated {count} tasks for step '{current_step.title}'."
+            return tasks_formatted
             
         except Exception as e:
             return f"Failed to generate tasks: {e}"

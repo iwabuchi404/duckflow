@@ -244,10 +244,43 @@ class FuzzyParser:
                 result.errors.append(stripped[1:].strip())
             i += 1
 
-        if current_action:
-            raise ParseError("Unclosed action block or missing content")
-
         return result
+
+    def _extract_line_params(self, raw_path: str) -> tuple[str, dict]:
+        """
+        Extract key=value parameters from the action line string.
+        Example: "file.txt start_line=1 max_lines=5" -> ("file.txt", {"start_line": "1", "max_lines": "5"})
+        """
+        if not raw_path:
+            return "", {}
+        
+        # Split by spaces but preserve quoted values
+        # This is a simple regex for key=value or key="value"
+        params = {}
+        
+        # 1. First, find all key=value patterns
+        # [^\s=]+: key (no spaces or =)
+        # =: literal =
+        # (?:"[^"]*"|[^\s]*): value (either "quoted strings" or non-space chars)
+        param_pattern = r'([^\s=]+)=("[^"]*"|[^\s]*)'
+        matches = re.finditer(param_pattern, raw_path)
+        
+        extracted_keys_indices = []
+        
+        for match in matches:
+            key = match.group(1)
+            value = match.group(2).strip('"')
+            params[key] = value
+            extracted_keys_indices.append((match.start(), match.end()))
+        
+        # 2. Reconstruct the "clean" path by removing the parameters
+        # We assume the path is the first part before any parameter
+        clean_path = raw_path
+        if extracted_keys_indices:
+            # Reconstruct from first char until start of first parameter
+            clean_path = raw_path[:extracted_keys_indices[0][0]].strip()
+        
+        return clean_path, params
 
     def _split_batch_content(self, content: str) -> List[Action]:
         """
@@ -295,12 +328,15 @@ class FuzzyParser:
         if '@' in first_line:
             parts = first_line.split('@', 1)
             action_type = parts[0].strip()
-            path = parts[1].strip()
+            path_part = parts[1].strip()
         else:
             # @なし: 最初のスペースで分割（run_command は引数が2行目）
             tokens = first_line.split(None, 1)
             action_type = tokens[0]
-            path = tokens[1] if len(tokens) > 1 else ""
+            path_part = tokens[1] if len(tokens) > 1 else ""
+
+        # Extract parameters from path_part
+        path, params = self._extract_line_params(path_part)
 
         content = '\n'.join(content_lines).strip()
 
@@ -313,6 +349,7 @@ class FuzzyParser:
             type=action_type,
             path=path,
             content=content,
+            params=params,
             confidence=0.95  # バッチは明示的な構文なので高信頼度
         )
     
@@ -404,11 +441,16 @@ class FuzzyParser:
                         j += 1
 
                 content = '\n'.join(content_lines)
+                
+                # Extract parameters from path
+                clean_path, params = self._extract_line_params(path)
+                
                 actions.append(Action(
                     type=action_type.strip(),
-                    path=path.strip() if path else "",
+                    path=clean_path,
                     content=content,
                     depends_on=depends_on,
+                    params=params,
                     confidence=0.95 if has_delimiters else 0.7
                 ))
                 i = j
@@ -461,13 +503,16 @@ class FuzzyParser:
         depends_on = None
         
         if '>' in path_part:
-            path, depends_on = path_part.split('>', 1)
-            path = path.strip()
+            path_val, depends_on = path_part.split('>', 1)
+            path_val = path_val.strip()
             depends_on = depends_on.strip()
         else:
-            path = path_part
+            path_val = path_part
         
-        return Action(type=action_type, path=path, depends_on=depends_on)
+        # Extract parameters
+        path, params = self._extract_line_params(path_val)
+        
+        return Action(type=action_type, path=path, depends_on=depends_on, params=params)
     
     def _calculate_confidence(self, result: ParsedResult) -> float:
         """Calculate confidence of parse result"""
