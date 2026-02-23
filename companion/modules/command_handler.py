@@ -7,6 +7,7 @@ from rich.syntax import Syntax
 
 from companion.config.config_loader import config
 from companion.ui import ui
+from companion.modules.model_manager import model_manager
 
 class CommandHandler:
     """
@@ -132,7 +133,8 @@ class CommandHandler:
         [cyan]/config reload[/cyan]      - Reload config from file
         [cyan]/status[/cyan]             - Show agent vitals and loop status
         [cyan]/model[/cyan]              - Interactive model selection
-        [cyan]/model list[/cyan]         - List available models
+        [cyan]/model list[/cyan]         - List available models (config + dynamic)
+        [cyan]/model refresh[/cyan]      - Refresh OpenRouter model list
         [cyan]/model current[/cyan]      - Show current model
         [cyan]/model <provider>/<model>[/cyan] - Switch to a specific model
         [cyan]/clear[/cyan]              - Clear conversation history
@@ -161,6 +163,15 @@ class CommandHandler:
         
         subcmd = args[0]
         
+        if subcmd == "refresh":
+            ui.print_info("🔄 Refreshing OpenRouter model list...")
+            models = await model_manager.fetch_openrouter_models(force=True)
+            if models:
+                ui.print_success(f"✅ Refreshed {len(models)} models from OpenRouter.")
+            else:
+                ui.print_error("❌ Failed to refresh models.")
+            return
+
         if subcmd == "list":
             # Show available models from config
             models_config = config.get("llm.available_models", [])
@@ -191,11 +202,25 @@ class CommandHandler:
                     table.add_row(display_name, provider, model, status)
                 
                 if hasattr(ui, 'console'):
-                    ui.console.print(Panel(table, title="[bold]Available Models[/bold]", border_style="green", expand=False))
+                    ui.console.print(Panel(table, title="[bold]Available Models (Config)[/bold]", border_style="green", expand=False))
                 else:
-                    print("Available models:")
+                    print("Available models (Config):")
                     for model_info in models_config:
                         print(f"  {model_info.get('name')}: {model_info.get('provider')}/{model_info.get('model')}")
+                
+                # Also list top 10 from OpenRouter if available
+                dynamic_models = model_manager.models
+                if dynamic_models:
+                    table_dyn = Table(show_header=True, header_style="bold magenta", box=None)
+                    table_dyn.add_column("Name", style="cyan")
+                    table_dyn.add_column("Model ID", style="white")
+                    table_dyn.add_column("Context", style="yellow")
+                    
+                    for dm in dynamic_models[:10]: # Limit to top 10 for list command to avoid flood
+                        table_dyn.add_row(dm["name"], dm["id"], f"{dm['context_length']//1024}k")
+                    
+                    if hasattr(ui, 'console'):
+                        ui.console.print(Panel(table_dyn, title="[bold]Available Models (OpenRouter - Top 10)[/bold]", subtitle="Use /model refresh to update, or /model for full list", border_style="blue", expand=False))
             else:
                 # Fallback to old format
                 table = Table(show_header=True, header_style="bold magenta", box=None)
@@ -277,30 +302,58 @@ class CommandHandler:
         
         if not models_config:
             # Fallback to old method if no model list defined
-            ui.print_warning("設定ファイルに llm.available_models が見つかりません。従来の方法を使用します。")
-            await self._interactive_model_selection_legacy()
-            return
+            ui.print_warning("設定ファイルに llm.available_models が見つかりません。")
+            # models_config remains empty, we will try to get dynamic ones below
+        
+        # Get dynamic models from OpenRouter (use cached if available)
+        ui.print_info("🔍 Getting latest models...")
+        dynamic_models = await model_manager.fetch_openrouter_models()
         
         current_provider = config.get("llm.provider", "unknown")
         current_model = self.agent.llm.model
         
         available_models = []
+        
+        # Add static models from config
+        seen_models = set()
         for model_info in models_config:
             provider = model_info.get("provider")
             model = model_info.get("model")
             name = model_info.get("name", f"{provider}/{model}")
-            description = model_info.get("description", "")
             
             if not provider or not model:
                 continue
             
-            # Check if this is the current model
+            seen_models.add((provider, model))
+            
+            description = model_info.get("description", "")
             is_current = (provider == current_provider and model == current_model)
             
-            # Format display text
-            display_text = f"[bold]{name}[/bold]"
+            display_text = f"[bold]{name}[/bold] ({provider}/{model})"
             if description:
                 display_text += f"\n  [dim]{description}[/dim]"
+            if is_current:
+                display_text += "\n  [green]✓ 現在使用中[/green]"
+            
+            available_models.append((display_text, (provider, model, name)))
+
+        # Add dynamic models from OpenRouter (avoid duplicates)
+        for dm in dynamic_models:
+            provider = dm["provider"]
+            model = dm["id"]
+            name = dm["name"]
+            
+            if (provider, model) in seen_models:
+                continue
+            
+            is_current = (provider == current_provider and model == current_model)
+            
+            display_text = f"[bold]{name}[/bold] ({provider}/{model})"
+            if dm.get("context_length"):
+                display_text += f" [dim]| {dm['context_length']//1024}k context[/dim]"
+            if dm.get("description"):
+                desc = dm["description"][:100] + "..." if len(dm["description"]) > 100 else dm["description"]
+                display_text += f"\n  [dim]{desc}[/dim]"
             if is_current:
                 display_text += "\n  [green]✓ 現在使用中[/green]"
             
