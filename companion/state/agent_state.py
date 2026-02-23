@@ -19,33 +19,52 @@ class AgentPhase(str, Enum):
     EXECUTING = "EXECUTING"
     AWAITING_USER = "AWAITING_USER"
 
+class AgentMode(str, Enum):
+    """Sym-Ops v3.1 の3モード"""
+    PLANNING      = "planning"       # 目標明確・計画立案フェーズ
+    INVESTIGATION = "investigation"  # 原因不明・OODAループフェーズ
+    TASK          = "task"           # タスク実行フェーズ
+
 # --- Vitals (Soul) ---
 
 class Vitals(BaseModel):
-    """アヒルの健康状態"""
-    mood: float = Field(1.0, ge=0.0, le=1.0, description="機嫌 (0.0-1.0)")
-    focus: float = Field(1.0, ge=0.0, le=1.0, description="集中力 (0.0-1.0)")
-    stamina: float = Field(1.0, ge=0.0, le=1.0, description="体力 (0.0-1.0)")
-    
+    """アヒルの健康状態 (Sym-Ops v3.1)"""
+    confidence: float = Field(1.0, ge=0.0, le=1.0, description="自信 ::c (0.0-1.0)")
+    safety: float = Field(1.0, ge=0.0, le=1.0, description="安全度 ::s (0.0-1.0, 0.5未満で確認要求)")
+    memory: float = Field(1.0, ge=0.0, le=1.0, description="メモリ使用状況 ::m (0.0-1.0)")
+    focus: float = Field(1.0, ge=0.0, le=1.0, description="集中力 ::f (0.0-1.0)")
+
     def decay(self, amount: float = 0.05):
-        self.stamina = max(0.0, self.stamina - amount)
+        """ループごとの自然減衰"""
+        self.safety = max(0.0, self.safety - amount)
         self.focus = max(0.0, self.focus - amount)
 
     def recover(self, amount: float = 0.3):
-        self.stamina = min(1.0, self.stamina + amount)
+        """ユーザー応答後の回復"""
+        self.safety = min(1.0, self.safety + amount)
         self.focus = min(1.0, self.focus + amount)
+
+# --- Investigation State ---
+
+class InvestigationState(BaseModel):
+    """Investigationモードの調査状態"""
+    hypothesis: str = Field("", description="現在の仮説")
+    hypothesis_attempts: int = Field(0, description="仮説試行回数 (2回失敗でduck_call強制)")
+    ooda_cycle: int = Field(0, description="OODAサイクル数")
+    observations: List[str] = Field(default_factory=list, description="観察結果ログ")
 
 # --- Pacemaker Intervention ---
 
 class InterventionReason(BaseModel):
     """Pacemakerの介入理由"""
     type: Literal[
-        "STAMINA_DEPLETED",
-        "LOOP_EXHAUSTED", 
+        "SAFETY_DEPLETED",
+        "LOOP_EXHAUSTED",
         "FOCUS_LOST",
         "ERROR_CASCADE",
         "STAGNATION",
-        "CONFIDENCE_LOW"
+        "CONFIDENCE_LOW",
+        "INVESTIGATION_STUCK"
     ]
     message: str
     severity: Literal["critical", "high", "medium", "low"]
@@ -113,17 +132,30 @@ class AgentState(BaseModel):
     """エージェントの全状態を保持するSingle Source of Truth"""
     phase: AgentPhase = AgentPhase.IDLE
     vitals: Vitals = Field(default_factory=Vitals)
-    
+
+    # Sym-Ops v3.1 モード管理
+    current_mode: AgentMode = AgentMode.PLANNING
+    investigation_state: Optional[InvestigationState] = None
+
     # Context
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)
     current_plan: Optional[Plan] = None
-    
+
     # Working Memory
     working_directory: str = "."
     known_files: List[str] = Field(default_factory=list)
-    
+
     # Last Action Result
     last_action_result: Optional[str] = None
+
+    # セッション管理
+    session_id: str = Field(
+        default_factory=lambda: datetime.now().strftime('%Y%m%d_%H%M%S') + '_' + str(uuid.uuid4())[:4],
+        description='セッション識別子（YYYYMMDD_HHMMSS_xxxx 形式）'
+    )
+    created_at: datetime = Field(default_factory=datetime.now, description='セッション開始日時')
+    last_active: datetime = Field(default_factory=datetime.now, description='最終アクティブ日時')
+    turn_count: int = Field(default=0, description='ターン数（ユーザー入力回数）')
     
     def add_message(self, role: str, content: str):
         self.conversation_history.append({"role": role, "content": content})
@@ -162,7 +194,21 @@ class AgentState(BaseModel):
         """プロンプトに埋め込むためのコンテキスト情報を生成"""
         context = []
         context.append(f"Phase: {self.phase.value}")
-        context.append(f"Vitals: Mood={self.vitals.mood:.2f}, Focus={self.vitals.focus:.2f}, Stamina={self.vitals.stamina:.2f}")
+        context.append(f"Mode: {self.current_mode.value}")
+        context.append(
+            f"Vitals: Confidence={self.vitals.confidence:.2f}, "
+            f"Safety={self.vitals.safety:.2f}, "
+            f"Memory={self.vitals.memory:.2f}, "
+            f"Focus={self.vitals.focus:.2f}"
+        )
+        # Investigationモード中は調査状態を追加
+        if self.investigation_state:
+            inv = self.investigation_state
+            context.append(
+                f"Investigation: hypothesis_attempts={inv.hypothesis_attempts}/2, "
+                f"ooda_cycle={inv.ooda_cycle}, "
+                f"hypothesis='{inv.hypothesis}'"
+            )
         
         if self.current_plan:
             context.append(f"\nCurrent Plan: {self.current_plan.goal}")
@@ -181,26 +227,52 @@ class AgentState(BaseModel):
 
     def get_context_mode(self) -> str:
         """
-        Determine the appropriate context mode for prompt generation.
-        Returns: "normal", "planning", or "task_execution"
+        Sym-Ops v3.1 のモードを返す。
+        Returns: "planning", "investigation", or "task"
         """
-        # If no plan exists, we're in normal mode
-        if not self.current_plan:
-            return "normal"
-        
-        current_step = self.current_plan.get_current_step()
-        
-        # If we have a step but no tasks yet, we're in planning/task generation mode
-        if current_step and not current_step.tasks:
-            return "task_execution"
-        
-        # If we have tasks, we're executing them
-        if current_step and current_step.tasks:
-            return "task_execution"
-        
-        # If we're between steps or just created a plan, we're in planning mode
-        if not current_step and not self.current_plan.is_complete:
-            return "planning"
-        
-        return "normal"
+        return self.current_mode.value
+
+    def enter_investigation_mode(self):
+        """Investigationモードへ遷移し、調査状態を初期化する"""
+        self.current_mode = AgentMode.INVESTIGATION
+        self.investigation_state = InvestigationState()
+
+    def enter_planning_mode(self):
+        """Planningモードへ遷移し、調査状態をクリアする"""
+        self.current_mode = AgentMode.PLANNING
+        self.investigation_state = None
+
+    def enter_task_mode(self):
+        """Taskモードへ遷移する"""
+        self.current_mode = AgentMode.TASK
+
+    def touch(self) -> None:
+        """
+        ターン完了時に last_active を更新し turn_count をインクリメントする。
+        セッション保存前に呼ぶ。
+        """
+        self.last_active = datetime.now()
+        self.turn_count += 1
+
+    def to_session_dict(self) -> dict:
+        """
+        セッションファイルへの保存用にJSONシリアライズする。
+
+        Returns:
+            全フィールドをJSON互換型に変換した辞書
+        """
+        return self.model_dump(mode='json')
+
+    @classmethod
+    def from_session_dict(cls, data: dict) -> 'AgentState':
+        """
+        セッションファイルから AgentState を復元する。
+
+        Args:
+            data: to_session_dict() で生成したJSON辞書
+
+        Returns:
+            復元された AgentState インスタンス
+        """
+        return cls.model_validate(data)
 

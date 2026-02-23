@@ -127,22 +127,39 @@ class DuckUI:
         pass
 
     def print_vitals(self, vitals: Any, loop_count: int, max_loops: int):
-        """Print current vitals and loop status."""
-        mood_icon = "😊" if vitals.mood > 0.7 else "😐" if vitals.mood > 0.4 else "😞"
-        focus_icon = "🧠" if vitals.focus > 0.7 else "🤔" if vitals.focus > 0.4 else "😵"
-        stamina_icon = "⚡" if vitals.stamina > 0.7 else "🔋" if vitals.stamina > 0.4 else "🪫"
-        
+        """Print current vitals and loop status. (Sym-Ops v3.1: c/s/m/f)"""
+        conf_icon  = "💪" if vitals.confidence > 0.7 else "🤔" if vitals.confidence > 0.4 else "😰"
+        safety_icon = "🛡️" if vitals.safety > 0.7 else "⚠️" if vitals.safety > 0.4 else "🚨"
+        memory_icon = "🧠" if vitals.memory > 0.7 else "📦" if vitals.memory > 0.4 else "💾"
+        focus_icon  = "🎯" if vitals.focus > 0.7 else "🔍" if vitals.focus > 0.4 else "😵"
+
         status = (
-            f"{mood_icon} Mood: {vitals.mood:.2f}  "
+            f"{conf_icon} Confidence: {vitals.confidence:.2f}  "
+            f"{safety_icon} Safety: {vitals.safety:.2f}  "
+            f"{memory_icon} Memory: {vitals.memory:.2f}  "
             f"{focus_icon} Focus: {vitals.focus:.2f}  "
-            f"{stamina_icon} Stamina: {vitals.stamina:.2f}  "
             f"🔄 Loop: {loop_count}/{max_loops}"
         )
-        
+
         self.console.print(Panel(
             status,
             title="[duck]Agent Vitals[/duck]",
             border_style="duck",
+            expand=False
+        ))
+
+    def print_safety_warning(self, safety_score: float):
+        """Safety Score Interceptor 用の警告パネルを表示する。
+
+        Args:
+            safety_score: LLMが報告したSafetyスコア (0.0-1.0)
+        """
+        self.console.print(Panel(
+            f"[bold red]Safety Score が低い値です: s={safety_score:.2f}[/bold red]\n\n"
+            "このスコアはLLMが危険または破壊的な操作だと判断していることを示します。\n"
+            "操作の内容を確認してから続行してください。",
+            title="[bold red]🚨 Safety Score Interceptor[/bold red]",
+            border_style="red",
             expand=False
         ))
 

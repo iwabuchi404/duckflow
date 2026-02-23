@@ -297,6 +297,99 @@ class MemoryManager:
                 "content": f"[過去{len(messages)}件のメッセージが削除されました]"
             }
     
+    async def restore_with_summary(
+        self,
+        conversation_history: List[Dict]
+    ) -> List[Dict]:
+        """
+        セッション復元時に大きな履歴を「LLM要約 + 最近N件」に圧縮する。
+        起動時に1回だけ呼ぶこと。
+
+        圧縮アルゴリズム:
+            1. トークン上限の70%以内に収まる最近のメッセージを保持
+            2. それより古い部分をLLMで一括要約してsystemメッセージとして先頭に挿入
+
+        Args:
+            conversation_history: セッションファイルから読み込んだ全履歴
+
+        Returns:
+            [セッション要約メッセージ（省略なし）] + [最近N件] の圧縮済み履歴。
+            サイズがしきい値以下の場合はそのまま返す。
+        """
+        if not self.should_prune(conversation_history):
+            return conversation_history  # サイズが小さければそのまま使用
+
+        # 最近N件をトークン上限70%で切り出す（新しい方から逆順に積む）
+        target_tokens = int(self.max_tokens * 0.7)
+        recent_messages: List[Dict] = []
+        total = 0
+        for msg in reversed(conversation_history):
+            t = self._estimate_tokens([msg])
+            if total + t > target_tokens:
+                break
+            recent_messages.insert(0, msg)
+            total += t
+
+        # 保持できる分だけ残った場合はそのまま返す
+        if len(recent_messages) >= len(conversation_history):
+            return conversation_history
+
+        # 古い部分をLLMで要約
+        old_messages = conversation_history[: len(conversation_history) - len(recent_messages)]
+        logger.info(
+            f"Session restore: summarizing {len(old_messages)} old messages, "
+            f"keeping {len(recent_messages)} recent messages"
+        )
+        summary_msg = await self._summarize_session(old_messages)
+        return [summary_msg] + recent_messages
+
+    async def _summarize_session(self, messages: List[Dict]) -> Dict:
+        """
+        セッション全体（古い部分）を箇条書きで要約したsystemメッセージを生成する。
+
+        Args:
+            messages: 要約対象のメッセージ群（古い履歴）
+
+        Returns:
+            role="system" の要約メッセージ辞書
+        """
+        # 各メッセージを200文字以内に切り詰めてトークン消費を抑える
+        combined = "\n\n".join([
+            f"{msg['role']}: {msg['content'][:200]}"
+            for msg in messages
+        ])
+
+        prompt = f"""以下は前回の作業セッションの会話ログです。
+次回のセッションで引き継ぐべき重要な情報を箇条書きで要約してください。
+出力は必ず以下のJSON形式にしてください：
+{{
+    "summary": "箇条書きの要約（各行を「- 」で始める、合計200文字以内）"
+}}
+
+会話ログ（{len(messages)}件）:
+{combined}"""
+
+        try:
+            response = await self.llm.chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.3
+            )
+            summary_text = response.get("summary", "（要約失敗）")
+            return {
+                "role": "system",
+                "content": (
+                    f"[前回セッション要約（{len(messages)}件のメッセージを圧縮）]\n"
+                    f"{summary_text}"
+                )
+            }
+        except Exception as e:
+            logger.error(f"Session summarization failed: {e}")
+            return {
+                "role": "system",
+                "content": f"[前回セッションの{len(messages)}件のメッセージが省略されました]"
+            }
+
     def _estimate_tokens(self, messages: List[Dict]) -> int:
         """トークン数を概算"""
         total_chars = sum(len(msg.get("content", "")) for msg in messages)
