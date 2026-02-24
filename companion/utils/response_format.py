@@ -92,8 +92,8 @@ Investigating why the database connection is refused.
 
 ## 5. Critical Rules (CRITICAL)
 1. **Delimiters**: ALWAYS wrap content in `<<<` and `>>>`.
-2. **NO Markdown in Blocks**: Do NOT wrap code in ` ```python ` inside `<<< >>>` blocks. Just raw text/code.
-3. **No JSON**: Never use JSON objects for actions.
+2. **Raw Content in Blocks**: Content inside `<<< >>>` blocks is always raw text/code. Markdown formatting (including code fences) is not used.
+3. **Symbol Syntax Only**: All actions use Sym-Ops v3.2 symbol syntax exclusively (`::action @path`).
 4. **Batch separators**: In `::execute_batch`, use `%%%` to separate actions.
 5. **Block end `>>>`**: Recognized ONLY at **column 0** (start of line). Indented `>>>` (e.g. doctests) is safe.
 6. **Markdown only in terminal tools**: Markdown is ONLY allowed inside `::response` or `::report`.

@@ -3,9 +3,9 @@ import logging
 import json
 from typing import Dict, Any, Callable, List
 
-from companion.state.agent_state import AgentState, ActionList, Action, AgentPhase, TaskStatus, AgentMode
+from companion.state.agent_state import AgentState, ActionList, Action, AgentPhase, TaskStatus, AgentMode, SyntaxErrorInfo
 from companion.base.llm_client import default_client, LLMClient
-from companion.prompts.system import get_system_prompt, FEW_SHOT_EXAMPLES
+from companion.prompts.builder import PromptBuilder
 from companion.tools.file_ops import file_ops
 from companion.tools.plan_tool import PlanTool
 from companion.tools.task_tool import TaskTool
@@ -306,12 +306,10 @@ class DuckAgent:
                     self.state.phase = AgentPhase.THINKING
 
                     # system_promptを介入・通常両方で使うため先に生成
-                    context_mode = self.state.get_context_mode()
-                    system_prompt = get_system_prompt(
-                        tool_descriptions=self.get_tool_descriptions(),
-                        state_context=self.state.to_prompt_context(),
-                        mode=context_mode
-                    )
+                    prompt_builder = PromptBuilder(self.state)
+                    system_prompt = prompt_builder.build(self.get_tool_descriptions())
+                    # エラーフィードバックはプロンプトに注入済み。1ターン限りなのでクリア
+                    self.state.last_syntax_errors = []
 
                     # --- Pacemaker Health Check (Before LLM Call) ---
                     intervention = self.pacemaker.check_health()
@@ -336,7 +334,7 @@ class DuckAgent:
                             )
                             messages = [
                                 {"role": "system", "content": system_prompt}
-                            ] + FEW_SHOT_EXAMPLES + self.state.conversation_history + [
+                            ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history + [
                                 {"role": "user", "content": intervention_prompt}
                             ]
                             with ui.create_spinner("Analyzing intervention..."):
@@ -356,7 +354,7 @@ class DuckAgent:
                             # LLMがSym-Ops構文を出力形式として学習するための会話ペア
                             messages = [
                                 {"role": "system", "content": system_prompt}
-                            ] + FEW_SHOT_EXAMPLES + self.state.conversation_history
+                            ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history
 
                             # Debug output
                             if self.debug_context_mode:
@@ -442,6 +440,12 @@ class DuckAgent:
             else:
                 logger.warning(f"Filtered out unknown tool: {action.name}")
                 ui.print_warning(f"Unknown tool '{action.name}' was ignored.")
+                available = ', '.join(self.tools.keys())
+                self.state.last_syntax_errors.append(SyntaxErrorInfo(
+                    error_type='unknown_tool',
+                    raw_snippet=action.name,
+                    correction_hint=f'Use only registered tools: {available}',
+                ))
         action_list.actions = known_actions
 
         # --- Action Count Limiter ---
@@ -594,6 +598,14 @@ class DuckAgent:
                     logger.error(error_msg, exc_info=True)
                     self.state.last_action_result = error_msg
                     ui.print_result(str(e), is_error=True)
+
+                    # 引数不足などの TypeError を構文エラーとして記録
+                    if isinstance(e, TypeError):
+                        self.state.last_syntax_errors.append(SyntaxErrorInfo(
+                            error_type='missing_param',
+                            raw_snippet=str(e)[:200],
+                            correction_hint='Required parameter is missing. Check the tool signature.',
+                        ))
 
                     # Add error to conversation history in Sym-Ops format
                     err_res = ToolResult(

@@ -6,6 +6,13 @@ from enum import Enum
 
 # --- Enums ---
 
+class SyntaxErrorInfo(BaseModel):
+    """直前ターンで発生した構文エラーの情報"""
+    error_type: str = Field(description="エラー種別 (例: unknown_tool, missing_param)")
+    raw_snippet: str = Field(default='', description="問題のあった出力の抜粋")
+    correction_hint: str = Field(default='', description="修正ガイド文")
+
+
 class TaskStatus(str, Enum):
     PENDING = "PENDING"
     IN_PROGRESS = "IN_PROGRESS"
@@ -147,6 +154,9 @@ class AgentState(BaseModel):
 
     # Last Action Result
     last_action_result: Optional[str] = None
+
+    # 直前ターンの構文エラー（次ターンのプロンプトに注入後クリアされる）
+    last_syntax_errors: List[SyntaxErrorInfo] = Field(default_factory=list)
 
     # セッション管理
     session_id: str = Field(
