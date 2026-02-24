@@ -168,42 +168,53 @@ class FileOps:
         
         return f"Replaced {count} occurrence(s) of '{search}' in {path}"
 
-    async def find_files(self, pattern: str = "*", recursive: bool = True) -> List[str]:
+    async def find_files(self, pattern: str = "*", recursive: bool = True, path: str = ".") -> List[str]:
         """
         Find files matching a pattern.
         Supports wildcards like *.py, test_*.md, etc.
+
+        Args:
+            pattern: ファイル名のマッチパターン（例: *.py, test_*.md）
+            recursive: サブディレクトリも再帰的に検索するか
+            path: 検索開始ディレクトリ（ワークスペースルートからの相対パス）
         """
         from fnmatch import fnmatch
-        
+
+        # 検索開始ディレクトリを決定
+        start_dir = (self.workspace_root / path).resolve()
+        if not start_dir.is_dir():
+            # pathがファイルの場合、その親ディレクトリを検索対象にする
+            start_dir = start_dir.parent
+
         results = []
-        
+
         def search_dir(directory: Path, depth: int = 0):
             if depth > 10:  # Prevent infinite recursion
                 return
-            
+
             try:
                 for item in directory.iterdir():
                     # Skip hidden files/dirs
                     if item.name.startswith("."):
                         continue
-                    
+
                     # Check if it's within workspace
                     try:
                         rel_path = item.relative_to(self.workspace_root)
                     except ValueError:
                         continue  # Outside workspace
-                    
+
                     # Match files
                     if item.is_file() and fnmatch(item.name, pattern):
                         results.append(str(rel_path))
-                    
+
                     # Recurse into directories
                     if item.is_dir() and recursive:
                         search_dir(item, depth + 1)
             except PermissionError:
                 pass  # Skip directories we can't access
-        
-        search_dir(self.workspace_root)
+
+        search_dir(start_dir)
         return sorted(results)
 
     async def delete_file(self, path: str) -> str:

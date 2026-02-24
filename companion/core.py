@@ -5,7 +5,7 @@ from typing import Dict, Any, Callable, List
 
 from companion.state.agent_state import AgentState, ActionList, Action, AgentPhase, TaskStatus, AgentMode
 from companion.base.llm_client import default_client, LLMClient
-from companion.prompts.system import get_system_prompt
+from companion.prompts.system import get_system_prompt, FEW_SHOT_EXAMPLES
 from companion.tools.file_ops import file_ops
 from companion.tools.plan_tool import PlanTool
 from companion.tools.task_tool import TaskTool
@@ -75,7 +75,9 @@ class DuckAgent:
         )
         
         # Register basic actions
+        self.register_tool("note", self.action_note_)
         self.register_tool("response", self.action_response)
+        self.register_tool("report", self.action_report)
         self.register_tool("finish", self.action_finish)
         self.register_tool("exit", self.action_exit)
         self.register_tool("duck_call", self.approval_tool.duck_call)
@@ -122,8 +124,9 @@ class DuckAgent:
         # Register Project Tree Tool
         self.register_tool("get_project_tree", get_project_tree)
 
-        # Register Status Tool
-        self.register_tool("status", self.action_status)
+        # status: LLMが "::status ok" のようにプロトコル報告として出力するため、
+        # 無害なno-opとして登録し、エラーやフィルタ警告を防ぐ
+        self.register_tool("status", self._noop)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
@@ -285,39 +288,66 @@ class DuckAgent:
                         self.pacemaker.max_loops
                     )
                     
+                    # 2. Think & Decide Phase
+                    self.state.phase = AgentPhase.THINKING
+
+                    # system_promptを介入・通常両方で使うため先に生成
+                    context_mode = self.state.get_context_mode()
+                    system_prompt = get_system_prompt(
+                        tool_descriptions=self.get_tool_descriptions(),
+                        state_context=self.state.to_prompt_context(),
+                        mode=context_mode
+                    )
+
                     # --- Pacemaker Health Check (Before LLM Call) ---
                     intervention = self.pacemaker.check_health()
                     if intervention:
-                        # Force intervention via duck_call
+                        # ハイブリッド介入: 履歴サマリー + LLMによる状況説明
                         ui.print_warning(f"🦆 Pacemaker介入: {intervention.message}")
-                        action_list = ActionList(
-                            actions=[self.pacemaker.intervene(intervention)],
-                            reasoning=f"Pacemaker intervention: {intervention.type}"
-                        )
-                        # Skip normal LLM call and execute intervention action
-                    else:
-                        # 2. Think & Decide Phase (Normal)
-                        self.state.phase = AgentPhase.THINKING
-                        with ui.create_spinner("Thinking..."):
-                            # Determine context mode
-                            context_mode = self.state.get_context_mode()
-                            
-                            # Generate system prompt
-                            system_prompt = get_system_prompt(
-                                tool_descriptions=self.get_tool_descriptions(),
-                                state_context=self.state.to_prompt_context(),
-                                mode=context_mode
+                        summary = self.pacemaker.build_intervention_summary()
+
+                        try:
+                            # LLMに状況説明を求める
+                            intervention_prompt = (
+                                "## Pacemaker Intervention\n"
+                                f"Type: {intervention.type} | Severity: {intervention.severity}\n"
+                                f"{intervention.message}\n\n"
+                                f"## Recent Execution History\n{summary}\n\n"
+                                "## Your Task\n"
+                                "ユーザーに何が起きているか簡潔に説明してください:\n"
+                                "1. 何をしようとしていたか\n"
+                                "2. 何が問題だったか\n"
+                                "3. 続行/中止/方針変更の選択肢を提示\n"
+                                "::response で返答してください。"
                             )
-                            
-                            # Prepare messages
                             messages = [
                                 {"role": "system", "content": system_prompt}
-                            ] + self.state.conversation_history
-                            
+                            ] + FEW_SHOT_EXAMPLES + self.state.conversation_history + [
+                                {"role": "user", "content": intervention_prompt}
+                            ]
+                            with ui.create_spinner("Analyzing intervention..."):
+                                action_list = await self.llm.chat(messages, response_model=ActionList)
+                        except Exception as e:
+                            # フォールバック: LLM失敗時は履歴サマリー付きduck_call
+                            logger.warning(f"Intervention LLM call failed: {e}, using fallback")
+                            action_list = ActionList(
+                                actions=[self.pacemaker.intervene(intervention, summary=summary)],
+                                reasoning=f"Pacemaker intervention (fallback): {intervention.type}"
+                            )
+                    else:
+                        # Normal LLM call
+                        with ui.create_spinner("Thinking..."):
+                            # Prepare messages
+                            # Few-shot例をsystem直後、会話履歴前に注入
+                            # LLMがSym-Ops構文を出力形式として学習するための会話ペア
+                            messages = [
+                                {"role": "system", "content": system_prompt}
+                            ] + FEW_SHOT_EXAMPLES + self.state.conversation_history
+
                             # Debug output
                             if self.debug_context_mode:
                                 ui.print_debug_context(messages, mode=self.debug_context_mode)
-                            
+
                             # Call LLM
                             action_list = await self.llm.chat(messages, response_model=ActionList)
                         
@@ -342,15 +372,20 @@ class DuckAgent:
                     self.state.phase = AgentPhase.EXECUTING
                     if action_list.actions:
                         await self.execute_actions(action_list)
-                        
+
+
+                        # Decide next action: Continue loop OR return to user
+                        # LLM should decide based on what happened (results, current state, task progress)
+
                         # Check if we should return to user
-                        # If 'response', 'exit', or 'duck_call' action was executed, break the inner loop
+                        # If 'response', 'report', 'exit', 'duck_call', or 'finish' action was executed, break the inner loop
+                        # 'note' does NOT end the loop - it's for progress notifications while continuing execution
                         should_return_to_user = False
                         for action in action_list.actions:
-                            if action.name in ["response", "exit", "duck_call"]:
+                            if action.name in ["response", "report", "exit", "duck_call", "finish"]:
                                 should_return_to_user = True
                                 break
-                        
+
                         if should_return_to_user:
                             logger.info("Autonomous loop ending: response/exit/duck_call action executed")
                             # Reset pacemaker for next session
@@ -383,6 +418,27 @@ class DuckAgent:
         logger.info(f"Executing actions: {[a.name for a in action_list.actions]}")
         results = []
 
+        # --- Unknown Tool Filter ---
+        # LLMがハルシネーションで存在しないツールを呼ぶことがあるため、
+        # 実行前にフィルタリングする（会話履歴を汚染しない）
+        known_actions = []
+        for action in action_list.actions:
+            if action.name in self.tools:
+                known_actions.append(action)
+            else:
+                logger.warning(f"Filtered out unknown tool: {action.name}")
+                ui.print_warning(f"Unknown tool '{action.name}' was ignored.")
+        action_list.actions = known_actions
+
+        # --- Action Count Limiter ---
+        # 1ターンあたりのアクション数を制限（LLMの投機的大量実行を防止）
+        MAX_ACTIONS_PER_TURN = 6
+        if len(action_list.actions) > MAX_ACTIONS_PER_TURN:
+            dropped = len(action_list.actions) - MAX_ACTIONS_PER_TURN
+            logger.warning(f"Action limit exceeded: {len(action_list.actions)} actions, dropping last {dropped}")
+            ui.print_warning(f"アクション数が上限({MAX_ACTIONS_PER_TURN})を超えたため、末尾{dropped}件を切り捨てました。")
+            action_list.actions = action_list.actions[:MAX_ACTIONS_PER_TURN]
+
         # --- Safety Score Interceptor (Sym-Ops v3.1) ---
         # safety スコアが 0.5 未満の場合、実行前にユーザー確認を求める
         safety_score = 1.0
@@ -400,9 +456,21 @@ class DuckAgent:
                 return results
         # ------------------------------------------------
 
+        # --- Fail-fast: 連続エラーカウンター ---
+        MAX_CONSECUTIVE_ERRORS = 2
+        consecutive_errors = 0
+
+        # ターミナルアクション（ループを終了するアクション）を末尾に並べ替え
+        # 例: [report, replace_in_file] → [replace_in_file, report]
+        # これにより実行系アクションが先に処理され、最後にユーザーへ報告される
+        TERMINAL_ACTIONS = {"response", "report", "exit", "duck_call", "finish"}
+        non_terminal = [a for a in action_list.actions if a.name not in TERMINAL_ACTIONS]
+        terminal = [a for a in action_list.actions if a.name in TERMINAL_ACTIONS]
+        action_list.actions = non_terminal + terminal
+
         for action in action_list.actions:
             ui.print_action(action.name, action.parameters, action.thought)
-            
+
             # --- Approval Check ---
             requires_approval = False
             was_approved = False
@@ -471,7 +539,7 @@ class DuckAgent:
                     self.state.last_action_result = f"Action '{action.name}' succeeded: {result}"
                     
                     # Add result to conversation history (for LLM context in next cycle)
-                    if action.name != "response":
+                    if action.name not in ("response", "report"):
                         # Prepare tool result for conversion
                         tool_status = ToolStatus.OK
                         # We could implement truncation check here if needed later
@@ -502,16 +570,17 @@ class DuckAgent:
                             ui.print_result(serialize_to_text(result))
                     
                     results.append(result)
-                    
+
                     # Update Pacemaker vitals (success)
                     self.pacemaker.update_vitals(action, result, is_error=False)
+                    consecutive_errors = 0  # 成功したらリセット
 
                 except Exception as e:
                     error_msg = f"Action '{action.name}' failed: {str(e)}"
                     logger.error(error_msg, exc_info=True)
                     self.state.last_action_result = error_msg
                     ui.print_result(str(e), is_error=True)
-                    
+
                     # Add error to conversation history in Sym-Ops format
                     err_res = ToolResult(
                         status=ToolStatus.ERROR,
@@ -520,11 +589,25 @@ class DuckAgent:
                         content=e
                     )
                     self.state.add_message("assistant", format_symops_response(err_res))
-                    
+
                     results.append(error_msg)
-                    
+
                     # Update Pacemaker vitals (error)
                     self.pacemaker.update_vitals(action, error_msg, is_error=True)
+
+                    # --- Fail-fast: 連続エラーで残りのアクションを中断 ---
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                        remaining = len(action_list.actions) - action_list.actions.index(action) - 1
+                        if remaining > 0:
+                            logger.warning(f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions")
+                            ui.print_warning(f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。")
+                            self.state.add_message(
+                                "assistant",
+                                f"[SYSTEM] 連続{consecutive_errors}回のエラーにより残り{remaining}件のアクションを中断しました。"
+                                "原因を確認してから再試行してください。"
+                            )
+                        break
             else:
                 msg = f"Unknown tool: {action.name}"
                 logger.warning(msg)
@@ -552,18 +635,38 @@ class DuckAgent:
         logger.info("Finished executing actions")
         return results
 
+    # --- No-op (LLMのプロトコル的出力を吸収) ---
+
+    async def _noop(self, **kwargs) -> str:
+        """No-op: LLMが出力するプロトコル的なアクションを静かに吸収する。"""
+        return "ok"
+
     # --- Basic Actions ---
+
+    async def action_note_(self, message: str = "") -> str:
+        """
+        ユーザーに短文を通知するが、ループは継続する。
+        進捗状況などを伝えるのに使用する。
+
+        Args:
+            message: ユーザーに通知するメッセージ
+
+        Returns:
+            通知完了メッセージ
+        """
+        # 小さくインフォとして表示
+        ui.print_info(message)
+        logger.info(f"Note: {message}")
+        return f"Notified: {message}"
 
     async def action_response(self, message: str) -> str:
         """
-        Send a final response to the user. 
-        Use this to answer questions or report that a task is finished 
-        (if no detailed 'finish' result is needed).
+        Short interactive response to the user (max 3-4 sentences).
+        Use for questions, confirmations, or short acknowledgments.
+        Do NOT use for long analysis or investigation results — use 'report' instead.
         """
-        # Add to history
         self.state.add_message("assistant", message)
-        
-        # Print nicely
+
         from rich.panel import Panel
         from rich.markdown import Markdown
         ui.console.print(Panel(
@@ -573,6 +676,24 @@ class DuckAgent:
             expand=False
         ))
         return "Responded to user."
+
+    async def action_report(self, message: str = "") -> str:
+        """
+        Structured report for investigation results, code analysis, or task completion.
+        You MUST include these Markdown headers: ## 要約, ## 詳細, ## 結論.
+        Do NOT use for simple questions — use 'response' instead.
+        """
+        self.state.add_message("assistant", f"[REPORT]\n{message}")
+
+        from rich.panel import Panel
+        from rich.markdown import Markdown
+        ui.console.print(Panel(
+            Markdown(message),
+            title="[duck]📋 Duckflow Report[/duck]",
+            border_style="cyan",
+            expand=False
+        ))
+        return "Report delivered to user."
 
     async def action_status(self) -> str:
         """
@@ -584,7 +705,7 @@ class DuckAgent:
             "## 🦆 Duckflow Status Report",
             "",
             f"**Phase:** {self.state.phase.value}",
-            f"**Mode:** {self.state.mode.value}",
+            f"**Mode:** {self.state.current_mode.value}",
             "",
             "### Vitals",
             f"  - Confidence: {self.state.vitals.confidence:.2f}",

@@ -36,11 +36,11 @@ class DuckPacemaker:
         if self.state.current_plan:
             current_step = self.state.current_plan.get_current_step()
             if current_step and current_step.tasks:
-                base_loops = min(15 + len(current_step.tasks) // 2, 20)
+                base_loops = min(15 + len(current_step.tasks) // 2, 35)
             else:
-                base_loops = 15
+                base_loops = 20
         else:
-            base_loops = 8
+            base_loops = 10
 
         # バイタル係数の計算 (v3.1: c/s/m/f)
         vitals = self.state.vitals
@@ -60,7 +60,7 @@ class DuckPacemaker:
 
         # 最終計算
         calculated = int(base_loops * vitals_factor)
-        final_loops = max(3, min(calculated, 25))
+        final_loops = max(3, min(calculated, 35))
 
         logger.info(
             f"Pacemaker: max_loops={final_loops} "
@@ -174,27 +174,29 @@ class DuckPacemaker:
         """停滞検知：同じアクションや結果の繰り返し"""
         if len(self.execution_history) < 3:
             return False
-        
+
         recent = self.execution_history[-3:]
-        
+
         # 1. 完全一致アクションの繰り返し
         actions = [item["action"] for item in recent]
         action_names = [a.name for a in actions]
-        
+
         if len(set(action_names)) == 1:
-            # パラメータもチェック
-            # Action.parameters は Dict なので文字列化して比較
-            params = [str(a.parameters) for a in actions]
-            if len(set(params)) == 1:
-                logger.warning("Stagnation: Same action and params repeated 3 times")
-                return True
-        
+            # 提案ツール（propose_plan）は除外（内容が異なるため）
+            if action_names[0] != "propose_plan":
+                # パラメータもチェック
+                # Action.parameters は Dict なので文字列化して比較
+                params = [str(a.parameters) for a in actions]
+                if len(set(params)) == 1:
+                    logger.warning("Stagnation: Same action and params repeated 3 times")
+                    return True
+
         # 2. 同じ結果の繰り返し
         results = [item["result_summary"] for item in recent]
         if len(set(results)) == 1:
             logger.warning("Stagnation: Same result repeated 3 times")
             return True
-            
+
         return False
 
     def _detect_error_cascade(self) -> bool:
@@ -212,7 +214,57 @@ class DuckPacemaker:
                 
         return False
     
-    def intervene(self, reason: InterventionReason) -> Action:
+    def build_intervention_summary(self) -> str:
+        """
+        直近の実行履歴を人間が読める形式で組み立てる。
+        Pacemaker介入時にユーザーとLLMに状況を伝えるために使用する。
+
+        Returns:
+            フォーマット済みの実行履歴サマリー文字列
+        """
+        lines = []
+
+        # 直近の実行履歴（最大5件）
+        recent = self.execution_history[-5:] if self.execution_history else []
+        if recent:
+            lines.append(f'直近の実行履歴 ({len(recent)}件):')
+            for i, item in enumerate(recent, 1):
+                action = item['action']
+                is_error = item['is_error']
+                status = '❌' if is_error else '✅'
+                summary = item['result_summary']
+                # 結果を短く切り詰め
+                if len(summary) > 80:
+                    summary = summary[:77] + '...'
+
+                # アクション名とパラメータ
+                params_str = ''
+                if hasattr(action, 'parameters') and action.parameters:
+                    param_parts = [f'{k}={v}' for k, v in action.parameters.items()
+                                   if k not in ('content',) and len(str(v)) < 50]
+                    if param_parts:
+                        params_str = f' ({", ".join(param_parts)})'
+
+                lines.append(f'  {i}. {status} {action.name}{params_str} → "{summary}"')
+        else:
+            lines.append('直近の実行履歴: なし')
+
+        # 検知パターン
+        if self.consecutive_errors >= 3:
+            lines.append(f'\n⚠️ 検知パターン: 同一エラーが{self.consecutive_errors}回連続')
+        elif self._detect_stagnation():
+            lines.append('\n⚠️ 検知パターン: 同じ操作が繰り返されている（停滞）')
+
+        # バイタル
+        v = self.state.vitals
+        lines.append(
+            f'\n📊 バイタル: C={v.confidence:.2f} S={v.safety:.2f} '
+            f'M={v.memory:.2f} F={v.focus:.2f} | Loop: {self.loop_count}/{self.max_loops}'
+        )
+
+        return '\n'.join(lines)
+
+    def intervene(self, reason: InterventionReason, summary: str = '') -> Action:
         """介入アクションを生成する。"""
         logger.info(f"Pacemaker intervention: {reason.type} - {reason.message}")
 
@@ -225,11 +277,14 @@ class DuckPacemaker:
             f"  ループ: {self.loop_count}/{self.max_loops}"
         )
         
+        summary_section = f"\n\n📋 {summary}" if summary else ""
+
         full_message = (
             f"⚠️  Pacemaker介入 ({reason.severity})\n\n"
             f"理由: {reason.type}\n"
             f"{reason.message}"
-            f"{vitals_info}\n\n"
+            f"{vitals_info}"
+            f"{summary_section}\n\n"
             f"どうしますか？"
         )
         

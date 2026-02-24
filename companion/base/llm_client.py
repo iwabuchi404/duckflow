@@ -243,40 +243,53 @@ class LLMClient:
         if self.use_mock:
             return self._mock_chat(messages, response_model, raw=raw)
 
+        MAX_EMPTY_RETRIES = 2
+
         try:
             logger.debug(f"Sending request to {self.model} via {self.base_url or 'default'}")
-            
-            if temperature is None:
-                temperature = config.get("llm.temperature", 0.1)
-            max_tokens = config.get("llm.max_output_tokens", 4096)
-            
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
 
-            # Update usage stats
-            if response.usage:
-                self.usage_stats["input_tokens"] += response.usage.prompt_tokens
-                self.usage_stats["output_tokens"] += response.usage.completion_tokens
-                self.usage_stats["total_tokens"] += response.usage.total_tokens
-            
-            # Debug: Log response structure
-            logger.debug(f"Response object: {response}")
-            logger.debug(f"Response choices: {response.choices}")
-            
-            content = response.choices[0].message.content
-            
-            # Debug: Log content before parsing
-            if not content:
-                logger.error(f"Empty content received. Full response: {response.model_dump_json()}")
-                logger.error(f"Message object: {response.choices[0].message}")
-            
+            if temperature is None:
+                temperature = config.get("llm.temperature", 0.7)
+            max_tokens = config.get("llm.max_output_tokens", 4096)
+            repetition_penalty = 1.1
+            content = None
+            for attempt in range(1, MAX_EMPTY_RETRIES + 2):  # 初回 + リトライ回数
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+
+                # Update usage stats
+                if response.usage:
+                    self.usage_stats["input_tokens"] += response.usage.prompt_tokens
+                    self.usage_stats["output_tokens"] += response.usage.completion_tokens
+                    self.usage_stats["total_tokens"] += response.usage.total_tokens
+
+                content = response.choices[0].message.content
+
+                if content:
+                    break  # 正常なレスポンスを取得
+
+                # 空レスポンス: リトライ可能ならリトライ
+                logger.warning(
+                    f"Empty response from LLM (attempt {attempt}/{MAX_EMPTY_RETRIES + 1}). "
+                    f"Model: {self.model}"
+                )
+                if attempt <= MAX_EMPTY_RETRIES:
+                    import asyncio as _asyncio
+                    await _asyncio.sleep(1.0)  # 短いバックオフ
+                    # temperatureを少し上げてリトライ（同じ空出力を避ける）
+                    temperature = min(temperature + 0.1, 1.0)
+                    logger.info(f"Retrying with temperature={temperature:.1f}...")
+                else:
+                    logger.error(f"Empty content after {attempt} attempts. Full response: {response.model_dump_json()}")
+                    logger.error(f"Message object: {response.choices[0].message}")
+
             if raw:
                 return content
-                
+
             return self._parse_response(content, response_model)
 
         except APIError as e:
@@ -362,6 +375,56 @@ class LLMClient:
             
         return self._parse_response(mock_content, response_model)
 
+    @staticmethod
+    def _parse_replace_content(content: str, params: dict) -> None:
+        """
+        replace_in_file のコンテンツブロックから search/replace を抽出する。
+
+        対応フォーマット:
+        1. search=... replace=... （インラインパラメータ、既にparamsにある場合）
+        2. コンテンツブロック内のキーワード形式:
+           search: old_text
+           replace: new_text
+        3. 2行だけの場合: 1行目=search, 2行目=replace
+
+        Args:
+            content: コンテンツブロックのテキスト
+            params: 既存のパラメータ辞書（search/replaceが追加される）
+        """
+        import re
+
+        # 既にインラインパラメータで渡されている場合はスキップ
+        if 'search' in params and 'replace' in params:
+            return
+
+        # フォーマット1: search="..." replace="..." パターン
+        search_match = re.search(r'search\s*=\s*"([^"]*)"', content)
+        replace_match = re.search(r'replace\s*=\s*"([^"]*)"', content)
+        if search_match and replace_match:
+            params['search'] = search_match.group(1)
+            params['replace'] = replace_match.group(1)
+            return
+
+        # フォーマット1b: クォートなし search=... replace=...
+        search_match = re.search(r'search\s*=\s*(.+?)(?:\s+replace\s*=|$)', content, re.DOTALL)
+        replace_match = re.search(r'replace\s*=\s*(.+)', content, re.DOTALL)
+        if search_match and replace_match:
+            params['search'] = search_match.group(1).strip()
+            params['replace'] = replace_match.group(1).strip()
+            return
+
+        # フォーマット2: 2行のみ → 1行目=search, 2行目=replace
+        lines = content.strip().split('\n')
+        if len(lines) == 2:
+            params['search'] = lines[0]
+            params['replace'] = lines[1]
+            return
+
+        # フォールバック: content全体をsearchに、replaceは空文字
+        logger.warning(f"Could not parse replace_in_file content: {content[:100]}")
+        params['search'] = content
+        params['replace'] = ''
+
     def _parse_response(self, content: str, response_model: Optional[type] = None):
         if not content:
             logger.error(f"Empty response from LLM. Content type: {type(content)}, Content value: {repr(content)}")
@@ -397,9 +460,18 @@ class LLMClient:
                 # Map path/command from @ notation
                 # IMPORTANT: Tool signatures use 'path' not 'file_path'!
                 if action.path:
-                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "find_files", "generate_code", "analyze_structure"):
-                        params["path"] = action.path
-                        logger.debug(f"  → Set path={action.path}")
+                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "find_files", "generate_code", "analyze_structure", "get_project_tree"):
+                        # read_file の位置引数対応: "path 1 500" → path, start_line=1, max_lines=500
+                        if tool_name == "read_file":
+                            parts = action.path.split()
+                            params["path"] = parts[0]
+                            if len(parts) >= 2 and parts[1].isdigit():
+                                params["start_line"] = int(parts[1])
+                            if len(parts) >= 3 and parts[2].isdigit():
+                                params["max_lines"] = int(parts[2])
+                        else:
+                            params["path"] = action.path
+                        logger.debug(f"  → Set path={params.get('path', action.path)}")
                     elif tool_name == "run_command":
                         params["command"] = action.path
                         logger.debug(f"  → Set command={action.path}")
@@ -415,10 +487,18 @@ class LLMClient:
                     elif tool_name in ("search_archives", "recall"):
                         params["query"] = action.path
                         logger.debug(f"  → Set query={action.path}")
-                
+                    elif tool_name == "note":
+                        params["message"] = action.path
+                        logger.debug(f"  → Set message={action.path}")
+
                 # Map content (priority over @path for run_command & investigation)
                 if action.content:
-                    if tool_name in ("create_file", "edit_file", "write_file", "generate_code", "summarize_context"):
+                    if tool_name == "replace_in_file":
+                        # replace_in_file のコンテンツブロックから search/replace を抽出
+                        # フォーマット: search=... と replace=... をコンテンツから解析
+                        self._parse_replace_content(action.content, params)
+                        logger.debug(f"  → Parsed replace_in_file: search={params.get('search', '')[:30]}, replace={params.get('replace', '')[:30]}")
+                    elif tool_name in ("create_file", "edit_file", "write_file", "generate_code", "summarize_context"):
                         params["content"] = action.content
                         logger.debug(f"  → Set content (length={len(action.content)})")
                     elif tool_name == "run_command":
@@ -436,7 +516,10 @@ class LLMClient:
                     elif tool_name in ("search_archives", "recall"):
                         params["query"] = action.content
                         logger.debug(f"  → Set query from content block")
-                    elif tool_name in ("response", "duck_call"):
+                    elif tool_name == "note":
+                        params["message"] = action.content
+                        logger.debug(f"  → Set message from content block (length={len(action.content)})")
+                    elif tool_name in ("response", "report", "duck_call"):
                         params["message"] = action.content
                         logger.debug(f"  → Set message (length={len(action.content)})")
                     elif tool_name == "finish":

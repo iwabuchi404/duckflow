@@ -15,15 +15,19 @@ async def get_project_tree(  # ← async追加
 ) -> str:
     """
     プロジェクトのディレクトリツリーを取得（安全かつ効率的な探索）
-    
+
     Args:
         path: 探索起点パス（デフォルト: カレントディレクトリ）
         depth: 最大探索深度（デフォルト: 3）
         respect_gitignore: .gitignoreを尊重するか（デフォルト: True）
-    
+
     Returns:
         視認性の高いテキストツリー形式の出力
     """
+    # 型変換（パーサーから文字列で渡される場合がある）
+    depth = int(depth) if isinstance(depth, str) else depth
+    respect_gitignore = bool(respect_gitignore) if isinstance(respect_gitignore, str) else respect_gitignore
+
     abs_path = os.path.abspath(path)
     if not os.path.exists(abs_path):
         return f"Error: Path not found - {abs_path}"

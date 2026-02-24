@@ -21,31 +21,67 @@ class TaskExecutor:
         self.tools = tools
         self.execution_log: List[Dict[str, Any]] = []
     
+    def _requires_confirmation(self, task: Task) -> bool:
+        """
+        Check if a task requires user confirmation before execution.
+
+        Tasks requiring confirmation:
+        - write_file (file exists check)
+        - delete_file (file exists check)
+        - replace_in_file
+
+        Returns:
+            True if confirmation required, False otherwise
+        """
+        # Check task action type
+        action = task.action.name if hasattr(task, 'action') else None
+
+        # Check if action type requires confirmation
+        confirmation_actions = ["write_file", "delete_file", "replace_in_file", "run_command"]
+
+        return action in confirmation_actions
+
     async def execute_task_list(self, tasks: List[Task]) -> Dict[str, Any]:
         """
-        Execute a list of tasks sequentially.
-        
+        Execute a list of tasks sequentially with user confirmation for tasks that require it.
+
         Args:
             tasks: List of Task objects to execute
-            
+
         Returns:
             Summary dictionary with execution results
         """
         logger.info(f"Starting execution of {len(tasks)} tasks")
-        
+
         total_tasks = len(tasks)
         completed = 0
         failed = 0
         yielded = False
         yield_reason = ""
-        
+
         self.execution_log.clear()
-        
+
         for i, task in enumerate(tasks):
             # Skip if already completed (re-entrance check)
             if task.status == TaskStatus.COMPLETED:
                 completed += 1
                 continue
+
+            # Check if task requires user confirmation
+            if self._requires_confirmation(task):
+                # Ask user for confirmation
+                ui.print_action(task.action.name, task.parameters, task.thought)
+
+                prompt = f"📋 {task.title}\n\n{task.description}\n\nこのタスクを実行しますか？"
+
+                result = ui.request_confirmation(prompt)
+
+                if not result:
+                    # User declined → skip this task
+                    logger.info(f"Task '{task.title}' declined by user")
+                    continue
+                # User approved → continue to execution
+                logger.info(f"Task '{task.title}' approved by user")
                 
             logger.info(f"Executing task {i+1}/{total_tasks}: {task.title}")
             print(f"\n📋 Task {i+1}/{total_tasks}: {task.title}")

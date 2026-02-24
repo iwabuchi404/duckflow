@@ -118,37 +118,68 @@ class PlainMarkdownConverter:
     def convert(self, text: str) -> Tuple[str, bool]:
         """
         Convert plain markdown to Sym-Ops v2
-        
+
         Returns:
             (converted_text, was_converted)
         """
         # Check if already Sym-Ops format
         if self._has_symops_markers(text):
             return text, False
-        
+
+        # [REPORT] / [FINISHED] プレフィックス検出 → 対応アクションにラップ
+        wrapped = self._detect_and_wrap_tagged_output(text)
+        if wrapped:
+            return wrapped, True
+
         # Check if looks like markdown
         if self._looks_like_markdown(text):
             text = self._convert_markdown_to_symops(text)
             return text, True
-        
+
         # Plain text → wrap in response
         if text.strip():
             text = self._wrap_in_response(text)
             return text, True
-        
+
         return text, False
     
+    def _detect_and_wrap_tagged_output(self, text: str) -> str | None:
+        """LLMが [REPORT] や [FINISHED] 等のタグ付きプレーンテキストで出力した場合、
+        対応する Sym-Ops アクションにラップする。
+
+        Returns:
+            変換後テキスト、または該当しなければ None
+        """
+        stripped = text.strip()
+        # [REPORT] → ::report
+        if stripped.startswith('[REPORT]'):
+            body = stripped[len('[REPORT]'):].strip()
+            return (
+                '::c0.70 ::s0.75 ::m0.75 ::f0.80\n\n'
+                '::report\n<<<\n'
+                f'{body}\n'
+                '>>>'
+            )
+        # [FINISHED] → ::finish
+        if stripped.startswith('[FINISHED]'):
+            body = stripped[len('[FINISHED]'):].strip()
+            return (
+                '::c0.90 ::s1.0 ::m0.50 ::f0.90\n\n'
+                '::finish\n<<<\n'
+                f'{body}\n'
+                '>>>'
+            )
+        return None
+
     def _has_symops_markers(self, text: str) -> bool:
         """Check for Sym-Ops markers"""
-        markers = ['>>', '::', '<<<', '>>>']
+        # :: is the primary marker for Sym-Ops - if we have it, we have Sym-Ops
+        # Check if any line starts with :: (action or vitals marker)
         lines = text.split('\n')
-        # Need at least 2 different markers to be considered Sym-Ops
-        found_markers = set()
         for line in lines:
-            for marker in markers:
-                if line.strip().startswith(marker):
-                    found_markers.add(marker)
-        return len(found_markers) >= 2
+            if line.strip().startswith('::'):
+                return True
+        return False
     
     def _looks_like_markdown(self, text: str) -> bool:
         """Detect markdown patterns"""
@@ -161,17 +192,19 @@ class PlainMarkdownConverter:
         return any(re.search(p, text, re.MULTILINE) for p in patterns)
     
     def _convert_markdown_to_symops(self, text: str) -> str:
-        """Convert markdown to Sym-Ops v2"""
-        # Convert headers to thoughts
-        text = self._convert_headers(text)
-        
-        # Convert code blocks to actions
-        text = self._convert_code_blocks(text)
-        
-        # Add estimated vitals if missing
-        text = self._add_vitals(text)
-        
-        return text
+        """Convert markdown to Sym-Ops v2.
+
+        コードブロックを含むMarkdownも response/report にラップする。
+        create_file への変換は行わない（LLMの説明用コードブロックと区別できないため）。
+        """
+        stripped = text.strip()
+
+        # 構造化されたMarkdown（## 要約 等のセクションを含む）→ report
+        if re.search(r'^##\s+', stripped, re.MULTILINE):
+            return self._wrap_in_report(stripped)
+
+        # それ以外（リスト、コードブロック付きの説明等）→ response
+        return self._wrap_in_response(stripped)
     
     def _convert_headers(self, text: str) -> str:
         """Convert # Headers to >> thoughts"""
@@ -275,6 +308,17 @@ class PlainMarkdownConverter:
             '>> Providing response\n\n'
             '::c0.60 ::m0.70 ::f0.75 ::s0.70\n\n'
             '::response\n'
+            '<<<\n'
+            f'{text}\n'
+            '>>>'
+        )
+
+    def _wrap_in_report(self, text: str) -> str:
+        """Wrap structured markdown in report action"""
+        return (
+            '>> Providing structured report\n\n'
+            '::c0.70 ::m0.75 ::f0.80 ::s0.75\n\n'
+            '::report\n'
             '<<<\n'
             f'{text}\n'
             '>>>'

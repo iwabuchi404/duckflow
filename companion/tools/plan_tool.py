@@ -36,11 +36,12 @@ class PlanTool:
         
         # Update State
         self.state.current_plan = new_plan
-        
+
         result = (
             f"✅ Plan created with {len(new_plan.steps)} steps.\n"
-            f"Next: Use ::response to explain the plan to the user, "
-            f"or ::finish if this completes your task."
+            f"計画が保存されました。状況に応じて適切なアクションを選択してください：\n"
+            f"  進捗を共有しつつ実行を続けるなら ::note\n"
+            f"  ユーザーとの対話が必要（不明点・確認・共有など）なら ::response"
         )
         logger.info(f"propose_plan completed: {result}")
         return result

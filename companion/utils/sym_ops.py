@@ -236,13 +236,19 @@ class FuzzyParser:
                     self._parse_vitals(stripped, result.vitals)
                 else:
                     if current_action:
-                        raise ParseError("Action without content block")
+                        # 前のアクションにコンテンツブロックがなかった
+                        # コンテンツなしの単体アクションとして追加する
+                        result.actions.append(current_action)
                     current_action = self._parse_action(stripped)
             elif stripped.startswith('?'):
                 result.questions.append(stripped[1:].strip())
             elif stripped.startswith('!'):
                 result.errors.append(stripped[1:].strip())
             i += 1
+
+        # ループ終了時に未追加のアクションがあれば追加（コンテンツブロックなしの単体アクション）
+        if current_action:
+            result.actions.append(current_action)
 
         return result
 
@@ -476,8 +482,15 @@ class FuzzyParser:
                     pass
     
     def _is_vitals(self, line: str) -> bool:
-        """Check if line contains vitals v2"""
-        return bool(re.search(r'::[cmfs]\d+\.', line))
+        """Vitals行かどうかを判定する。
+        ::c0, ::s1, ::m0.5, ::f1.0 など小数点なしも認識する。
+        行内の全 :: トークンがVitalsパターンの場合のみTrueを返す。
+        """
+        tokens = re.findall(r'::\S+', line)
+        if not tokens:
+            return False
+        vitals_pat = re.compile(r'^::[cmfs][\d.]+$')
+        return all(vitals_pat.match(t) for t in tokens)
     
     def _parse_action(self, line: str) -> Action:
         """Parse action line v2"""

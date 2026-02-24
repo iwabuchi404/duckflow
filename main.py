@@ -75,20 +75,24 @@ def _prompt_session_resume(session_manager: SessionManager):
     print(f"   日時: {time_str} | ターン数: {turn_count}")
     print(f"   Session ID: {latest_id}")
 
-    try:
-        answer = input("前回のセッションを継続しますか？ [y/N] ").strip().lower()
-    except (EOFError, KeyboardInterrupt):
-        answer = "n"
+    while True:
+        try:
+            answer = input("前回のセッションを継続しますか？ [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
 
-    if answer == "y":
-        state = session_manager.load_latest()
-        if state:
-            print(f"✅ セッションを復元しました（{len(state.conversation_history)} 件の会話履歴）\n")
-            return state
+        if answer in ("y", "yes"):
+            state = session_manager.load_latest()
+            if state:
+                print(f"✅ セッションを復元しました（{len(state.conversation_history)} 件の会話履歴）\n")
+                return state
+            else:
+                print("⚠️  セッションの読み込みに失敗しました。新規セッションで起動します。\n")
+                return None
+        elif answer in ("n", "no", ""):
+            return None
         else:
-            print("⚠️  セッションの読み込みに失敗しました。新規セッションで起動します。\n")
-
-    return None
+            print("⚠️  'y' または 'n' を入力してください。")
 
 
 async def main():
