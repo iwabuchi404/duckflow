@@ -14,12 +14,16 @@ class ShellTool:
     async def run_command(command: str) -> str:
         """
         Execute a shell command.
-        
-        NOTE: For complex commands, pipes, or multi-line scripts, 
+
+        NOTE: For complex commands, pipes, or multi-line scripts,
         provide the command in a Sym-Ops content block (<<< >>>).
-        
+
         Args:
             command: The full command line to execute.
+
+        Returns:
+            コマンドの stdout 出力（stderr がある場合は "stderr:" セクション付き）。
+            タイムアウト（30秒）や例外発生時はエラーメッセージ。
         """
         logger.info(f"Executing shell command: {command}")
         

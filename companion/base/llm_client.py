@@ -10,6 +10,44 @@ from companion.utils.sym_ops import SymOpsProcessor
 
 logger = logging.getLogger(__name__)
 
+# コンテキスト長のフォールバックテーブル（API取得失敗時に使用）
+# キー: モデルIDの部分一致で検索される
+CONTEXT_LENGTH_FALLBACK: Dict[str, int] = {
+    # OpenAI
+    'gpt-4o': 128_000,
+    'gpt-4o-mini': 128_000,
+    'gpt-4-turbo': 128_000,
+    'gpt-4': 8_192,
+    'gpt-3.5-turbo': 16_385,
+    # Anthropic
+    'claude-sonnet-4.5': 200_000,
+    'claude-opus-4': 200_000,
+    'claude-haiku-4.5': 200_000,
+    'claude-3-5-sonnet': 200_000,
+    'claude-3-5-haiku': 200_000,
+    'claude-3-opus': 200_000,
+    'claude-3-sonnet': 200_000,
+    'claude-3-haiku': 200_000,
+    # Google
+    'gemini-2.5-pro': 1_048_576,
+    'gemini-2.5-flash': 1_048_576,
+    'gemini-1.5-pro': 2_097_152,
+    'gemini-1.5-flash': 1_048_576,
+    # Meta (Groq / OpenRouter)
+    'llama-3.3-70b': 131_072,
+    'llama-3.1-70b': 131_072,
+    'llama-3.1-8b': 131_072,
+    # GLM
+    'glm-4': 128_000,
+    # DeepSeek
+    'deepseek-chat': 128_000,
+    'deepseek-r1': 128_000,
+}
+
+# API取得もフォールバックも失敗した場合のデフォルト
+DEFAULT_CONTEXT_LENGTH = 128_000
+
+
 class LLMClient:
     """
     Simplified LLM Client for Duckflow v4.
@@ -234,6 +272,66 @@ class LLMClient:
         except Exception as e:
             logger.error(f"❌ Connection test failed: {e}")
             return False
+
+    async def get_context_length(self) -> int:
+        """
+        モデルのコンテキスト長を取得する。
+
+        取得優先順位:
+            1. OpenRouter API（/api/v1/models でモデル一覧から検索）
+            2. フォールバックテーブル（CONTEXT_LENGTH_FALLBACK）
+            3. デフォルト値（DEFAULT_CONTEXT_LENGTH = 128,000）
+
+        Returns:
+            コンテキスト長（トークン数）
+        """
+        # 1. OpenRouter APIから取得を試みる
+        if self.provider == 'openrouter' and self.api_key:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=10.0) as http:
+                    resp = await http.get(
+                        'https://openrouter.ai/api/v1/models',
+                        headers={'Authorization': f'Bearer {self.api_key}'}
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        models = data.get('data', [])
+                        for m in models:
+                            if m.get('id') == self.model:
+                                ctx = m.get('context_length', 0)
+                                if ctx > 0:
+                                    logger.info(
+                                        f"Context length from OpenRouter API: "
+                                        f"{self.model} = {ctx:,} tokens"
+                                    )
+                                    return ctx
+                        logger.warning(
+                            f"Model {self.model} not found in OpenRouter models list"
+                        )
+                    else:
+                        logger.warning(
+                            f"OpenRouter /models API returned {resp.status_code}"
+                        )
+            except Exception as e:
+                logger.warning(f"Failed to fetch context length from OpenRouter: {e}")
+
+        # 2. フォールバックテーブルから部分一致検索
+        model_lower = self.model.lower()
+        for key, length in CONTEXT_LENGTH_FALLBACK.items():
+            if key in model_lower:
+                logger.info(
+                    f"Context length from fallback table: "
+                    f"{self.model} matched '{key}' = {length:,} tokens"
+                )
+                return length
+
+        # 3. デフォルト値
+        logger.warning(
+            f"Context length unknown for {self.model}, "
+            f"using default: {DEFAULT_CONTEXT_LENGTH:,} tokens"
+        )
+        return DEFAULT_CONTEXT_LENGTH
 
     async def chat(self, messages: List[Dict[str, str]], response_model: Optional[type] = None, temperature: Optional[float] = None, raw: bool = False) -> Union[Dict[str, Any], ActionList, str]:
         """
@@ -487,9 +585,12 @@ class LLMClient:
                     elif tool_name in ("search_archives", "recall"):
                         params["query"] = action.path
                         logger.debug(f"  → Set query={action.path}")
-                    elif tool_name == "note":
+                    elif tool_name in ("note", "response", "report", "duck_call"):
                         params["message"] = action.path
                         logger.debug(f"  → Set message={action.path}")
+                    elif tool_name == "finish":
+                        params["result"] = action.path
+                        logger.debug(f"  → Set result={action.path}")
 
                 # Map content (priority over @path for run_command & investigation)
                 if action.content:

@@ -171,9 +171,14 @@ class DuckAgent:
             # Update ResultSummarizer
             self.result_summarizer.llm = self.llm
             
-            # Update MemoryManager
+            # Update MemoryManager（LLMクライアント + コンテキスト長を再計算）
             self.memory_manager.llm_client = self.llm
-            
+            try:
+                ctx_len = await self.llm.get_context_length()
+                self.memory_manager.configure_from_context_length(ctx_len)
+            except Exception as e:
+                logger.warning(f"Failed to update memory budget after model switch: {e}")
+
             # Persist to config file
             logger.info("Persisting configuration to duckflow.yaml...")
             config.update_config("llm.provider", provider)
@@ -207,6 +212,14 @@ class DuckAgent:
     async def run(self):
         """Main execution loop."""
         self.running = True
+
+        # モデルのコンテキスト長を取得して MemoryManager の max_tokens を動的設定
+        try:
+            context_length = await self.llm.get_context_length()
+            configured = self.memory_manager.configure_from_context_length(context_length)
+            logger.info(f"Dynamic memory budget: {configured:,} tokens (model context: {context_length:,})")
+        except Exception as e:
+            logger.warning(f"Failed to configure dynamic memory budget: {e}")
 
         # 復元セッションのサイズが大きい場合はLLM要約で圧縮する
         if (
@@ -660,12 +673,21 @@ class DuckAgent:
         logger.info(f"Note: {message}")
         return f"Notified: {message}"
 
-    async def action_response(self, message: str) -> str:
+    async def action_response(self, message: str = "") -> str:
         """
         Short interactive response to the user (max 3-4 sentences).
         Use for questions, confirmations, or short acknowledgments.
         Do NOT use for long analysis or investigation results — use 'report' instead.
+
+        Args:
+            message: ユーザーに表示するメッセージ（Markdown対応）
+
+        Returns:
+            実行確認文字列 "Responded to user."
         """
+        if not message:
+            return "No message provided."
+
         self.state.add_message("assistant", message)
 
         from rich.panel import Panel
@@ -683,6 +705,12 @@ class DuckAgent:
         Structured report for investigation results, code analysis, or task completion.
         You MUST include these Markdown headers: ## 要約, ## 詳細, ## 結論.
         Do NOT use for simple questions — use 'response' instead.
+
+        Args:
+            message: レポート本文（Markdown形式、## 要約 / ## 詳細 / ## 結論 を含むこと）
+
+        Returns:
+            実行確認文字列 "Report delivered to user."
         """
         self.state.add_message("assistant", f"[REPORT]\n{message}")
 
@@ -766,6 +794,14 @@ class DuckAgent:
     async def action_run_command(self, command: str) -> str:
         """
         Execute a shell command with mandatory user approval.
+        実行前に必ずユーザーに確認ダイアログを表示する。
+        拒否された場合はエラーメッセージを返す。
+
+        Args:
+            command: 実行するシェルコマンド文字列
+
+        Returns:
+            コマンドの stdout/stderr 出力、またはユーザー拒否時のエラーメッセージ
         """
         ui.print_warning(f"⚠️  Permission requested to run: [bold]{command}[/bold]")
         
@@ -781,10 +817,16 @@ class DuckAgent:
                 f"Do not retry the same command without modification or explanation."
             )
 
-    async def action_finish(self, result: str):
+    async def action_finish(self, result: str = "") -> str:
         """
-        Mark the entire objective as accomplished. 
+        Mark the entire objective as accomplished.
         Provide a concise summary of the work done in the 'result' parameter.
+
+        Args:
+            result: 完了した作業の要約メッセージ
+
+        Returns:
+            実行確認文字列 "Task finished. Result reported to user."
         """
         # Add to history
         self.state.add_message("assistant", f"[FINISHED] {result}")
@@ -800,16 +842,27 @@ class DuckAgent:
         ))
         return "Task finished. Result reported to user."
 
-    async def action_exit(self):
-        """Exit the application."""
+    async def action_exit(self) -> str:
+        """
+        Exit the application.
+        メインループを終了し、セッションを閉じる。
+        このアクションの実行後、エージェントはユーザー入力を受け付けなくなる。
+
+        Returns:
+            実行確認文字列 "Exiting."
+        """
         ui.print_system("Goodbye! 🦆")
         self.running = False
         return "Exiting."
 
     async def action_execute_tasks(self) -> str:
         """
-        Execute all tasks in the current step. NO PARAMETERS NEEDED - operates on the active step automatically.
-        This is a batch execution that runs multiple tasks sequentially.
+        Execute all tasks in the current step. NO PARAMETERS NEEDED.
+        内部ツール: propose_plan → generate_tasks の後に自動的に使用される。
+        アクティブなステップ内のタスクを順次バッチ実行する。
+
+        Returns:
+            実行サマリー（成功数・失敗数を含む）
         """
         if not self.state.current_plan:
             return "No active plan. Create a plan first with 'propose_plan'."
@@ -850,9 +903,15 @@ class DuckAgent:
 
     async def action_investigate(self, reason: str = "") -> str:
         """
-        Switch to INVESTIGATION mode. 
-        Use this when you encounter an unknown error or need to explore 
+        Switch to INVESTIGATION mode.
+        Use this when you encounter an unknown error or need to explore
         to find a root cause before planning.
+
+        Args:
+            reason: 調査を開始する理由（エラー内容や不明点の説明）
+
+        Returns:
+            モード遷移の確認メッセージ
         """
         self.state.enter_investigation_mode()
         ui.print_system(f"🔍 Investigation Mode に切り替えました。理由: {reason}")
@@ -863,6 +922,12 @@ class DuckAgent:
         """
         Submit a testable hypothesis during an investigation.
         Describe what you think is wrong and what you will test next.
+
+        Args:
+            hypothesis: 検証可能な仮説の記述（原因の推測と検証方法）
+
+        Returns:
+            仮説の登録確認と残り試行回数を含むメッセージ
         """
         if self.state.investigation_state is None:
             # Investigationモードでなければ自動的に遷移
@@ -909,11 +974,11 @@ class DuckAgent:
     async def action_execute_batch(self, **kwargs) -> str:
         """
         Sym-Ops v3.1 Fast Path: 複数の独立したアクションをバッチ実行する。
-        パーサーが execute_batch ブロックを個別アクションに展開するため、
-        このツールが直接呼ばれることは通常なく、フォールバック用。
+        LLMが直接呼ぶ必要はない。パーサーが ::execute_batch ブロックを
+        個別アクションに自動展開するため、このメソッドはフォールバック用。
 
         Returns:
-            バッチ実行の結果サマリー
+            パーサー未展開時のフォールバックメッセージ
         """
         return (
             "execute_batch is handled by the parser. "

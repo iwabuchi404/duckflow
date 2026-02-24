@@ -33,6 +33,11 @@ class MemoryManager:
     - 削除されたメッセージの要約
     """
     
+    # システムプロンプト + Few-shot のトークン概算（動的計算のマージン）
+    SYSTEM_PROMPT_RESERVE = 4000
+    # コンテキスト長のうち会話履歴に割り当てる割合
+    HISTORY_RATIO = 0.6
+
     def __init__(
         self,
         llm_client: LLMClient = default_client,
@@ -44,6 +49,29 @@ class MemoryManager:
         self.config = config or ScoringConfig()
         self.prune_count = 0  # 整理実行回数（統計用）
         self.archive_storage = ArchiveStorage()
+
+    def configure_from_context_length(self, context_length: int) -> int:
+        """
+        モデルのコンテキスト長から max_tokens を動的に計算・設定する。
+
+        計算式:
+            max_tokens = (context_length - SYSTEM_PROMPT_RESERVE) * HISTORY_RATIO
+
+        下限 8,000 / 上限 200,000 でクランプ。
+
+        Args:
+            context_length: モデルのコンテキスト長（トークン数）
+
+        Returns:
+            設定された max_tokens 値
+        """
+        raw = int((context_length - self.SYSTEM_PROMPT_RESERVE) * self.HISTORY_RATIO)
+        self.max_tokens = max(8_000, min(raw, 200_000))
+        logger.info(
+            f"MemoryManager max_tokens configured: {self.max_tokens:,} "
+            f"(from context_length={context_length:,})"
+        )
+        return self.max_tokens
         
     def should_prune(self, conversation_history: List[Dict]) -> bool:
         """整理が必要かチェック"""

@@ -104,10 +104,18 @@ class FileOps:
     async def write_file(self, path: str, content: str) -> str:
         """
         Write or overwrite a file with the provided content.
-        Creates parent directories automatically. 
-        
-        NOTE: Use a Sym-Ops content block (<<< >>>) for the 'content' parameter 
+        Creates parent directories automatically.
+        既存ファイルを上書きする場合はユーザー承認が必要。
+
+        NOTE: Use a Sym-Ops content block (<<< >>>) for the 'content' parameter
         when writing multi-line files or code.
+
+        Args:
+            path: 書き込み先のファイルパス（ワークスペースからの相対パス）
+            content: ファイルに書き込む内容
+
+        Returns:
+            成功メッセージ "Successfully wrote to {path}"
         """
         full_path = self._get_full_path(path)
         
@@ -120,7 +128,16 @@ class FileOps:
         return f"Successfully wrote to {path}"
 
     async def list_files(self, path: str = ".") -> List[str]:
-        """List files and directories in a path."""
+        """
+        List files and directories in a path.
+        隠しファイル（.で始まるもの）は除外される。
+
+        Args:
+            path: 一覧を取得するディレクトリパス（デフォルト: "."）
+
+        Returns:
+            "[DIR] path" または "[FILE] path" 形式の文字列リスト（ソート済み）
+        """
         full_path = self._get_full_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"Path not found: {path}")
@@ -138,7 +155,16 @@ class FileOps:
         return sorted(results)
 
     async def mkdir(self, path: str) -> str:
-        """Create a directory."""
+        """
+        Create a directory.
+        親ディレクトリも自動的に作成される（mkdir -p相当）。
+
+        Args:
+            path: 作成するディレクトリパス
+
+        Returns:
+            成功メッセージ "Created directory {path}"
+        """
         full_path = self._get_full_path(path)
         full_path.mkdir(parents=True, exist_ok=True)
         return f"Created directory {path}"
@@ -148,6 +174,15 @@ class FileOps:
         Perform a simple string replacement in a file.
         Replaces ALL occurrences of 'search' with 'replace'.
         Use this for quick fixes when full file rewrite is unnecessary.
+        行番号ベースの編集には edit_lines の方が信頼性が高い。
+
+        Args:
+            path: 対象ファイルパス
+            search: 検索する文字列（完全一致）
+            replace: 置換後の文字列
+
+        Returns:
+            置換結果メッセージ（置換件数、または一致なしの通知）
         """
         full_path = self._get_full_path(path)
         if not full_path.exists():
@@ -242,9 +277,12 @@ class FileOps:
         Supports wildcards like *.py, test_*.md, etc.
 
         Args:
-            pattern: ファイル名のマッチパターン（例: *.py, test_*.md）
-            recursive: サブディレクトリも再帰的に検索するか
-            path: 検索開始ディレクトリ（ワークスペースルートからの相対パス）
+            pattern: ファイル名のマッチパターン（デフォルト: "*"、例: *.py, test_*.md）
+            recursive: サブディレクトリも再帰的に検索するか（デフォルト: True）
+            path: 検索開始ディレクトリ（デフォルト: "."、ワークスペースルートからの相対パス）
+
+        Returns:
+            マッチしたファイルの相対パスのリスト（ソート済み）
         """
         from fnmatch import fnmatch
 
@@ -286,7 +324,16 @@ class FileOps:
         return sorted(results)
 
     async def delete_file(self, path: str) -> str:
-        """Delete a file. This is a dangerous operation - use with caution."""
+        """
+        Delete a file. This is a dangerous operation - use with caution.
+        実行前にユーザー承認が必要。ディレクトリの削除には対応しない。
+
+        Args:
+            path: 削除するファイルパス
+
+        Returns:
+            成功メッセージ "Deleted file: {path}"
+        """
         full_path = self._get_full_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {path}")

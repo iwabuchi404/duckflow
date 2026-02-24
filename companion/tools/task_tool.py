@@ -22,7 +22,12 @@ class TaskTool:
 
     async def generate_tasks(self) -> str:
         """
-        Generate tasks for the current step. NO PARAMETERS NEEDED - operates on the active step automatically.
+        Generate tasks for the current step. NO PARAMETERS NEEDED.
+        アクティブなステップの説明をもとに、Sub-LLMがタスクリストを自動生成する。
+
+        Returns:
+            生成されたタスクのリスト（各タスクに title, description, action を含む dict）、
+            またはエラーメッセージ
         """
         if not self.state.current_plan:
             return "No active plan."
@@ -103,7 +108,17 @@ class TaskTool:
             return f"Failed to generate tasks: {e}"
 
     async def mark_task_complete(self, task_index: int = 0) -> str:
-        """Mark a specific task as complete."""
+        """
+        Mark a specific task as complete.
+
+        Args:
+            task_index: 完了にするタスクの0始まりインデックス（デフォルト: 0）
+
+        Returns:
+            成功時: "Task '{title}' completed."
+            プラン/ステップなし: エラーメッセージ
+            範囲外のインデックス: "Invalid task index."
+        """
         if not self.state.current_plan:
             return "No active plan."
         

@@ -22,6 +22,12 @@ class SubLLMTools:
         """
         Summarize long text or conversation logs into a concise bullet-point format.
         Use this to manage context window consumption.
+
+        Args:
+            content: 要約対象のテキスト（会話ログ、ファイル内容等）
+
+        Returns:
+            箇条書き形式の要約テキスト
         """
         logger.info("Tool summarize_context called")
         return await self.manager.summarize(content)
@@ -30,9 +36,12 @@ class SubLLMTools:
         """
         Generate a structural outline (Code Map) of a file.
         Includes classes, functions, and their signatures without bodies.
-        
+
         Args:
             path: Path to the target source file.
+
+        Returns:
+            クラス・関数のシグネチャ一覧（コード本体なし）、またはエラーメッセージ
         """
         logger.info(f"Tool analyze_structure called for {path}")
         try:

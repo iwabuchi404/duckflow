@@ -14,6 +14,12 @@ class PlanTool:
         """
         Create a plan from LLM-generated Markdown.
         The goal parameter contains the full plan in Markdown format.
+
+        Args:
+            goal: Markdown形式の計画全文。"## Step N: タイトル" 形式でステップを記述する。
+
+        Returns:
+            作成されたステップ数と次のアクションの案内メッセージ
         """
         import logging
         logger = logging.getLogger(__name__)
@@ -96,7 +102,15 @@ class PlanTool:
         return steps
 
     async def mark_step_complete(self) -> str:
-        """Mark the current step as complete and advance to the next."""
+        """
+        Mark the current step as complete and advance to the next.
+        パラメータ不要 — アクティブなステップを自動的に完了にする。
+
+        Returns:
+            次のステップがある場合: "Step '{title}' completed. Next step: '{next_title}'"
+            全ステップ完了の場合: "Step '{title}' completed. All steps finished!"
+            プランなし/ステップなしの場合: エラーメッセージ
+        """
         if not self.state.current_plan:
             return "No active plan."
         
