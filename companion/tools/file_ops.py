@@ -41,14 +41,6 @@ class FileOps:
         """
         Read file content with line-based pagination.
         Use this to explore code or data. For large files, use start_line to paginate.
-        
-        Args:
-            path: Path to the target file.
-            start_line: Line number to start reading from (1-indexed).
-            max_lines: Number of lines to read in this chunk (default 500).
-        
-        Returns:
-            Dict containing 'content', 'size_bytes', and 'has_more' flag.
         """
         import itertools
         
@@ -110,21 +102,9 @@ class FileOps:
         NOTE: Use a Sym-Ops content block (<<< >>>) for the 'content' parameter
         when writing multi-line files or code.
 
-        Args:
-            path: 書き込み先のファイルパス（ワークスペースからの相対パス）
-            content: ファイルに書き込む内容
-
-        Returns:
-            成功メッセージ "Successfully wrote to {path}"
+        Write or overwrite a file with the provided content.
+        Creates parent directories automatically.
         """
-        full_path = self._get_full_path(path)
-        
-        # Create parent directories
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(full_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        
         return f"Successfully wrote to {path}"
 
     async def list_files(self, path: str = ".") -> List[str]:
@@ -147,16 +127,9 @@ class FileOps:
             # Ignore hidden files/dirs (starting with .)
             if item.name.startswith("."):
                 continue
-                
-            prefix = "[DIR] " if item.is_dir() else "[FILE]"
-            rel_path = item.relative_to(self.workspace_root)
-            results.append(f"{prefix} {rel_path}")
-        
-        return sorted(results)
-
-    async def mkdir(self, path: str) -> str:
         """
-        Create a directory.
+        List files and directories in a path.
+        隠しファイル（.で始まるもの）は除外される。
         親ディレクトリも自動的に作成される（mkdir -p相当）。
 
         Args:

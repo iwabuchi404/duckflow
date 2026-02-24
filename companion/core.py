@@ -87,7 +87,7 @@ class DuckAgent:
         self.register_tool("write_file", file_ops.write_file)
         self.register_tool("create_file", file_ops.write_file)  # Alias for Sym-Ops v2
         self.register_tool("list_directory", file_ops.list_files)
-        self.register_tool("mkdir", file_ops.mkdir)
+        # self.register_tool("mkdir", file_ops.mkdir)
         self.register_tool("replace_in_file", file_ops.replace_in_file)
         self.register_tool("edit_lines", file_ops.edit_lines)
         self.register_tool("edit_file", file_ops.write_file)  # Alias - Changed to write_file (overwrite) as agent uses it for full content
@@ -192,22 +192,23 @@ class DuckAgent:
             return False
 
     def get_tool_descriptions(self) -> str:
-        """Generate tool descriptions for the system prompt (Sym-Ops v3.2)."""
+        """Generate compact tool descriptions for the system prompt (Sym-Ops v3.2)."""
         descriptions = []
         import inspect
         for name, func in self.tools.items():
-            # Get cleaned docstring
-            doc = inspect.getdoc(func) or "No description available."
+            # Docstringの最初の1段落（概要）のみを抽出
+            full_doc = inspect.getdoc(func) or "No description."
+            summary = full_doc.split('\n\n')[0].replace('\n', ' ')
             
-            # Get signature
+            # シグネチャを取得
             try:
                 sig = inspect.signature(func)
-            except ValueError:
+            except (ValueError, TypeError):
                 sig = "(...)"
             
-            descriptions.append(f"### {name}{sig}\n{doc}")
+            descriptions.append(f"- {name}{sig}: {summary}")
         
-        return "\n\n".join(descriptions)
+        return "\n".join(descriptions)
 
     async def run(self):
         """Main execution loop."""

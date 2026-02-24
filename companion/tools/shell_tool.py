@@ -11,17 +11,10 @@ class ShellTool:
     """
     
     @staticmethod
-    async def run_command(command: str) -> str:
+    async def run_command(self, command: str) -> str:
         """
-        Execute a shell command.
-
-        NOTE: For complex commands, pipes, or multi-line scripts,
-        provide the command in a Sym-Ops content block (<<< >>>).
-
-        Args:
-            command: The full command line to execute.
-
-        Returns:
+        :: Execute @ a shell command with mandatory user approval.
+        Returns command output (stdout/stderr).
             コマンドの stdout 出力（stderr がある場合は "stderr:" セクション付き）。
             タイムアウト（30秒）や例外発生時はエラーメッセージ。
         """
