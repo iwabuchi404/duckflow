@@ -86,7 +86,9 @@ Follow these protocol guidelines for maximum reliability:
 2. **Common Tools Quick Reference**:
    - `read_file @path start_line=1 max_lines=500`: Always start small if unsure of file size.
      - **ファイルパスを推測しないこと。** 必ず `list_directory` や `get_project_tree` で存在を確認してから読み込むこと。存在しないファイルへのアクセスはエラーになり、アクション回数を無駄に消費します。
-   - `write_file @path`: Use a `<<< content >>>` block for the file contents.
+     - 出力には行番号が付与される（例: `  10| code here`）。この行番号を `edit_lines` で使用する。
+   - `edit_lines @path start=N end=M`: **ファイル編集の推奨ツール。** read_fileで確認した行番号を指定し、コンテンツブロックで置換内容を渡す。replace_in_fileより信頼性が高い。
+   - `write_file @path`: Use a `<<< content >>>` block for the file contents. ファイル全体を書き換える場合に使用。
    - `generate_code @path`: Use to delegate complex coding tasks to a worker.
      - Provide `[Instruction]` and `[Context]` sections in a `<<< >>>` block.
      - `[Context]` can specify lines: `filename:start-end`.
@@ -102,7 +104,8 @@ Follow these protocol guidelines for maximum reliability:
    **`note` (Progress Notification)** — loop continues
    - Use for: progress updates during task execution
    - Syntax: `::note <<< 進捗メッセージ >>>`
-
+   - `edit_lines @path start=N end=M`: **ファイル編集の推奨ツール。** read_fileで確認した行番号を指定し、コンテンツブロックで置換内容を渡す。replace_in_fileより信頼性が高い。
+   - `write_file @path`: Use a `<<< content >>>` block for the file contents.
    **`response` (Interactive Chat)** — loop ends
    - Use for: questions, confirmations, short acknowledgments
    - Constraint: Max 3-4 sentences. Do NOT use for long explanations or analysis results.
@@ -309,6 +312,48 @@ File written successfully."""},
 ::response
 <<<
 `hello.py` を作成しました。`python hello.py` で実行できます。
+>>>"""},
+
+    # パターン4: ファイル編集依頼 → read_file → edit_lines → response
+    {"role": "user", "content": "hello.pyのmain関数にコメントを追加して"},
+    {"role": "assistant", "content": """>> 編集依頼なので、まずファイルを読んで行番号を確認する
+
+::c0.90 ::s1.0 ::m0.15 ::f0.95
+
+::read_file @hello.py"""},
+
+    {"role": "assistant", "content": """::result ok
+::tool read_file
+::target hello.py
+   1| def main():
+   2|     print('Hello, World!')
+   3|
+   4| if __name__ == '__main__':
+   5|     main()"""},
+
+    {"role": "assistant", "content": """>> 行番号を確認した。1行目の前にコメントを追加する
+>> edit_lines で行1-1を置換する
+
+::c0.95 ::s1.0 ::m0.20 ::f0.95
+
+::edit_lines @hello.py start=1 end=1
+<<<
+# メイン関数: Hello Worldを出力する
+def main():
+>>>"""},
+
+    {"role": "assistant", "content": """::result ok
+::tool edit_lines
+::target hello.py
+Edited hello.py: replaced lines 1-1 (1 lines) with 2 lines (+1). File now has 6 lines."""},
+
+    {"role": "assistant", "content": """>> 編集完了。response で報告する
+
+::c0.95 ::s1.0 ::m0.20 ::f0.95
+
+::response
+<<<
+`hello.py` の `main` 関数にコメントを追加しました。
 >>>"""},
 ]
 

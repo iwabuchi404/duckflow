@@ -460,7 +460,7 @@ class LLMClient:
                 # Map path/command from @ notation
                 # IMPORTANT: Tool signatures use 'path' not 'file_path'!
                 if action.path:
-                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "find_files", "generate_code", "analyze_structure", "get_project_tree"):
+                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "edit_lines", "find_files", "generate_code", "analyze_structure", "get_project_tree"):
                         # read_file の位置引数対応: "path 1 500" → path, start_line=1, max_lines=500
                         if tool_name == "read_file":
                             parts = action.path.split()
@@ -498,7 +498,7 @@ class LLMClient:
                         # フォーマット: search=... と replace=... をコンテンツから解析
                         self._parse_replace_content(action.content, params)
                         logger.debug(f"  → Parsed replace_in_file: search={params.get('search', '')[:30]}, replace={params.get('replace', '')[:30]}")
-                    elif tool_name in ("create_file", "edit_file", "write_file", "generate_code", "summarize_context"):
+                    elif tool_name in ("create_file", "edit_file", "write_file", "edit_lines", "generate_code", "summarize_context"):
                         params["content"] = action.content
                         logger.debug(f"  → Set content (length={len(action.content)})")
                     elif tool_name == "run_command":

@@ -79,8 +79,13 @@ class FileOps:
                 except StopIteration:
                     has_more = False
             
-            content = "".join(content_lines)
-            
+            # 行番号付きで整形（LLMがedit_linesで行番号を参照できるようにする）
+            numbered_lines = []
+            for i, line in enumerate(content_lines, start=start_line):
+                # 行番号を右寄せ（最大4桁）+ パイプ区切り
+                numbered_lines.append(f"{i:4d}| {line.rstrip('\n')}")
+            content = "\n".join(numbered_lines)
+
             # If empty but file exists
             if not content and start_line == 1:
                 content = "(Empty file)"
@@ -167,6 +172,69 @@ class FileOps:
             f.write(new_content)
         
         return f"Replaced {count} occurrence(s) of '{search}' in {path}"
+
+    async def edit_lines(self, path: str, start: int, end: int, content: str) -> str:
+        """
+        行番号ベースのファイル編集。指定した行範囲を新しいコンテンツで置換する。
+        read_file で表示される行番号を使って編集位置を指定する。
+        replace_in_file より信頼性が高い（完全一致検索が不要）。
+
+        Args:
+            path: 編集対象のファイルパス
+            start: 置換開始行（1-indexed、この行を含む）
+            end: 置換終了行（1-indexed、この行を含む）
+            content: 置換後の新しいコンテンツ（複数行可）
+
+        Returns:
+            編集結果のサマリー
+        """
+        full_path = self._get_full_path(path)
+        if not full_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if not full_path.is_file():
+            raise IsADirectoryError(f"Path is a directory: {path}")
+
+        # 型変換（パーサーから文字列で渡される場合がある）
+        start = int(start)
+        end = int(end)
+
+        # バリデーション
+        if start < 1:
+            return f"Error: start must be >= 1, got {start}"
+        if end < start:
+            return f"Error: end ({end}) must be >= start ({start})"
+
+        with open(full_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        total_lines = len(lines)
+        if start > total_lines:
+            return f"Error: start ({start}) exceeds file length ({total_lines} lines)"
+
+        # end がファイル長を超える場合はクランプ
+        end = min(end, total_lines)
+
+        # 置換実行: lines[start-1:end] を新しいコンテンツで置き換え
+        # content の末尾に改行がなければ追加
+        new_lines = content.split('\n')
+        new_lines = [line + '\n' for line in new_lines]
+
+        old_section = lines[start - 1:end]
+        lines[start - 1:end] = new_lines
+
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+
+        old_count = end - start + 1
+        new_count = len(new_lines)
+        delta = new_count - old_count
+        delta_str = f"+{delta}" if delta > 0 else str(delta)
+
+        return (
+            f"Edited {path}: replaced lines {start}-{end} ({old_count} lines) "
+            f"with {new_count} lines ({delta_str}). "
+            f"File now has {len(lines)} lines."
+        )
 
     async def find_files(self, pattern: str = "*", recursive: bool = True, path: str = ".") -> List[str]:
         """
