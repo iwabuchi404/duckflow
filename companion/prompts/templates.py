@@ -34,11 +34,10 @@ You interact with the system ONLY through the tools listed below. Use only the t
    - **Inline**: `::tool_name @path key=value`
    - **Content Block**: Use `<<< >>>` for large content. Content blocks contain raw text only (no Markdown formatting).
 
-2. **File Editing Priority**:
-   1. `edit_lines` (Recommended) — Use line numbers from `read_file`.
-      - **CRITICAL**: Before using `edit_lines`, you MUST output a `>>` thought stating exactly which original lines you are replacing. (e.g., `>> Replacing lines 10-12: 'def old_func():...'`)
-   2. `generate_code` — For complex code generation (delegates to a sub-worker).
-   3. `write_file` — Only for complete file rewrites or new files.
+    1. `edit_lines` (Recommended) — 行番号ベースの編集。実行後、自動的にプレビューが返却される。
+       - **CRITICAL**: 実行前に必ず `read_file` で対象行を確認し、`>>` 思考ブロックで置換対象を明記せよ。
+    2. `generate_code` — 複雑なコード生成をサブワーカーに委譲する。
+    3. `write_file` — 新規作成または全書き換えに使用。
 
 3. **Common Tools Quick Reference**:
    - `read_file @path start_line=1 max_lines=500`: Verify paths with `list_directory` first. Output includes line numbers (e.g., `10| code`).

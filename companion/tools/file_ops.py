@@ -101,10 +101,12 @@ class FileOps:
 
         NOTE: Use a Sym-Ops content block (<<< >>>) for the 'content' parameter
         when writing multi-line files or code.
-
-        Write or overwrite a file with the provided content.
-        Creates parent directories automatically.
         """
+
+        full_path = self._get_full_path(path)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(content)
         return f"Successfully wrote to {path}"
 
     async def list_files(self, path: str = ".") -> List[str]:
@@ -121,25 +123,20 @@ class FileOps:
         full_path = self._get_full_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"Path not found: {path}")
-        
         results = []
         for item in full_path.iterdir():
-            # Ignore hidden files/dirs (starting with .)
             if item.name.startswith("."):
                 continue
-        """
-        List files and directories in a path.
-        隠しファイル（.で始まるもの）は除外される。
-        親ディレクトリも自動的に作成される（mkdir -p相当）。
+            prefix = "[DIR] " if item.is_dir() else "[FILE]"
+            rel_path = item.relative_to(self.workspace_root)
+            results.append(f"{prefix} {rel_path}")
+        return sorted(results)
 
-        Args:
-            path: 作成するディレクトリパス
-
-        Returns:
-            成功メッセージ "Created directory {path}"
-        """
+    async def mkdir(self, path: str) -> str:
+        """Create a directory (mkdir -p)."""
         full_path = self._get_full_path(path)
         full_path.mkdir(parents=True, exist_ok=True)
+        return f"Created directory {path}"
         return f"Created directory {path}"
 
     async def replace_in_file(self, path: str, search: str, replace: str) -> str:
@@ -243,6 +240,52 @@ class FileOps:
             f"with {new_count} lines ({delta_str}). "
             f"File now has {len(lines)} lines."
         )
+
+    async def edit_lines(self, path: str, start: int, end: int, content: str) -> str: 
+        """ 行番号ベースのファイル編集（事後検証プレビュー付き）。
+        指定した行範囲を新しいコンテンツで置換し、前後のコンテキストを返却する。 """ 
+        full_path = self._get_full_path(path) 
+        if not full_path.exists(): 
+            raise FileNotFoundError(f"File not found: {path}")
+        start, end = int(start), int(end)
+        if start < 1 or end < start: 
+            return f"Error: Invalid range {start}-{end}"
+                                                                                                                                                                  
+        with open(full_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+                                                                                                                                                                  
+        if start > len(lines):
+            return f"Error: start ({start}) exceeds file length ({len(lines)})"
+                                                                                                                                                                  
+        # 編集の実行
+        new_content_lines = [line + '\n' for line in content.split('\n')]
+        old_count = min(end, len(lines)) - start + 1
+        lines[start - 1:end] = new_content_lines
+                                                                                                                                                                  
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+                                                                                                                                                                  
+        # --- 事後検証プレビューの作成 ---
+        # 編集箇所の前後5行を含めて読み直す
+        preview_start = max(1, start - 5)
+        preview_end = min(len(lines), start + len(new_content_lines) + 5)
+                                                                                                                                                                  
+        preview_lines = []
+        for i in range(preview_start, preview_end + 1):
+            prefix = ">>>" if start <= i < start + len(new_content_lines) else "   "
+            line_content = lines[i-1].rstrip('\n')
+            preview_lines.append(f"{prefix} {i:4d}| {line_content}")
+                                                                                                                                                                  
+        preview_text = "\n".join(preview_lines)
+                                                                                                                                                                  
+        return (
+            f"Successfully edited {path}. Replaced {old_count} lines with {len(new_content_lines)} lines.\n"
+            f"--- Post-edit Preview ({preview_start}-{preview_end}) ---\n"
+            f"{preview_text}\n"
+            f"--- End of Preview ---"
+        )
+                
+
 
     async def find_files(self, pattern: str = "*", recursive: bool = True, path: str = ".") -> List[str]:
         """
