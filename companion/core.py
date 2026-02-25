@@ -191,23 +191,97 @@ class DuckAgent:
             logger.error(f"❌ Error switching model: {e}")
             return False
 
-    def get_tool_descriptions(self) -> str:
-        """Generate compact tool descriptions for the system prompt (Sym-Ops v3.2)."""
-        descriptions = []
+    # モード別ツールマッピング
+    # カテゴリ別にツールを分類し、各モードで公開するツールを定義
+    MODE_TOOL_MAPPING = {
+        "planning": {
+            # ファイル読み取り
+            "read_file", "list_directory", "find_files", "get_project_tree",
+            # 分析
+            "analyze_structure",
+            # 実行
+            "run_command",
+            # Sub-LLM
+            "summarize_context", "generate_code",
+            # 調査
+            "investigate", "submit_hypothesis", "finish_investigation",
+            # 出力（常時公開）
+            "note", "response", "report", "finish", "exit", "duck_call", "show_status",
+            # 記憶
+            "search_archives", "recall",
+        },
+        "investigation": {
+            # ファイル読み取り
+            "read_file", "list_directory", "find_files", "get_project_tree",
+            # 分析
+            "analyze_structure",
+            # 計画
+            "propose_plan", "generate_tasks",
+            # Sub-LLM
+            "summarize_context",
+            # 調査
+            "investigate", "submit_hypothesis", "finish_investigation",
+            # 出力（常時公開）
+            "note", "response", "report", "finish", "exit", "duck_call", "show_status",
+            # 記憶
+            "search_archives", "recall",
+        },
+        "task": {
+            # ファイル読み取り
+            "read_file", "list_directory", "find_files", "get_project_tree",
+            # ファイル編集
+            "replace_in_file", "edit_lines", "edit_file", "write_file", "create_file", "delete_file",
+            # 分析
+            "analyze_structure",
+            # 完了管理
+            "mark_step_complete", "mark_task_complete",
+            # 実行
+            "run_command", "execute_tasks", "execute_batch",
+            # 出力（常時公開）
+            "note", "response", "report", "finish", "exit", "duck_call", "show_status",
+            # 記憶
+            "search_archives", "recall",
+        },
+    }
+
+    def get_tool_descriptions(self, mode: str = None) -> str:
+        """
+        Generate compact tool descriptions for the system prompt (Sym-Ops v3.2).
+
+        Args:
+            mode: エージェントの現在のモード ("planning", "investigation", "task")
+                  Noneの場合は全ツールを返す（後方互換性のため）
+
+        Returns:
+            ツールの説明テキスト（1行1ツール形式）
+        """
         import inspect
+
+        # モードに基づいてツールをフィルタリング
+        if mode and mode in self.MODE_TOOL_MAPPING:
+            allowed_tools = self.MODE_TOOL_MAPPING[mode]
+        else:
+            # モードが指定されていない場合は全ツールを公開
+            allowed_tools = None
+
+        descriptions = []
         for name, func in self.tools.items():
+            # モードによるフィルタリング
+            if allowed_tools is not None and name not in allowed_tools:
+                continue
+
             # Docstringの最初の1段落（概要）のみを抽出
             full_doc = inspect.getdoc(func) or "No description."
             summary = full_doc.split('\n\n')[0].replace('\n', ' ')
-            
+
             # シグネチャを取得
             try:
                 sig = inspect.signature(func)
             except (ValueError, TypeError):
                 sig = "(...)"
-            
+
             descriptions.append(f"- {name}{sig}: {summary}")
-        
+
         return "\n".join(descriptions)
 
     async def run(self):
@@ -308,7 +382,7 @@ class DuckAgent:
 
                     # system_promptを介入・通常両方で使うため先に生成
                     prompt_builder = PromptBuilder(self.state)
-                    system_prompt = prompt_builder.build(self.get_tool_descriptions())
+                    system_prompt = prompt_builder.build(self.get_tool_descriptions(self.state.current_mode.value))
                     # エラーフィードバックはプロンプトに注入済み。1ターン限りなのでクリア
                     self.state.last_syntax_errors = []
 
