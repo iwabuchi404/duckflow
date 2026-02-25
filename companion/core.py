@@ -127,7 +127,7 @@ class DuckAgent:
 
         # status: LLMが "::status ok" のようにプロトコル報告として出力するため、
         # 無害なno-opとして登録し、エラーやフィルタ警告を防ぐ
-        self.register_tool("status", self._noop)
+        self.register_tool("status", self.action_status)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
@@ -740,7 +740,6 @@ class DuckAgent:
     async def action_status(self) -> str:
         """
         Display the current agent status including vitals, phase, and active plan/tasks.
-        This tool provides a comprehensive status overview for the user.
         """
         # Build status report
         status_lines = [
