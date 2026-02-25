@@ -77,7 +77,7 @@ class DuckUI:
             speaker_style = "info"
         
         self.console.print(f"[{speaker_style}]{prefix}:[/{speaker_style}]")
-        self.console.print(f"  {message}\n")
+        self.console.print(f"{message}\n", markup=False)
 
     def print_separator(self):
         """Print a separator line."""
@@ -99,23 +99,32 @@ class DuckUI:
 
     def print_result(self, result: str, is_error: bool = False):
         """Print the result of an action."""
+        from rich.markup import escape  # 安全のためにここでインポート
+        
         style = "error" if is_error else "success"
         icon = "❌" if is_error else "✅"
         
+        # 外部からのテキストの [] を無害化する
+        safe_result = escape(str(result))
+        
         # If result is long or contains newlines, use a panel
-        if "\n" in result or len(result) > 100:
+        if "\n" in safe_result or len(safe_result) > 100:
             self.console.print(Panel(
-                result,
+                safe_result,  # エスケープ済みの変数を渡す
                 title=f"{icon} Result",
                 border_style=style,
                 expand=False
             ))
         else:
-            self.console.print(f"   [{style}]{icon} Result: {result}[/{style}]")
+            self.console.print(f"   [{style}]{icon} Result: {safe_result}[/{style}]")
 
     def print_error(self, message: str):
         """Print a general error message."""
-        self.console.print(f"[error]❌ Error: {message}[/error]")
+        from rich.markup import escape  
+        
+        # エラーメッセージ内の [] も無害化する
+        safe_message = escape(str(message))
+        self.console.print(f"[error]❌ Error: {safe_message}[/error]")
 
     def print_info(self, message: str):
         """Print an info message."""
@@ -319,6 +328,25 @@ class DuckUI:
             self.console.print(Panel(content, title=f"[{style}]{title}[/{style}]", border_style=style))
             
         self.console.print(Rule("[bold yellow]DEBUG CONTEXT END[/bold yellow]"))
+
+
+    async def select_model_interactive(self, models: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """
+        Display an interactive model selector using prompt_toolkit with arrow keys.
+        Returns the selected model dict or None if cancelled.
+        """
+        from companion.ui.model_selector import select_model_interactive as _select_model
+
+        if not models:
+            self.print_warning("利用可能なモデルがありません")
+            return None
+
+        try:
+            selected = await _select_model(models, title="モデルを選択")
+            return selected
+        except Exception as e:
+            self.print_error(f"モデル選択UIの起動に失敗しました: {e}")
+            return None
 
     async def get_user_input(self, prompt: str = "You: ") -> str:
         """Get input from user with prompt_toolkit for history and completion."""

@@ -161,7 +161,7 @@ class DuckPacemaker:
             )
 
         # 7. Confidence低下
-        if vitals.confidence < 0.6:
+        if vitals.confidence < 0.4:
             return InterventionReason(
                 type="CONFIDENCE_LOW",
                 message="現在の計画に自信が持てていません。",
@@ -172,10 +172,10 @@ class DuckPacemaker:
     
     def _detect_stagnation(self) -> bool:
         """停滞検知：同じアクションや結果の繰り返し"""
-        if len(self.execution_history) < 3:
+        if len(self.execution_history) < 4:
             return False
 
-        recent = self.execution_history[-3:]
+        recent = self.execution_history[-4:]
 
         # 1. 完全一致アクションの繰り返し
         actions = [item["action"] for item in recent]

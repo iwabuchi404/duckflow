@@ -1,16 +1,17 @@
-import json
 from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
-from companion.state.agent_state import AgentState, Task, TaskStatus
+from companion.state.agent_state import AgentState, Task, TaskStatus, Action
 from companion.base.llm_client import default_client, LLMClient
+from companion.tools.results import ToolResult
+from companion.ui.console import ui
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TaskListProposal(BaseModel):
     """Schema for LLM response when proposing tasks."""
     tasks: List[Dict[str, Any]] = Field(..., description="List of tasks. Each task has 'title', 'description', and optional 'action'.")
-
-from companion.ui.console import ui
-from companion.state.agent_state import Action
 
 class TaskTool:
     """
@@ -20,24 +21,27 @@ class TaskTool:
         self.state = state
         self.llm = llm_client
 
-    async def generate_tasks(self) -> str:
+    async def generate_tasks(self) -> ToolResult:
         """
         Generate tasks for the current step. NO PARAMETERS NEEDED.
         アクティブなステップの説明をもとに、Sub-LLMがタスクリストを自動生成する。
 
         Returns:
-            生成されたタスクのリスト（各タスクに title, description, action を含む dict）、
-            またはエラーメッセージ
+            ToolResult: 成功時は生成されたタスクリスト、エラー時はエラー情報を含む
         """
         if not self.state.current_plan:
-            return "No active plan."
+            return ToolResult.error("generate_tasks", "plan", "No active plan.")
         
         current_step = self.state.current_plan.get_current_step()
         if not current_step:
-            return "No active step."
+            return ToolResult.error("generate_tasks", "step", "No active step.")
         
         if current_step.tasks:
-            return f"Step '{current_step.title}' already has {len(current_step.tasks)} tasks."
+            return ToolResult.ok(
+                "generate_tasks", 
+                current_step.title,
+                f"Step '{current_step.title}' already has {len(current_step.tasks)} tasks."
+            )
 
         ui.print_thinking(f"Planning: Generating tasks for step '{current_step.title}'...")
 
@@ -55,7 +59,7 @@ class TaskTool:
         
         [Explicit Action Binding]
         If a task involves a deterministic tool call, provide an 'action' object.
-        Available Tools: write_file, run_command, read_file
+        Available Tools: write_file, run_command, read_file, edit_lines
         
         Action Schema: {{ "name": "tool_name", "parameters": {{ ... }} }}
         
@@ -94,7 +98,7 @@ class TaskTool:
                     try:
                         task.action = Action(**action_data)
                     except Exception as e:
-                        print(f"Warning: Failed to parse action for task '{task.title}': {e}")
+                        logger.warning(f"Failed to parse action for task '{task.title}': {e}")
                 
                 tasks_formatted.append({
                     "title": task.title,
@@ -102,12 +106,12 @@ class TaskTool:
                     "action": action_data
                 })
             
-            return tasks_formatted
+            return ToolResult.ok("generate_tasks", current_step.title, tasks_formatted)
             
         except Exception as e:
-            return f"Failed to generate tasks: {e}"
+            return ToolResult.error("generate_tasks", current_step.title, str(e))
 
-    async def mark_task_complete(self, task_index: int = 0) -> str:
+    async def mark_task_complete(self, task_index: int = 0) -> ToolResult:
         """
         Mark a specific task as complete.
 
@@ -115,20 +119,26 @@ class TaskTool:
             task_index: 完了にするタスクの0始まりインデックス（デフォルト: 0）
 
         Returns:
-            成功時: "Task '{title}' completed."
-            プラン/ステップなし: エラーメッセージ
-            範囲外のインデックス: "Invalid task index."
+            ToolResult: 成功時は完了したタスク情報、エラー時はエラー情報を含む
         """
         if not self.state.current_plan:
-            return "No active plan."
+            return ToolResult.error("mark_task_complete", "plan", "No active plan.")
         
         current_step = self.state.current_plan.get_current_step()
         if not current_step:
-            return "No active step."
+            return ToolResult.error("mark_task_complete", "step", "No active step.")
             
         if 0 <= task_index < len(current_step.tasks):
             task = current_step.tasks[task_index]
             task.status = TaskStatus.COMPLETED
-            return f"Task '{task.title}' completed."
+            return ToolResult.ok(
+                "mark_task_complete",
+                task.title,
+                f"Task '{task.title}' completed."
+            )
         
-        return "Invalid task index."
+        return ToolResult.error(
+            "mark_task_complete",
+            str(task_index),
+            f"Invalid task index. Valid range: 0-{len(current_step.tasks)-1 if current_step.tasks else 'N/A'}"
+        )

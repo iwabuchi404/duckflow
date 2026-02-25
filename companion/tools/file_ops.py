@@ -17,13 +17,14 @@ class FileOps:
             self.workspace_root.mkdir(parents=True, exist_ok=True)
         print(f"📂 Workspace set to: {self.workspace_root}")
 
-    def _is_safe_path(self, path: str) -> bool:
-        """Duck Keeper: Ensure path is within workspace."""
+    def _is_safe_path(self, path: str) -> bool: 
+        """Duck Keeper: Ensure path is within workspace.""" 
         try:
             target_path = (self.workspace_root / path).resolve()
-            return self.workspace_root in target_path.parents or target_path == self.workspace_root
+            return ( self.workspace_root in target_path.parents or target_path == self.workspace_root or target_path.parent == self.workspace_root  ) 
         except Exception:
             return False
+
 
     def _get_full_path(self, path: str) -> Path:
         if not self._is_safe_path(path):
@@ -37,15 +38,14 @@ class FileOps:
         except Exception:
             return False
 
-    async def read_file(self, path: str, start_line: int = 1, max_lines: int = 500) -> dict:
+    async def read_file(self, path: str, start: int = 1, end: int = 300) -> dict:
         """
-        Read file content with line-based pagination.
-        Use this to explore code or data. For large files, use start_line to paginate.
+        Read file content with line-based pagination.For large files, use start to paginate.
         """
         import itertools
         
-        start_line = max(1, int(start_line))
-        max_lines = max(1, int(max_lines))
+        start_line = max(1, int(start))
+        max_lines = max(1, int(end))
 
         full_path = self._get_full_path(path)
         if not full_path.exists():
@@ -137,7 +137,6 @@ class FileOps:
         full_path = self._get_full_path(path)
         full_path.mkdir(parents=True, exist_ok=True)
         return f"Created directory {path}"
-        return f"Created directory {path}"
 
     async def replace_in_file(self, path: str, search: str, replace: str) -> str:
         """
@@ -178,53 +177,99 @@ class FileOps:
         
         return f"Replaced {count} occurrence(s) of '{search}' in {path}"
 
-    async def edit_lines(self, path: str, start: int, end: int, content: str) -> str: 
-        """ 行番号ベースのファイル編集（事後検証プレビュー付き）。
-        指定した行範囲を新しいコンテンツで置換し、前後のコンテキストを返却する。 """ 
+    async def edit_lines(self, path: str, start: int, end: int, content: str, dry_run: bool = True) -> str:
+        """ 
+        行番号ベースのファイル編集（事前・事後検証プレビュー付き）。
+        
+        Args:
+            path: 編集対象ファイルパス
+            start: 開始行番号（1始まり）
+            end: 終了行番号（1始まり）
+            content: 置換する新しい内容（複数行可）
+            dry_run: Trueの場合、ファイルを変更せずプレビューのみ返す（デフォルト: True）
+        
+        Returns:
+            dry_run=True: 事前プレビュー（変更予定内容）
+            dry_run=False: 編集結果と事後プレビュー
+        """ 
         full_path = self._get_full_path(path) 
         if not full_path.exists(): 
             raise FileNotFoundError(f"File not found: {path}")
+
+        dry_run = str(dry_run).lower() == 'true'
+
         start, end = int(start), int(end)
         if start < 1 or end < start: 
             return f"Error: Invalid range {start}-{end}"
-                                                                                                                                                                  
+        
         with open(full_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
-                                                                                                                                                                  
+        
         if start > len(lines):
             return f"Error: start ({start}) exceeds file length ({len(lines)})"
-                                                                                                                                                                  
-        # 編集の実行
+        
+        # Prepare new content
         new_content_lines = [line + '\n' for line in content.split('\n')]
         old_count = min(end, len(lines)) - start + 1
-        lines[start - 1:end] = new_content_lines
-                                                                                                                                                                  
-        with open(full_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
-                                                                                                                                                                  
-        # --- 事後検証プレビューの作成 ---
-        # 編集箇所の前後5行を含めて読み直す
-        preview_start = max(1, start - 5)
-        preview_end = min(len(lines), start + len(new_content_lines) + 5)
-                                                                                                                                                                  
+        
+        # --- 事前プレビュー（Pre-edit Preview） ---
+        preview_start = max(1, start - 3)
+        preview_end = min(len(lines), end + 3)
+        
         preview_lines = []
         for i in range(preview_start, preview_end + 1):
-            prefix = ">>>" if start <= i < start + len(new_content_lines) else "   "
+            prefix = "!!>" if start <= i <= end else "   "
             line_content = lines[i-1].rstrip('\n')
             preview_lines.append(f"{prefix} {i:4d}| {line_content}")
-                                                                                                                                                                  
-        preview_text = "\n".join(preview_lines)
-        warning_header = ( "編集後のプレビュー (Post-edit Preview) ---\n" "⚠️ 注意: 行頭の ' N| ' (行番号) および '>>>' (変更箇所) は、ツールの表示用装飾です。\n"
-        "実際のファイルには含まれません。次順の edit_lines や write_file では、\n" "これらの装飾を除去した【生データのみ】をコンテンツブロックに記述してください。\n") 
-                                                                                                                                                                  
+        
+        pre_edit_preview = "\n".join(preview_lines)
+        warning_header = (
+            "編集後のプレビュー (Post-edit Preview) ---\n"
+            "⚠️ 注意: 行頭の ' N| ' (行番号) および '>>>' (変更箇所) は、ツールの表示用装飾です。\n"
+            "実際のファイルには含まれません。次順の edit_lines や write_file では、\n"
+            "これらの装飾を除去した【生データのみ】をコンテンツブロックに記述してください。\n"
+        )
+
+        if dry_run:
+            # Dry run: show what would change without modifying file
+            return (
+                f"[DRY RUN] No changes made to {path}\n"
+                f"{pre_edit_preview}\n"
+                f"--- Pre-edit Preview ({preview_start}-{preview_end}) ---\n"
+                f"{pre_edit_preview}\n"
+                f"--- Would replace lines {start}-{end} with ---\n"
+                f"{content}\n"
+                f"--- End of Dry Run ---\n"
+                f"To execute: edit_lines(path='{path}', start={start}, end={end}, content='...', dry_run=False)"
+            )
+        
+        # Execute the edit
+        lines[start - 1:end] = new_content_lines
+        
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
+        
+        # --- 事後検証プレビュー（Post-edit Preview） ---
+        post_preview_start = max(1, start - 5)
+        post_preview_end = min(len(lines), start + len(new_content_lines) + 5)
+        
+        post_preview_lines = []
+        for i in range(post_preview_start, post_preview_end + 1):
+            prefix = ">>>" if start <= i < start + len(new_content_lines) else "   "
+            line_content = lines[i-1].rstrip('\n')
+            post_preview_lines.append(f"{prefix} {i:4d}| {line_content}")
+        
+        post_preview_text = "\n".join(post_preview_lines)
+       
+        
         return (
             f"Successfully edited {path}. Replaced {old_count} lines with {len(new_content_lines)} lines.\n"
-            f"--- Post-edit Preview ({preview_start}-{preview_end}) ---\n"
+            f"--- Pre-edit Preview ({preview_start}-{preview_end}) ---\n"
+            f"--- Post-edit Preview ({post_preview_start}-{post_preview_end}) ---\n"
             f"--- {warning_header} ---\n"
-            f"{preview_text}\n"
+            f"{post_preview_text}\n"
             f"--- End of Preview ---"
         )
-                
 
 
     async def find_files(self, pattern: str = "*", recursive: bool = True, path: str = ".") -> List[str]:

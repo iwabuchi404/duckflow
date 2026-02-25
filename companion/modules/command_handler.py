@@ -321,96 +321,104 @@ class CommandHandler:
                 ui.print_error(f"Error switching model: {e}")
     
     async def _interactive_model_selection(self):
-        """Interactive model selection with numbered list."""
+        """Interactive model selection using number input (compatible with all environments)."""
         # Get available models from config
         models_config = config.get("llm.available_models", [])
-        
+
         if not models_config:
             # Fallback to old method if no model list defined
             ui.print_warning("設定ファイルに llm.available_models が見つかりません。")
             # models_config remains empty, we will try to get dynamic ones below
-        
+
         # Get dynamic models from OpenRouter (use cached if available)
         ui.print_info("🔍 Getting latest models...")
         dynamic_models = await model_manager.fetch_openrouter_models()
-        
+
         current_provider = config.get("llm.provider", "unknown")
         current_model = self.agent.llm.model
-        
-        available_models = []
-        
-        # Add static models from config
+
+        # Prepare models in the format expected by select_model_interactive
+        # Required fields: id, name, context_length, prompt_price, completion_price, description
         seen_models = set()
+        models_for_ui = []
+
+        # Add static models from config
         for model_info in models_config:
             provider = model_info.get("provider")
             model = model_info.get("model")
             name = model_info.get("name", f"{provider}/{model}")
-            
+
             if not provider or not model:
                 continue
-            
+
+            # Skip duplicates
+            if (provider, model) in seen_models:
+                continue
             seen_models.add((provider, model))
-            
-            description = model_info.get("description", "")
-            is_current = (provider == current_provider and model == current_model)
-            
-            display_text = f"[bold]{name}[/bold] ({provider}/{model})"
-            if description:
-                display_text += f"\n  [dim]{description}[/dim]"
-            if is_current:
-                display_text += "\n  [green]✓ 現在使用中[/green]"
-            
-            available_models.append((display_text, (provider, model, name)))
+
+            models_for_ui.append({
+                "id": model,
+                "model_id": model,
+                "name": name,
+                "provider": provider,
+                "context_length": 0,  # Config models don't have context length
+                "prompt_price": "0",
+                "completion_price": "0",
+                "description": model_info.get("description", ""),
+            })
 
         # Add dynamic models from OpenRouter (avoid duplicates)
         for dm in dynamic_models:
             provider = dm["provider"]
             model = dm["id"]
-            name = dm["name"]
-            
+
             if (provider, model) in seen_models:
                 continue
-            
-            is_current = (provider == current_provider and model == current_model)
-            
-            display_text = f"[bold]{name}[/bold] ({provider}/{model})"
-            if dm.get("context_length"):
-                display_text += f" [dim]| {dm['context_length']//1024}k context[/dim]"
-            if dm.get("description"):
-                desc = dm["description"][:100] + "..." if len(dm["description"]) > 100 else dm["description"]
-                display_text += f"\n  [dim]{desc}[/dim]"
-            if is_current:
-                display_text += "\n  [green]✓ 現在使用中[/green]"
-            
-            available_models.append((display_text, (provider, model, name)))
-        
-        if not available_models:
+
+            seen_models.add((provider, model))
+
+            models_for_ui.append({
+                "id": model,
+                "model_id": model,
+                "name": dm["name"],
+                "provider": provider,
+                "context_length": dm.get("context_length", 0),
+                "prompt_price": dm.get("prompt_price", "0"),
+                "completion_price": dm.get("completion_price", "0"),
+                "description": dm.get("description", ""),
+            })
+
+        if not models_for_ui:
             ui.print_error("利用可能なモデルが見つかりません")
             return
-        
-        # Show selection menu
+
+        # Show TUI selection (number input - compatible with all environments)
         selection = ui.select_from_list(
             "利用可能なモデル",
-            available_models,
+            [(m.get("name", m.get("id", "Unknown")), (m.get("provider"), m.get("model"), m.get("name")))
+            for m in models_for_ui
+        ],
             "モデルを選択してください："
         )
-        
+
         if selection is None:
             ui.print_info("キャンセルされました")
             return
-        
+
         # Get selected provider and model
-        _, (provider, model, name) = available_models[selection]
-        
+        _, (provider, model, name) = [(m.get("name", m.get("id", "Unknown")), (m.get("provider"), m.get("model"), m.get("name")))
+            for m in models_for_ui
+        ][selection]
+
         # Check if already using this model
         if provider == current_provider and model == current_model:
             ui.print_info(f"既に {name} を使用しています")
             return
-        
+
         # Switch to selected model
         ui.print_info(f"🔄 {name} に切り替えています...")
         success = await self.agent.switch_model(provider, model)
-        
+
         if success:
             ui.print_success(f"✅ {name} に切り替えました")
         else:

@@ -13,6 +13,21 @@ class ToolResult:
     tool_name: str
     target: str
     content: Any # str, dict, list 等
+    
+    @classmethod
+    def ok(cls, tool_name: str, target: str, content: Any) -> "ToolResult":
+        """Create a successful ToolResult."""
+        return cls(status=ToolStatus.OK, tool_name=tool_name, target=target, content=content)
+    
+    @classmethod
+    def error(cls, tool_name: str, target: str, content: Any) -> "ToolResult":
+        """Create an error ToolResult."""
+        return cls(status=ToolStatus.ERROR, tool_name=tool_name, target=target, content=content)
+    
+    @classmethod
+    def truncated(cls, tool_name: str, target: str, content: Any) -> "ToolResult":
+        """Create a truncated ToolResult (e.g., file too large)."""
+        return cls(status=ToolStatus.TRUNCATED, tool_name=tool_name, target=target, content=content)
 
 def serialize_to_text(data, indent_level=0) -> str:
     """
