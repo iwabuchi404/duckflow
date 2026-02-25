@@ -11,7 +11,7 @@ class ShellTool:
     """
     
     @staticmethod
-    async def run_command(self, command: str) -> str:
+    async def run_command(command: str) -> str:
         """
         :: Execute @ a shell command with mandatory user approval.
         Returns command output (stdout/stderr).
