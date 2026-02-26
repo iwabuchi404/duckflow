@@ -1,4 +1,5 @@
 import re
+import yaml
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
 from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter
@@ -212,11 +213,15 @@ class FuzzyParser:
                     raise ParseError("Unexpected closing delimiter >>>")
                 if current_action:
                     if current_action.type == 'execute_batch':
-                        # バッチブロックを --- で分割してサブアクションに展開
+                        # バッチブロックを %%% で分割してサブアクションに展開
                         batch_actions = self._split_batch_content('\n'.join(content_buffer))
                         result.actions.extend(batch_actions)
                     else:
-                        current_action.content = '\n'.join(content_buffer)
+                        raw_content = '\n'.join(content_buffer)
+                        yaml_params, body = self._extract_yaml_frontmatter(raw_content)
+                        current_action.content = body
+                        # YAML フロントマターのパラメーターをインライン params にマージ（YAML優先）
+                        current_action.params = {**current_action.params, **yaml_params}
                         result.actions.append(current_action)
                     current_action = None
                 content_buffer = []
@@ -251,6 +256,55 @@ class FuzzyParser:
             result.actions.append(current_action)
 
         return result
+
+    def _extract_yaml_frontmatter(self, content: str) -> tuple[dict, str]:
+        """
+        コンテンツブロックの先頭に YAML フロントマター（--- ブロック）がある場合、
+        それを引数辞書としてパースし、残りのコンテンツ文字列を返す。
+
+        入力例:
+            ---
+            anchors: "42:a3f 43:f10"
+            mode: strict
+            ---
+            def foo(): pass
+
+        戻り値:
+            ({"anchors": "42:a3f 43:f10", "mode": "strict"}, "def foo(): pass")
+
+        フロントマターがない場合は ({}, original_content)。
+        """
+        lines = content.split('\n')
+        # 先頭の空行をスキップしてフロントマターを検出
+        start = 0
+        while start < len(lines) and lines[start].strip() == '':
+            start += 1
+
+        if start >= len(lines) or lines[start].strip() != '---':
+            return {}, content
+
+        # 終端 --- を探す
+        end = start + 1
+        while end < len(lines) and lines[end].strip() != '---':
+            end += 1
+
+        if end >= len(lines):
+            # 終端 --- が見つからない場合はフロントマターなし扱い
+            return {}, content
+
+        yaml_text = '\n'.join(lines[start + 1:end])
+        remaining = '\n'.join(lines[end + 1:]).lstrip('\n')
+
+        try:
+            parsed = yaml.safe_load(yaml_text)
+            if not isinstance(parsed, dict):
+                return {}, content
+            # 全値を文字列に正規化（None → '' など）
+            params = {k: str(v) if v is not None else '' for k, v in parsed.items()}
+            return params, remaining
+        except yaml.YAMLError:
+            # YAMLパースエラーはフロントマターなし扱いにしてエラーを出さない
+            return {}, content
 
     def _extract_line_params(self, raw_path: str) -> tuple[str, dict]:
         """
@@ -446,17 +500,21 @@ class FuzzyParser:
                         content_lines.append(lines[j])
                         j += 1
 
-                content = '\n'.join(content_lines)
-                
+                raw_content = '\n'.join(content_lines)
+
                 # Extract parameters from path
                 clean_path, params = self._extract_line_params(path)
-                
+
+                # Extract YAML frontmatter from content block (Option B)
+                yaml_params, body = self._extract_yaml_frontmatter(raw_content)
+                merged_params = {**params, **yaml_params}  # YAML 優先
+
                 actions.append(Action(
                     type=action_type.strip(),
                     path=clean_path,
-                    content=content,
+                    content=body,
                     depends_on=depends_on,
-                    params=params,
+                    params=merged_params,
                     confidence=0.95 if has_delimiters else 0.7
                 ))
                 i = j

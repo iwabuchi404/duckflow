@@ -151,21 +151,21 @@ class PlainMarkdownConverter:
             変換後テキスト、または該当しなければ None
         """
         stripped = text.strip()
-        # [REPORT] → ::report
+        # [REPORT] → ::response
         if stripped.startswith('[REPORT]'):
             body = stripped[len('[REPORT]'):].strip()
             return (
                 '::c0.70 ::s0.75 ::m0.75 ::f0.80\n\n'
-                '::report\n<<<\n'
+                '::response\n<<<\n'
                 f'{body}\n'
                 '>>>'
             )
-        # [FINISHED] → ::finish
+        # [FINISHED] → ::response
         if stripped.startswith('[FINISHED]'):
             body = stripped[len('[FINISHED]'):].strip()
             return (
                 '::c0.90 ::s1.0 ::m0.50 ::f0.90\n\n'
-                '::finish\n<<<\n'
+                '::response\n<<<\n'
                 f'{body}\n'
                 '>>>'
             )

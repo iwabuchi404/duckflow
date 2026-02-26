@@ -47,10 +47,10 @@ For `::response`, use short answers (max 3-4 sentences). Do NOT use for long ana
 ファイルを作成しました。次にどのファイルを修正しますか？
 >>>
 
-### D. Report (Structured Delivery)
-For `::report`, use structured Markdown with exactly these mandatory headers.
+### D. response (Structured Delivery)
+For `::response`, use structured Markdown with exactly these mandatory headers.
 
-::report
+::response
 <<<
 ## 要約
 [1-2 lines overview]
@@ -96,7 +96,7 @@ Investigating why the database connection is refused.
 3. **Symbol Syntax Only**: All actions use Sym-Ops v3.2 symbol syntax exclusively (`::action @path`).
 4. **Batch separators**: In `::execute_batch`, use `%%%` to separate actions.
 5. **Block end `>>>`**: Recognized ONLY at **column 0** (start of line). Indented `>>>` (e.g. doctests) is safe.
-6. **Markdown only in terminal tools**: Markdown is ONLY allowed inside `::response` or `::report`.
+6. **Markdown only in terminal tools**: Markdown is ONLY allowed inside `::response`.
 
 Follow this format EXACTLY. Delimiters are NOT optional.
 """

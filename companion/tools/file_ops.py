@@ -124,30 +124,47 @@ class FileOps:
             f.write(content)
         return f"Successfully wrote to {path}"
 
-    async def edit_file(self, path: str, anchors: str, content: str) -> str:
+    async def edit_file(self, path: str, anchors: str = "", content: str = "") -> str:
         '''
         Hashline-based file editing with precise line identification.
+        Supports multi-edit via %%% segment separators.
 
         Uses hashline anchors (line_number:hash) to identify and replace content.
         The hash ensures the file hasn't changed since read_file was called.
 
-        Sym-Ops format:
+        Sym-Ops format (single edit):
         ::edit_file @utils.py
         <<<
-        42:a3f 43:f10
+        ---
+        anchors: "42:a3f 43:f10"
+        ---
         def calculate_total(items: list[int]) -> int:
             """Calculate the total sum."""
             return sum(items)
         >>>
 
+        Sym-Ops format (multi-edit using %%% separator; applied bottom-to-top):
+        ::edit_file @utils.py
+        <<<
+        ---
+        anchors: "3:abc 3:abc"
+        ---
+        TAX_RATE = 0.10
+        %%%
+        ---
+        anchors: "10:def 12:ghe"
+        ---
+        def calculate(x):
+            return x * TAX_RATE
+        >>>
+
         Args:
             path: 対象ファイルパス
-            anchors: アンカー文字列（例: "42:a3f 43:f10"）
-                     1つ目は開始行、2つ目は終了行
-            content: 置換する新しい内容（複数行可）
+            anchors: アンカー文字列（例: "42:a3f 43:f10"）。YAML フロントマター方式の場合は省略可。
+            content: 置換する新しい内容。YAML フロントマターで anchors を渡す場合はその後に本文。
 
         Returns:
-            変更成功メッセージと、変更箇所周辺の更新済み hashline コンテキスト
+            変更成功メッセージと、各変更箇所の更新済み hashline コンテキスト
 
         Raises:
             ValueError: アンカーが見つからない、またはハッシュが不一致の場合
@@ -158,46 +175,103 @@ class FileOps:
         if not full_path.is_file():
             raise IsADirectoryError(f"Path is a directory: {path}")
 
-        # アンカーを解析
-        # 形式: "42:a3f 43:f10"
-        anchor_parts = anchors.strip().split()
-        if len(anchor_parts) != 2:
-            raise ValueError(
-                f"Invalid anchors format: '{anchors}'. "
-                f"Expected: 'start_anchor end_anchor' (e.g., '42:a3f 43:f10')"
-            )
+        # %%% でセグメントに分割（マルチエディットサポート）
+        import re as _re
+        segments_raw = _re.split(r'\n%%%', content)
 
-        start_anchor, end_anchor = anchor_parts
+        # 各セグメントから (anchors_str, body) を抽出
+        # セグメント内の YAML フロントマターを解釈する
+        edits: list[tuple[str, str]] = []
+        for seg in segments_raw:
+            seg = seg.strip('\n')
+            if not seg.strip():
+                continue
+
+            # YAML フロントマター検出
+            fm_match = _re.match(r'^---\n(.*?)\n---\n?(.*)', seg, _re.DOTALL)
+            if fm_match:
+                import yaml as _yaml
+                try:
+                    fm = _yaml.safe_load(fm_match.group(1))
+                    seg_anchors = str(fm.get('anchors', anchors)).strip()
+                    seg_body = fm_match.group(2).strip('\n')
+                except Exception:
+                    seg_anchors = anchors
+                    seg_body = seg
+            else:
+                # フロントマターなし: グローバル anchors 引数を使う
+                seg_anchors = anchors
+                seg_body = seg.strip('\n')
+
+            if not seg_anchors:
+                raise ValueError(
+                    f"No anchors provided for edit segment. "
+                    f"Please specify anchors via YAML frontmatter (---\\nanchors: \"start:hash end:hash\"\\n---) "
+                    f"or via the anchors= parameter."
+                )
+            edits.append((seg_anchors, seg_body))
 
         # ファイルを読み込み
         with open(full_path, "r", encoding="utf-8") as f:
             file_lines = [line.rstrip('\n') for line in f.readlines()]
 
-        # 範囲を抽出・検証
-        start_idx, end_idx, extracted = HashlineHelper.extract_content_block(
-            file_lines, start_anchor, end_anchor
-        )
+        # 逆順に適用（下から上）することで行番号のズレを防ぐ
+        # まず全セグメントの位置を解決し、開始行で降順ソートする
+        resolved = []
+        for seg_anchors, seg_body in edits:
+            anchor_parts = seg_anchors.strip().split()
+            if len(anchor_parts) != 2:
+                raise ValueError(
+                    f"Invalid anchors format: '{seg_anchors}'. "
+                    f"Expected: 'start_anchor end_anchor' (e.g., '42:a3f 43:f10')"
+                )
+            start_anchor, end_anchor = anchor_parts
+            start_idx, end_idx, _ = HashlineHelper.extract_content_block(
+                file_lines, start_anchor, end_anchor
+            )
+            resolved.append((start_idx, end_idx, seg_body))
 
-        # 置換実行
-        new_content_lines = content.split('\n')
-        file_lines[start_idx:end_idx + 1] = new_content_lines
+        # 開始行の降順（ファイル下部 → 上部）でソート
+        resolved.sort(key=lambda x: x[0], reverse=True)
+
+        # 逐次適用
+        results_info = []
+        for start_idx, end_idx, seg_body in resolved:
+            new_lines = seg_body.split('\n')
+            old_count = end_idx - start_idx + 1
+            file_lines[start_idx:end_idx + 1] = new_lines
+            results_info.append((start_idx, start_idx + len(new_lines) - 1, old_count, len(new_lines)))
 
         # 書き込み
         with open(full_path, "w", encoding="utf-8") as f:
             f.write('\n'.join(file_lines))
 
-        # 変更箇所周辺の hashline コンテキストを生成（5行前後）
-        context = HashlineHelper.format_context_after_edit(
-            file_lines, start_idx, start_idx + len(new_content_lines) - 1, context_lines=5
-        )
-
-        return (
-            f"Successfully edited {path}.\n"
-            f"Replaced {end_idx - start_idx + 1} line(s) with {len(new_content_lines)} line(s).\n"
-            f"--- Updated Context (for reference in next edit) ---\n"
-            f"{context}\n"
-            f"--- End of Context ---"
-        )
+        # 結果サマリーと最終コンテキストを生成
+        if len(results_info) == 1:
+            s, e, old, new = results_info[0]
+            context = HashlineHelper.format_context_after_edit(file_lines, s, e, context_lines=5)
+            return (
+                f"Successfully edited {path}.\n"
+                f"Replaced {old} line(s) with {new} line(s).\n"
+                f"--- Updated Context (for reference in next edit) ---\n"
+                f"{context}\n"
+                f"--- End of Context ---"
+            )
+        else:
+            # 逆順に記録されているので表示用に正順に戻す
+            results_info_asc = sorted(results_info, key=lambda x: x[0])
+            summary_lines = [f"Successfully applied {len(results_info)} edits to {path}."]
+            for i, (s, e, old, new) in enumerate(results_info_asc, 1):
+                summary_lines.append(f"  Edit {i}: lines {s+1}-{e+1} ({old} → {new} line(s))")
+            context = HashlineHelper.format_context_after_edit(
+                file_lines, results_info_asc[0][0], results_info_asc[-1][1], context_lines=3
+            )
+            return (
+                '\n'.join(summary_lines) + "\n"
+                f"--- Updated Context ---\n"
+                f"{context}\n"
+                f"--- End of Context ---"
+            )
 
     async def list_files(self, path: str = ".") -> List[str]:
         """
@@ -233,7 +307,16 @@ class FileOps:
         Perform a simple string replacement in a file.
         Replaces ALL occurrences of 'search' with 'replace'.
         Use this for quick fixes when full file rewrite is unnecessary.
-        行番号ベースの編集には edit_lines の方が信頼性が高い。
+        行番号ベースの編集には edit_file の方が信頼性が高い。
+
+        Sym-Ops format:
+        ::replace_in_file @utils.py
+        <<<
+        ---
+        search: "old_function_name"
+        replace: "new_function_name"
+        ---
+        >>>
 
         Args:
             path: 対象ファイルパス
@@ -270,14 +353,26 @@ class FileOps:
     async def edit_lines(self, path: str, start: int, end: int, content: str, dry_run: bool = True) -> str:
         """ 
         行番号ベースのファイル編集（事前・事後検証プレビュー付き）。
-        
+
+        Sym-Ops format:
+        ::edit_lines @utils.py
+        <<<
+        ---
+        start: 10
+        end: 12
+        dry_run: false
+        ---
+        def new_function():
+            return 42
+        >>>
+
         Args:
             path: 編集対象ファイルパス
             start: 開始行番号（1始まり）
             end: 終了行番号（1始まり）
             content: 置換する新しい内容（複数行可）
             dry_run: Trueの場合、ファイルを変更せずプレビューのみ返す（デフォルト: True）
-        
+
         Returns:
             dry_run=True: 事前プレビュー（変更予定内容）
             dry_run=False: 編集結果と事後プレビュー
@@ -365,6 +460,16 @@ class FileOps:
         """
         Find files matching a pattern.
         Supports wildcards like *.py, test_*.md, etc.
+
+        Sym-Ops format (with YAML frontmatter for multiple args):
+        ::find_files
+        <<<
+        ---
+        pattern: "*.py"
+        path: "companion/tools"
+        recursive: true
+        ---
+        >>>
 
         Args:
             pattern: ファイル名のマッチパターン（デフォルト: "*"、例: *.py, test_*.md）

@@ -17,9 +17,9 @@ FEW_SHOT_EXAMPLES = [
 Pythonベースで、Rich (UI)、Pydantic (状態管理)、PyYAML (設定) を使用しています。詳しく調べますか？
 >>>"""},
 
-    # パターン2: ファイル編集依頼 → read_file → edit_lines → response
+    # パターン2: ファイル編集依頼 → read_file → edit_file → response
     {"role": "user", "content": "hello.pyのmain関数にコメントを追加して"},
-    {"role": "assistant", "content": """>> 編集依頼なので、まずファイルを読んで行番号を確認する
+    {"role": "assistant", "content": """>> 編集依頼なので、まずファイルを読んでハッシュを確認する
 
 ::c0.90 ::s1.0 ::m0.15 ::f0.95
 
@@ -28,28 +28,31 @@ Pythonベースで、Rich (UI)、Pydantic (状態管理)、PyYAML (設定) を�
     {"role": "assistant", "content": """::result ok
 ::tool read_file
 ::target hello.py
-   def main():
-       print('Hello, World!')
+1:a1b| def main():
+2:c2d|     print('Hello, World!')
+3:e3f| 
+4:g4h| if __name__ == '__main__':
+5:i5j|     main()"""},
 
-    if __name__ == '__main__':
-        main()"""},
-
-    {"role": "assistant", "content": """>> 行番号を確認した。
->> Replacing lines 1-1: 'def main():'
->> edit_lines で行1-1を置換する
+    {"role": "assistant", "content": """>> ハッシュを確認した。
+>> 置換対象は 1:a1b 1:a1b の行。
+>> edit_file で YAML フロントマター形式でコメントを付与する
 
 ::c0.95 ::s1.0 ::m0.20 ::f0.95
 
-::edit_lines @hello.py start=1 end=1
+::edit_file @hello.py
 <<<
+---
+anchors: "1:a1b 1:a1b"
+---
 # メイン関数: Hello Worldを出力する
 def main():
 >>>"""},
 
     {"role": "assistant", "content": """::result ok
-::tool edit_lines
+::tool edit_file
 ::target hello.py
-Edited hello.py."""},
+Successfully edited hello.py."""},
 
     {"role": "assistant", "content": """>> 編集完了。response で報告する
 

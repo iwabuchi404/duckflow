@@ -73,6 +73,16 @@ class SubLLMTools:
         - This tool requires user confirmation. Do NOT use inside `::execute_batch`.
         - Ensure `[Context]` contains relevant existing code for style consistency.
 
+        Sym-Ops format:
+        ::generate_code @new_module.py
+        <<<
+        [Instruction]
+        Implement a function that validates email addresses using regex.
+
+        [Context]
+        utils.py:1-20
+        >>>
+
         Args:
             path: Target file path to save the generated code.
             content: Instruction and Context block using [Instruction] and [Context] sections.
