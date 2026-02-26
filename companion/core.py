@@ -545,7 +545,7 @@ class DuckAgent:
                     "ユーザーがすべてのアクションをキャンセルしました。"
                     "安全な代替手段を検討してください。"
                 )
-                self.state.add_message("assistant", cancel_msg)
+                self.state.add_message("user", cancel_msg)
                 return results
         # ------------------------------------------------
 
@@ -593,7 +593,7 @@ class DuckAgent:
                         f"Please either: 1) Ask the user what to do instead, "
                         f"2) Try a different approach, or 3) Explain the situation."
                     )
-                    self.state.add_message("assistant", denial_context)
+                    self.state.add_message("user", denial_context)
                     
                     # Update Pacemaker vitals (denial is treated as an error)
                     self.pacemaker.update_vitals(action, msg, is_error=True)
@@ -603,14 +603,6 @@ class DuckAgent:
                 else:
                     # User approved - mark this action as approved
                     was_approved = True
-                    params_str = ", ".join([f"{k}={v}" for k, v in action.parameters.items()])
-                    approval_msg = (
-                        f"[SYSTEM: User approved action '{action.name}'] "
-                        f"The user explicitly authorized the overwrite/modification. "
-                        f"The tool is executing now. "
-                        f"ASSUME SUCCESS. Do not retry this action. Move to the next step (e.g., responding to the user)."
-                    )
-                    self.state.add_message("assistant", approval_msg)
                     logger.info(f"User approved action: {action.name}")
             # ----------------------
             
@@ -649,13 +641,11 @@ class DuckAgent:
                         if was_approved:
                             completion_msg = (
                                 f"{formatted_res}\n\n"
-                                f"[TASK COMPLETED] The user's request has been fulfilled. "
-                                f"The file operation completed successfully. "
-                                f"You should now respond to the user confirming completion."
+                                f"[System: User approved action. Proceed with next steps.]"
                             )
-                            self.state.add_message("assistant", completion_msg)
+                            self.state.add_message("user", completion_msg)
                         else:
-                            self.state.add_message("assistant", formatted_res)
+                            self.state.add_message("user", formatted_res)
                         
                         if isinstance(result, str):
                             ui.print_result(result)
@@ -689,7 +679,7 @@ class DuckAgent:
                         target=action.parameters.get("path", action.parameters.get("command", "task")),
                         content=e
                     )
-                    self.state.add_message("assistant", format_symops_response(err_res))
+                    self.state.add_message("user", format_symops_response(err_res))
 
                     results.append(error_msg)
 
@@ -704,7 +694,7 @@ class DuckAgent:
                             logger.warning(f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions")
                             ui.print_warning(f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。")
                             self.state.add_message(
-                                "assistant",
+                                "user",
                                 f"[SYSTEM] 連続{consecutive_errors}回のエラーにより残り{remaining}件のアクションを中断しました。"
                                 "原因を確認してから再試行してください。"
                             )
@@ -718,7 +708,7 @@ class DuckAgent:
                 # Add unknown tool error to conversation history
                 available_tools = ", ".join(self.tools.keys())
                 self.state.add_message(
-                    "assistant", 
+                    "user", 
                     f"[Error] Tool '{action.name}' does not exist. "
                     f"Available tools: {available_tools}. "
                     f"Please use one of the available tools."

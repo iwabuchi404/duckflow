@@ -124,7 +124,7 @@ class FileOps:
             f.write(content)
         return f"Successfully wrote to {path}"
 
-    async def edit_file(self, path: str, anchors: str, new_content: str) -> str:
+    async def edit_file(self, path: str, anchors: str, content: str) -> str:
         '''
         Hashline-based file editing with precise line identification.
 
@@ -144,7 +144,7 @@ class FileOps:
             path: 対象ファイルパス
             anchors: アンカー文字列（例: "42:a3f 43:f10"）
                      1つ目は開始行、2つ目は終了行
-            new_content: 置換する新しい内容（複数行可）
+            content: 置換する新しい内容（複数行可）
 
         Returns:
             変更成功メッセージと、変更箇所周辺の更新済み hashline コンテキスト
@@ -179,7 +179,7 @@ class FileOps:
         )
 
         # 置換実行
-        new_content_lines = new_content.split('\n')
+        new_content_lines = content.split('\n')
         file_lines[start_idx:end_idx + 1] = new_content_lines
 
         # 書き込み
@@ -354,9 +354,8 @@ class FileOps:
         
         return (
             f"Successfully edited {path}. Replaced {old_count} lines with {len(new_content_lines)} lines.\n"
-            f"--- Pre-edit Preview ({preview_start}-{preview_end}) ---\n"
             f"--- Post-edit Preview ({post_preview_start}-{post_preview_end}) ---\n"
-            f"--- {warning_header} ---\n"
+            f"(Note: line numbers ' N| ' and '>>>' are decorations, do not include them in edits)\n"
             f"{post_preview_text}\n"
             f"--- End of Preview ---"
         )

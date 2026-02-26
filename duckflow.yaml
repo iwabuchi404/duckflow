@@ -41,17 +41,19 @@ llm:
     provider: openrouter
     model: google/gemini-2.5-pro
     description: ''
+  openrouter:
+    model: google/gemini-3-flash-preview
+  openai:
+    model: gpt-4o-mini
+  groq:
+    model: llama-3.3-70b-versatile
   google:
     model: gemini-1.5-pro-002
-  openai:
-    model: gpt-4o
-  openrouter:
-    model: qwen/qwen3-235b-a22b-thinking-2507
   temperature: 0.7
   max_output_tokens: 8192
-agent:
-  max_loops: 10
-  language: japanese
-  auto_approval:
-  - read_file
-  - list_files
+  agent:
+    max_loops: 10
+    language: japanese
+    auto_approval:
+    - read_file
+    - list_files
