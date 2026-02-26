@@ -395,7 +395,7 @@ class CommandHandler:
         # Show TUI selection (number input - compatible with all environments)
         selection = ui.select_from_list(
             "利用可能なモデル",
-            [(m.get("name", m.get("id", "Unknown")), (m.get("provider"), m.get("model"), m.get("name")))
+            [(m.get("name", m.get("id", "Unknown")), (m.get("provider"), m.get("id"), m.get("name")))
             for m in models_for_ui
         ],
             "モデルを選択してください："
@@ -406,7 +406,7 @@ class CommandHandler:
             return
 
         # Get selected provider and model
-        _, (provider, model, name) = [(m.get("name", m.get("id", "Unknown")), (m.get("provider"), m.get("model"), m.get("name")))
+        _, (provider, model, name) = [(m.get("name", m.get("id", "Unknown")), (m.get("provider"), m.get("id"), m.get("name")))
             for m in models_for_ui
         ][selection]
 

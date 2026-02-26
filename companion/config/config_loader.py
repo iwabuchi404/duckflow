@@ -25,18 +25,28 @@ class ConfigLoader:
         # Find duckflow.yaml in project root
         root_dir = Path(__file__).parent.parent.parent
         config_path = root_dir / "duckflow.yaml"
-        
+
         if not config_path.exists():
             # Fallback to empty config, using defaults in get()
-            self._config = {}
+            # Keep existing config if file doesn't exist
+            if not self._config:
+                self._config = {}
             return
-        
+
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
-                self._config = yaml.safe_load(f) or {}
+                loaded_config = yaml.safe_load(f) or {}
+            if loaded_config:
+                self._config = loaded_config
+            else:
+                # If loaded config is empty, keep existing config
+                if not self._config:
+                    self._config = {}
         except Exception as e:
             print(f"Warning: Failed to load config file: {e}")
-            self._config = {}
+            # Keep existing config on error
+            if not self._config:
+                self._config = {}
     
     def get(self, key_path: str, default: Any = None) -> Any:
         """
@@ -93,10 +103,15 @@ class ConfigLoader:
             # Write to file
             root_dir = Path(__file__).parent.parent.parent
             config_path = root_dir / "duckflow.yaml"
-            
+
+            # Open file and write with explicit flush
             with open(config_path, 'w', encoding='utf-8') as f:
                 yaml.dump(self._config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
-            
+                f.flush()
+                # Ensure file is written to disk (important on Windows)
+                import os
+                os.fsync(f.fileno())
+
             return True
             
         except Exception as e:

@@ -1,7 +1,7 @@
 from typing import List, Dict, Optional, Tuple
 from pydantic import BaseModel, Field
 import logging
-from companion.base.llm_client import LLMClient, default_client
+from companion.base.llm_client import get_default_client, LLMClient
 from companion.modules.archive import ArchiveStorage
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class MemoryManager:
 
     def __init__(
         self,
-        llm_client: LLMClient = default_client,
+        llm_client: LLMClient = get_default_client(),
         max_tokens: int = 8000,
         config: Optional[ScoringConfig] = None
     ):

@@ -2,6 +2,7 @@ import os
 import shutil
 from typing import List, Optional
 from pathlib import Path
+from .hashline import HashlineHelper
 
 class FileOps:
     """
@@ -40,10 +41,30 @@ class FileOps:
 
     async def read_file(self, path: str, start: int = 1, end: int = 300) -> dict:
         """
-        Read file content with line-based pagination.For large files, use start to paginate.
+        Read file content with hashline format for precise editing.
+
+        Each line is prefixed with "line_number:hash|" where hash is a 3-char
+        hex value computed from the line content. This enables precise, line-number-
+        independent edits via edit_file.
+
+        For large files, use start/end to paginate.
+
+        Args:
+            path: ファイルパス
+            start: 開始行番号（1始まり、デフォルト: 1）
+            end: 読み込む最大行数（デフォルト: 300）
+
+        Returns:
+            {
+                "path": str,
+                "size_bytes": int,
+                "showing_lines": str,
+                "content": str,  # hashline 形式
+                "has_more": bool
+            }
         """
         import itertools
-        
+
         start_line = max(1, int(start))
         max_lines = max(1, int(end))
 
@@ -52,34 +73,28 @@ class FileOps:
             raise FileNotFoundError(f"File not found: {path}")
         if not full_path.is_file():
             raise IsADirectoryError(f"Path is a directory: {path}")
-        
+
         size_bytes = os.path.getsize(full_path)
-        
+
         try:
             with open(full_path, "r", encoding="utf-8") as f:
-                # 1-indexed to 0-indexed slce
+                # 1-indexed to 0-indexed slice
                 # islice(iterable, start, stop)
                 # To read lines from start_line, we skip start_line - 1 lines.
                 lines_it = itertools.islice(f, start_line - 1, start_line - 1 + max_lines)
-                content_lines = list(lines_it)
-                
+                content_lines = [line.rstrip('\n') for line in lines_it]
+
                 # Check if there is more content (has_more)
-                # Next line check
                 try:
                     next(f)
                     has_more = True
                 except StopIteration:
                     has_more = False
-            
-            # 行番号付きで整形（LLMがedit_linesで行番号を参照できるようにする）
-            numbered_lines = []
-            for i, line in enumerate(content_lines, start=start_line):
-                # 行番号を右寄せ（最大4桁）+ パイプ区切り
-                numbered_lines.append(f"{i:4d}| {line.rstrip('\n')}")
-            content = "\n".join(numbered_lines)
 
-            # If empty but file exists
-            if not content and start_line == 1:
+            # hashline 形式に変換
+            if content_lines:
+                content = HashlineHelper.format_with_hashlines('\n'.join(content_lines))
+            else:
                 content = "(Empty file)"
 
             return {
@@ -89,7 +104,7 @@ class FileOps:
                 "content": content,
                 "has_more": has_more
             }
-            
+
         except UnicodeDecodeError:
             return {"error": f"File {path} is not a valid UTF-8 text file (encoding error)."}
 
@@ -108,6 +123,81 @@ class FileOps:
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(content)
         return f"Successfully wrote to {path}"
+
+    async def edit_file(self, path: str, anchors: str, new_content: str) -> str:
+        '''
+        Hashline-based file editing with precise line identification.
+
+        Uses hashline anchors (line_number:hash) to identify and replace content.
+        The hash ensures the file hasn't changed since read_file was called.
+
+        Sym-Ops format:
+        ::edit_file @utils.py
+        <<<
+        42:a3f 43:f10
+        def calculate_total(items: list[int]) -> int:
+            """Calculate the total sum."""
+            return sum(items)
+        >>>
+
+        Args:
+            path: 対象ファイルパス
+            anchors: アンカー文字列（例: "42:a3f 43:f10"）
+                     1つ目は開始行、2つ目は終了行
+            new_content: 置換する新しい内容（複数行可）
+
+        Returns:
+            変更成功メッセージと、変更箇所周辺の更新済み hashline コンテキスト
+
+        Raises:
+            ValueError: アンカーが見つからない、またはハッシュが不一致の場合
+        '''
+        full_path = self._get_full_path(path)
+        if not full_path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        if not full_path.is_file():
+            raise IsADirectoryError(f"Path is a directory: {path}")
+
+        # アンカーを解析
+        # 形式: "42:a3f 43:f10"
+        anchor_parts = anchors.strip().split()
+        if len(anchor_parts) != 2:
+            raise ValueError(
+                f"Invalid anchors format: '{anchors}'. "
+                f"Expected: 'start_anchor end_anchor' (e.g., '42:a3f 43:f10')"
+            )
+
+        start_anchor, end_anchor = anchor_parts
+
+        # ファイルを読み込み
+        with open(full_path, "r", encoding="utf-8") as f:
+            file_lines = [line.rstrip('\n') for line in f.readlines()]
+
+        # 範囲を抽出・検証
+        start_idx, end_idx, extracted = HashlineHelper.extract_content_block(
+            file_lines, start_anchor, end_anchor
+        )
+
+        # 置換実行
+        new_content_lines = new_content.split('\n')
+        file_lines[start_idx:end_idx + 1] = new_content_lines
+
+        # 書き込み
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write('\n'.join(file_lines))
+
+        # 変更箇所周辺の hashline コンテキストを生成（5行前後）
+        context = HashlineHelper.format_context_after_edit(
+            file_lines, start_idx, start_idx + len(new_content_lines) - 1, context_lines=5
+        )
+
+        return (
+            f"Successfully edited {path}.\n"
+            f"Replaced {end_idx - start_idx + 1} line(s) with {len(new_content_lines)} line(s).\n"
+            f"--- Updated Context (for reference in next edit) ---\n"
+            f"{context}\n"
+            f"--- End of Context ---"
+        )
 
     async def list_files(self, path: str = ".") -> List[str]:
         """

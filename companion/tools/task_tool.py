@@ -2,7 +2,7 @@ from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 
 from companion.state.agent_state import AgentState, Task, TaskStatus, Action
-from companion.base.llm_client import default_client, LLMClient
+from companion.base.llm_client import get_default_client, LLMClient
 from companion.tools.results import ToolResult
 from companion.ui.console import ui
 import logging
@@ -17,7 +17,7 @@ class TaskTool:
     """
     Manages specific tasks within a Step.
     """
-    def __init__(self, state: AgentState, llm_client: LLMClient = default_client):
+    def __init__(self, state: AgentState, llm_client: LLMClient = get_default_client()):
         self.state = state
         self.llm = llm_client
 

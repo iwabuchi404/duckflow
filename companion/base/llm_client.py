@@ -112,12 +112,16 @@ class LLMClient:
         else:
             self.base_url = os.getenv("OPENAI_BASE_URL")
         
-        # Load model from config based on provider
         if model:
             self.model = model
         else:
             # Try environment variable first, then config
-            self.model = os.getenv("DUCKFLOW_MODEL") or config.get(f"llm.{self.provider}.model", "llama-3.3-70b-versatile")
+            self.model = os.getenv("DUCKFLOW_MODEL") or config.get(f"llm.{self.provider}.model")
+            
+            # Additional fallback if model is still empty/None
+            if not self.model:
+                self.model = "llama-3.3-70b-versatile"
+                logger.warning(f"Model was not set for provider {self.provider}. Falling back to default: {self.model}")
         
         # Load timeout from config
         self.timeout = timeout or config.get("llm_timeout_seconds", 60.0)
@@ -171,6 +175,8 @@ class LLMClient:
             # Update model if specified
             if model:
                 self.model = model
+            elif not self.model:
+                self.model = "llama-3.3-70b-versatile"
             
             logger.info(f"🔄 Reinitializing LLM Client: provider={self.provider}, model={self.model}")
             
@@ -684,3 +690,35 @@ class LLMClient:
 
 # Global instance for convenience
 default_client = LLMClient()
+
+
+# Default client instance
+_default_client_instance = None
+
+def get_default_client() -> LLMClient:
+    """
+    Get or create a default LLM client instance.
+    Creates a new instance each time to ensure latest config is used.
+    """
+    global _default_client_instance
+    if _default_client_instance is None:
+        _default_client_instance = LLMClient()
+    return LLMClient()
+
+
+# For backward compatibility: expose default_client as a property
+class _DefaultClientGetter:
+    """Allows accessing default_client as a dynamic getter."""
+    def __call__(self):
+        return get_default_client()
+
+    def __getattr__(self, name):
+        return getattr(get_default_client(), name)
+
+    def __init__(self):
+        # For backward compatibility with isintance checks
+        pass
+
+
+# For backward compatibility: expose default_client at module level
+_default_client = _DefaultClientGetter()

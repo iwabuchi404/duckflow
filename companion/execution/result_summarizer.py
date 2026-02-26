@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, List
 from pydantic import BaseModel, Field
-from companion.base.llm_client import LLMClient, default_client
+from companion.base.llm_client import get_default_client, LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class ResultSummarizer:
     Uses LLM to generate natural language summaries of task execution results.
     """
     
-    def __init__(self, llm_client: LLMClient = default_client):
+    def __init__(self, llm_client: LLMClient = get_default_client()):
         self.llm = llm_client
     
     async def summarize_execution(self, execution_data: Dict[str, Any]) -> str:

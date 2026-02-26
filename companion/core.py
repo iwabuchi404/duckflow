@@ -77,20 +77,20 @@ class DuckAgent:
         # Register basic actions
         self.register_tool("note", self.action_note_)
         self.register_tool("response", self.action_response)
-        self.register_tool("report", self.action_report)
-        self.register_tool("finish", self.action_finish)
+        # self.register_tool("report", self.action_report)
+        # self.register_tool("finish", self.action_finish)
         self.register_tool("exit", self.action_exit)
         self.register_tool("duck_call", self.approval_tool.duck_call)
         
         # Register File Ops
         self.register_tool("read_file", file_ops.read_file)
         self.register_tool("write_file", file_ops.write_file)
-        self.register_tool("create_file", file_ops.write_file)  # Alias for Sym-Ops v2
+        # self.register_tool("create_file", file_ops.write_file)  # Alias for Sym-Ops v2
         self.register_tool("list_directory", file_ops.list_files)
         # self.register_tool("mkdir", file_ops.mkdir)
-        self.register_tool("replace_in_file", file_ops.replace_in_file)
-        self.register_tool("edit_lines", file_ops.edit_lines)
-        self.register_tool("edit_file", file_ops.write_file)  # Alias - Changed to write_file (overwrite) as agent uses it for full content
+        # self.register_tool("replace_in_file", file_ops.replace_in_file)
+        # self.register_tool("edit_lines", file_ops.edit_lines)
+        self.register_tool("edit_file", file_ops.edit_file)  # Alias - Changed to write_file (overwrite) as agent uses it for full content
         self.register_tool("find_files", file_ops.find_files)
         self.register_tool("delete_file", file_ops.delete_file)
 
@@ -110,13 +110,13 @@ class DuckAgent:
         self.register_tool("recall", self.memory_tool.search_archives)  # Alias
 
         # Register Sub-LLM Tools
-        self.register_tool("summarize_context", self.sub_llm_tools.summarize_context)
+        # self.register_tool("summarize_context", self.sub_llm_tools.summarize_context)
         self.register_tool("analyze_structure", self.sub_llm_tools.analyze_structure)
         self.register_tool("generate_code", self.sub_llm_tools.generate_code)
 
         # Register Investigation Tools (Sym-Ops v3.1)
         self.register_tool("investigate", self.action_investigate)
-        self.register_tool("submit_hypothesis", self.action_submit_hypothesis)
+        # self.register_tool("submit_hypothesis", self.action_submit_hypothesis)
         self.register_tool("finish_investigation", self.action_finish_investigation)
 
         # Register execute_batch (Sym-Ops v3.1 Fast Path)
@@ -127,7 +127,7 @@ class DuckAgent:
 
         # status: LLMが "::status ok" のようにプロトコル報告として出力するため、
         # 無害なno-opとして登録し、エラーやフィルタ警告を防ぐ
-        self.register_tool("show_status", self.action_status)
+        # self.register_tool("show_status", self.action_status)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
