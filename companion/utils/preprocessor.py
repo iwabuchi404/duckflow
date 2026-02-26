@@ -194,14 +194,14 @@ class PlainMarkdownConverter:
     def _convert_markdown_to_symops(self, text: str) -> str:
         """Convert markdown to Sym-Ops v2.
 
-        コードブロックを含むMarkdownも response/report にラップする。
+        コードブロックを含むMarkdownも response にラップする。
         create_file への変換は行わない（LLMの説明用コードブロックと区別できないため）。
         """
         stripped = text.strip()
 
-        # 構造化されたMarkdown（## 要約 等のセクションを含む）→ report
+        # 構造化されたMarkdown（## 要約 等のセクションを含む）→ response
         if re.search(r'^##\s+', stripped, re.MULTILINE):
-            return self._wrap_in_report(stripped)
+            return self._wrap_in_structured_response(stripped)
 
         # それ以外（リスト、コードブロック付きの説明等）→ response
         return self._wrap_in_response(stripped)
@@ -313,12 +313,12 @@ class PlainMarkdownConverter:
             '>>>'
         )
 
-    def _wrap_in_report(self, text: str) -> str:
-        """Wrap structured markdown in report action"""
+    def _wrap_in_structured_response(self, text: str) -> str:
+        """Wrap structured markdown (with ## headers) in response action"""
         return (
-            '>> Providing structured report\n\n'
+            '>> Providing structured response\n\n'
             '::c0.70 ::m0.75 ::f0.80 ::s0.75\n\n'
-            '::report\n'
+            '::response\n'
             '<<<\n'
             f'{text}\n'
             '>>>'

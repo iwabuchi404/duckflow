@@ -206,7 +206,7 @@ class DuckAgent:
             # 調査
             "investigate", "submit_hypothesis", "finish_investigation",
             # 出力（常時公開）
-            "note", "response", "report", "finish", "exit", "duck_call", "show_status",
+            "note", "response", "finish", "exit", "duck_call", "show_status",
             # 記憶
             "search_archives", "recall",
         },
@@ -222,7 +222,7 @@ class DuckAgent:
             # 調査
             "investigate", "submit_hypothesis", "finish_investigation",
             # 出力（常時公開）
-            "note", "response", "report", "finish", "exit", "duck_call", "show_status",
+            "note", "response", "finish", "exit", "duck_call", "show_status",
             # 記憶
             "search_archives", "recall",
         },
@@ -238,7 +238,7 @@ class DuckAgent:
             # 実行
             "run_command", "execute_tasks", "execute_batch",
             # 出力（常時公開）
-            "note", "response", "report", "finish", "exit", "duck_call", "show_status",
+            "note", "response", "finish", "exit", "duck_call", "show_status",
             # 記憶
             "search_archives", "recall",
         },
@@ -469,7 +469,7 @@ class DuckAgent:
                         # 'note' does NOT end the loop - it's for progress notifications while continuing execution
                         should_return_to_user = False
                         for action in action_list.actions:
-                            if action.name in ["response", "report", "exit", "duck_call", "finish"]:
+                            if action.name in ["response", "exit", "duck_call", "finish"]:
                                 should_return_to_user = True
                                 break
 
@@ -556,7 +556,7 @@ class DuckAgent:
         # ターミナルアクション（ループを終了するアクション）を末尾に並べ替え
         # 例: [report, replace_in_file] → [replace_in_file, report]
         # これにより実行系アクションが先に処理され、最後にユーザーへ報告される
-        TERMINAL_ACTIONS = {"response", "report", "exit", "duck_call", "finish"}
+        TERMINAL_ACTIONS = {"response", "exit", "duck_call", "finish"}
         non_terminal = [a for a in action_list.actions if a.name not in TERMINAL_ACTIONS]
         terminal = [a for a in action_list.actions if a.name in TERMINAL_ACTIONS]
         action_list.actions = non_terminal + terminal
@@ -569,7 +569,7 @@ class DuckAgent:
             was_approved = False
             warning_msg = ""
             
-            if action.name in ["delete_file", "replace_in_file", "edit_lines"]:
+            if action.name in ["delete_file", "replace_in_file", "edit_lines", "edit_file"]:
                 requires_approval = True
                 warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
             
@@ -624,7 +624,7 @@ class DuckAgent:
                     self.state.last_action_result = f"Action '{action.name}' succeeded: {result}"
                     
                     # Add result to conversation history (for LLM context in next cycle)
-                    if action.name not in ("response", "report"):
+                    if action.name not in ("response",):
                         # Prepare tool result for conversion
                         tool_status = ToolStatus.OK
                         # We could implement truncation check here if needed later
@@ -752,9 +752,8 @@ class DuckAgent:
 
     async def action_response(self, message: str = "") -> str:
         """
-        Short interactive response to the user (max 3-4 sentences).
-        Use for questions, confirmations, or short acknowledgments.
-        Do NOT use for long analysis or investigation results — use 'report' instead.
+        Short interactive response to the user.
+        Use for questions, confirmations, short acknowledgments, or detailed investigation results.
 
         Args:
             message: ユーザーに表示するメッセージ（Markdown対応）
