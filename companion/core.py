@@ -117,7 +117,7 @@ class DuckAgent:
 
         # Register Investigation Tools (Sym-Ops v3.1)
         self.register_tool("investigate", self.action_investigate)
-        # self.register_tool("submit_hypothesis", self.action_submit_hypothesis)
+        self.register_tool("submit_hypothesis", self.action_submit_hypothesis)
         self.register_tool("finish_investigation", self.action_finish_investigation)
 
         # Register execute_batch (Sym-Ops v3.1 Fast Path)
@@ -197,7 +197,7 @@ class DuckAgent:
     
     # 全モード共通の基本ツール
     UNIVERSAL_TOOLS = {
-        "note", "response", "finish", "exit", "duck_call", "show_status",
+        "note", "response", "exit", "duck_call",
         "search_archives", "recall", "get_project_tree"
     }
 
@@ -210,7 +210,7 @@ class DuckAgent:
             # 実行
             "run_command",
             # Sub-LLM
-            "summarize_context", "generate_code",
+            "generate_code",
             # 調査
             "investigate", "submit_hypothesis", "finish_investigation",
         },
@@ -221,8 +221,6 @@ class DuckAgent:
             "analyze_structure",
             # 計画
             "propose_plan", "generate_tasks",
-            # Sub-LLM
-            "summarize_context",
             # 調査
             "investigate", "submit_hypothesis", "finish_investigation",
         },
@@ -230,7 +228,7 @@ class DuckAgent:
             # ファイル読み取り
             "read_file", "list_directory", "find_files",
             # ファイル編集
-            "replace_in_file", "edit_lines", "edit_file", "write_file", "create_file", "delete_lines", "delete_file",
+            "edit_file", "write_file", "delete_lines", "delete_file",
             # 分析
             "analyze_structure",
             # 完了管理
@@ -593,7 +591,7 @@ class DuckAgent:
                 was_approved = False
                 warning_msg = ""
                 
-                if action.name in ["delete_file", "delete_lines", "replace_in_file", "edit_lines", "edit_file"]:
+                if action.name in ["delete_file", "delete_lines", "edit_file"]:
                     requires_approval = True
                     warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
                 

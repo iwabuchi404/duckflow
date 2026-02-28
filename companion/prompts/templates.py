@@ -100,16 +100,11 @@ not just the output.
      ```
    - RETRY: On hash mismatch, re-read and retry with fresh hashes.
 
-3. `edit_lines` — Line-range based editing. Returns a preview after execution.
-   - CRITICAL: Confirm target lines with `read_file` before editing.
-   - MUST: Preview with `dry_run=True`, then commit with `dry_run=False`. Never skip commit.
-   - RETRY: On hash mismatch, re-read and retry.
+3. `generate_code` — Delegate complex code generation to a sub-worker.
 
-4. `generate_code` — Delegate complex code generation to a sub-worker.
+4. `write_file` — Use for new file creation or full rewrites only.
 
-5. `write_file` — Use for new file creation or full rewrites only.
-
-6. `analyze_structure @path` — Get class/function map without reading full file.
+5. `analyze_structure @path` — Get class/function map without reading full file.
 
 ### Communication Actions
 
