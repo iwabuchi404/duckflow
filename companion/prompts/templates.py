@@ -199,7 +199,6 @@ MODE_MAP = {
     'investigation': INVESTIGATION_MODE_INSTRUCTIONS,
     'planning':      PLANNING_MODE_INSTRUCTIONS,
     'task':          TASK_MODE_INSTRUCTIONS,
-    'task_execution': TASK_MODE_INSTRUCTIONS,
 }
 
 # ===========================================================================

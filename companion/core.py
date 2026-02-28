@@ -238,8 +238,7 @@ class DuckAgent:
             "run_command", "execute_tasks", "execute_batch",
         },
     }
-    # task_execution は task と同じツールセットを使用
-    MODE_TOOL_MAPPING["task_execution"] = MODE_TOOL_MAPPING["task"]
+# ⚠️ 後方互換：task_execution は deprecated。task を使用してください。
 
     def get_tool_descriptions(self, mode: str = None) -> str:
         """

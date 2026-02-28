@@ -17,26 +17,29 @@ class DuckflowResponse:
     actions: List[Action] = field(default_factory=list)
     raw_text: str = ""
     parse_errors: List[str] = field(default_factory=list)
+    is_batch: bool = False  # Sym-Ops v3.2: batch execution flag
 
 class DuckflowParser:
     """Parser for Duckflow Markdown+KV format"""
     
     # Section patterns
-    REASONING_PATTERN = re.compile(r'^\[REASONING\]')
-    VITAL_PATTERN = re.compile(r'^\[([A-Z_]+)\]\s+(.+)')
-    ACTION_PATTERN = re.compile(r'^\[ACTION_(\d+)_([a-zA-Z0-9_]+)\]\s*(.+)?')
-    CONTENT_START_PATTERN = re.compile(r'^\[ACTION_(\d+)_CONTENT_START\]')
-    CONTENT_END_PATTERN = re.compile(r'^\[ACTION_(\d+)_CONTENT_END\]')
+    REASONING_PATTERN = re.compile(r'^>>\s*(.*)$')
+    VITAL_PATTERN = re.compile(r'^::c([0-1]\.[0-9])\s+::s([0-1]\.[0-9])\s+::m([0-1]\.[0-9])\s+::f([0-1]\.[0-9])$')
+    ACTION_PATTERN = re.compile(r'^::([a-zA-Z_]+)\s+(@[^\s]+)(.*)$')
+    BATCH_START_PATTERN = re.compile(r'^::execute_batch$')
+    BATCH_SEPARATOR = re.compile(r'^%%%(?:\s*|$)')
+    CONTENT_START = re.compile(r'^<<<$')
+    CONTENT_END = re.compile(r'^>>>$')
     
     # Known vitals
-    KNOWN_VITALS = {'CONFIDENCE', 'MOOD', 'FOCUS', 'STAMINA'}
+    KNOWN_VITALS = {'confidence', 'safety', 'memory', 'focus'}
     
     def parse(self, response: str) -> DuckflowResponse:
         """
         Parse a Duckflow response.
         
         Args:
-            response: Raw response string
+            :: response @ : Raw response string
             
         Returns:
             DuckflowResponse object
@@ -44,62 +47,64 @@ class DuckflowParser:
         result = DuckflowResponse(raw_text=response)
         
         lines = response.split('\n')
-        current_section = None
         reasoning_buffer = []
         
         # Action tracking
         actions_dict: Dict[int, Dict[str, Any]] = {}
-        current_action_idx = None
-        current_param_name = None  # Track current param for multi-line values
-        content_buffer = []
+        current_action_idx = 0
         in_content = False
+        content_buffer = []
+        current_action_data = None
+        
+        # Batch execution tracking
+        is_batch = False
+        batch_actions = []
         
         for line_num, line in enumerate(lines, 1):
             try:
-                # Check for REASONING section
-                if self.REASONING_PATTERN.match(line):
-                    current_section = 'reasoning'
-                    current_param_name = None
+                # Check for reasoning (Sym-Ops v3.2: >> format)
+                if line.strip().startswith('>>'):
+                    reasoning_match = self.REASONING_PATTERN.match(line.strip())
+                    if reasoning_match:
+                        reasoning_buffer.append(reasoning_match.group(1))
                     continue
                 
-                # Check for vitals
-                vital_match = self.VITAL_PATTERN.match(line)
+                # Check for vitals (Sym-Ops v3.2: ::c0.9 ::s1.0 format)
+                vital_match = self.VITAL_PATTERN.match(line.strip())
                 if vital_match:
-                    vital_name, vital_value = vital_match.groups()
-                    vital_value = vital_value.strip()
-                    if vital_name in self.KNOWN_VITALS:
-                        try:
-                            result.vitals[vital_name.lower()] = float(vital_value)
-                        except ValueError:
-                            result.parse_errors.append(
-                                f"Line {line_num}: Invalid vital value: {vital_value}"
-                            )
-                    current_section = None
-                    current_param_name = None
+                    confidence, safety, memory, focus = vital_match.groups()
+                    result.vitals = {
+                        'confidence': float(confidence),
+                        'safety': float(safety),
+                        'memory': float(memory),
+                        'focus': float(focus)
+                    }
                     continue
                 
-                # Check for action content start
-                content_start_match = self.CONTENT_START_PATTERN.match(line)
-                if content_start_match:
-                    action_idx = int(content_start_match.group(1))
-                    current_action_idx = action_idx
+                # Check for batch start
+                if self.BATCH_START_PATTERN.match(line.strip()):
+                    is_batch = True
+                    continue
+                
+                # Check for batch separator
+                if self.BATCH_SEPARATOR.match(line.strip()):
+                    if current_action_data and 'type' in current_action_data:
+                        actions_dict[current_action_idx] = current_action_data
+                        current_action_idx += 1
+                    current_action_data = None
+                    continue
+                
+                # Check for content start
+                if line.strip() == '<<<':
                     in_content = True
                     content_buffer = []
-                    current_section = None
-                    current_param_name = None
                     continue
                 
-                # Check for action content end
-                content_end_match = self.CONTENT_END_PATTERN.match(line)
-                if content_end_match:
-                    action_idx = int(content_end_match.group(1))
-                    if action_idx in actions_dict:
-                        actions_dict[action_idx]['content'] = '\n'.join(content_buffer)
+                # Check for content end
+                if line.strip() == '>>>':
+                    if current_action_data:
+                        current_action_data['content'] = '\n'.join(content_buffer)
                     in_content = False
-                    content_buffer = []
-                    current_action_idx = None
-                    current_section = None
-                    current_param_name = None
                     continue
                 
                 # If in content section, collect lines
@@ -107,49 +112,48 @@ class DuckflowParser:
                     content_buffer.append(line)
                     continue
                 
-                # Check for action parameters
-                action_match = self.ACTION_PATTERN.match(line)
+                # Check for action (Sym-Ops v3.2: ::action_name @path params)
+                action_match = self.ACTION_PATTERN.match(line.strip())
                 if action_match:
-                    action_idx = int(action_match.group(1))
-                    param_name = action_match.group(2)
-                    param_value = action_match.group(3) or ''
+                    action_name = action_match.group(1)
+                    target = action_match.group(2)
+                    params_str = action_match.group(3) or ''
                     
-                    # Initialize action if needed
-                    if action_idx not in actions_dict:
-                        actions_dict[action_idx] = {'params': {}}
+                    # Parse params
+                    params = {}
+                    if params_str:
+                        for param in params_str.split():
+                            if '=' in param:
+                                key, value = param.split('=', 1)
+                                params[key] = value
                     
-                    # Store TYPE or params
-                    if param_name == 'TYPE':
-                        actions_dict[action_idx]['type'] = param_value.strip()
-                        current_param_name = None # Type is usually single line
-                    else:
-                        # Start tracking this param
-                        actions_dict[action_idx]['params'][param_name.lower()] = param_value.strip()
-                        current_action_idx = action_idx
-                        current_param_name = param_name.lower()
+                    current_action_data = {
+                        'type': action_name,
+                        'params': params,
+                        'target': target
+                    }
                     
-                    current_section = None
+                    # If not in batch mode, add immediately
+                    if not is_batch:
+                        actions_dict[current_action_idx] = current_action_data
+                        current_action_idx += 1
+                        current_action_data = None
+                    
                     continue
                 
                 # Collect reasoning text
-                if current_section == 'reasoning':
-                    reasoning_buffer.append(line)
+                if reasoning_buffer and not line.strip():
                     continue
-
-                # Collect multi-line param value
-                if current_param_name and current_action_idx is not None:
-                    # Append to existing value
-                    current_val = actions_dict[current_action_idx]['params'][current_param_name]
-                    if current_val:
-                        actions_dict[current_action_idx]['params'][current_param_name] = current_val + "\n" + line
-                    else:
-                        actions_dict[current_action_idx]['params'][current_param_name] = line
                     
             except Exception as e:
                 result.parse_errors.append(f"Line {line_num}: {str(e)}")
         
         # Finalize reasoning
-        result.reasoning = '\n'.join(reasoning_buffer).strip()
+        result.reasoning = ' '.join(reasoning_buffer).strip()
+        
+        # Finalize last action if in batch
+        if current_action_data and 'type' in current_action_data:
+            actions_dict[current_action_idx] = current_action_data
         
         # Convert actions_dict to Action objects
         for idx in sorted(actions_dict.keys()):
@@ -163,5 +167,8 @@ class DuckflowParser:
                 params=action_data.get('params', {}),
                 content=action_data.get('content')
             ))
+        
+        # Set batch flag if multiple actions or explicit batch
+        result.is_batch = len(result.actions) > 1 or is_batch
         
         return result

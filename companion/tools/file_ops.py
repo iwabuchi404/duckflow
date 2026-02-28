@@ -93,7 +93,7 @@ class FileOps:
 
             # hashline 形式に変換
             if content_lines:
-                content = HashlineHelper.format_with_hashlines('\n'.join(content_lines))
+                content = HashlineHelper.format_with_hashlines('\n'.join(content_lines), start_line=start_line)
             else:
                 content = "(Empty file)"
 
@@ -110,14 +110,13 @@ class FileOps:
 
     async def write_file(self, path: str, content: str) -> str:
         """
-        Write or overwrite a file with the provided content.
+        :: write @ or overwrite a file with the provided content.
         Creates parent directories automatically.
         既存ファイルを上書きする場合はユーザー承認が必要。
 
-        NOTE: Use a Sym-Ops content block (<<< >>>) for the 'content' parameter
+        :: note @ : Use a Sym-Ops content block (<<< >>>) for the 'content' parameter
         when writing multi-line files or code.
         """
-
         full_path = self._get_full_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:

@@ -27,7 +27,7 @@ def get_system_prompt(tool_descriptions: str, state_context: str, mode: str = "p
     Args:
         tool_descriptions: ツール一覧の説明文
         state_context: AgentState.to_prompt_context() の出力
-        mode: "planning" | "investigation" | "task" | "task_execution"
+mode: "planning" | "investigation" | "task"
 
     Returns:
         完全なシステムプロンプト文字列
