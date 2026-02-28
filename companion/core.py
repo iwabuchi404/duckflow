@@ -365,124 +365,132 @@ class DuckAgent:
                 
                 # --- Autonomous Execution Loop ---
                 # Continue thinking and executing until we produce a response to the user
-                while True:
-                    # Increment loop counter
-                    self.pacemaker.loop_count += 1
-                    logger.debug(f"Autonomous loop iteration: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}")
-                    
-                    # Display vitals at the start of each loop iteration
-                    ui.print_vitals(
-                        self.state.vitals,
-                        self.pacemaker.loop_count,
-                        self.pacemaker.max_loops
-                    )
-                    
-                    # 2. Think & Decide Phase
-                    self.state.phase = AgentPhase.THINKING
+                ui.start_live()
+                try:
+                    while True:
+                        # Increment loop counter
+                        self.pacemaker.loop_count += 1
+                        logger.debug(f"Autonomous loop iteration: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}")
+                        
+                        # Display vitals at the start of each loop iteration
+                        ui.print_vitals(
+                            self.state.vitals,
+                            self.pacemaker.loop_count,
+                            self.pacemaker.max_loops
+                        )
+                        
+                        # 2. Think & Decide Phase
+                        self.state.phase = AgentPhase.THINKING
 
-                    # system_promptを介入・通常両方で使うため先に生成
-                    prompt_builder = PromptBuilder(self.state)
-                    system_prompt = prompt_builder.build(self.get_tool_descriptions(self.state.current_mode.value))
-                    # エラーフィードバックはプロンプトに注入済み。1ターン限りなのでクリア
-                    self.state.last_syntax_errors = []
+                        # system_promptを介入・通常両方で使うため先に生成
+                        prompt_builder = PromptBuilder(self.state)
+                        system_prompt = prompt_builder.build(self.get_tool_descriptions(self.state.current_mode.value))
+                        # エラーフィードバックはプロンプトに注入済み。1ターン限りなのでクリア
+                        self.state.last_syntax_errors = []
 
-                    # --- Pacemaker Health Check (Before LLM Call) ---
-                    intervention = self.pacemaker.check_health()
-                    if intervention:
-                        # ハイブリッド介入: 履歴サマリー + LLMによる状況説明
-                        ui.print_warning(f"🦆 Pacemaker介入: {intervention.message}")
-                        summary = self.pacemaker.build_intervention_summary()
+                        # --- Pacemaker Health Check (Before LLM Call) ---
+                        intervention = self.pacemaker.check_health()
+                        if intervention:
+                            # ハイブリッド介入: 履歴サマリー + LLMによる状況説明
+                            ui.print_warning(f"🦆 Pacemaker介入: {intervention.message}")
+                            summary = self.pacemaker.build_intervention_summary()
 
-                        try:
-                            # LLMに状況説明を求める
-                            intervention_prompt = (
-                                "## Pacemaker Intervention\n"
-                                f"Type: {intervention.type} | Severity: {intervention.severity}\n"
-                                f"{intervention.message}\n\n"
-                                f"## Recent Execution History\n{summary}\n\n"
-                                "## Your Task\n"
-                                "ユーザーに何が起きているか簡潔に説明してください:\n"
-                                "1. 何をしようとしていたか\n"
-                                "2. 何が問題だったか\n"
-                                "3. 続行/中止/方針変更の選択肢を提示\n"
-                                "::response で返答してください。"
-                            )
-                            messages = [
-                                {"role": "system", "content": system_prompt}
-                            ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history + [
-                                {"role": "user", "content": intervention_prompt}
-                            ]
-                            with ui.create_spinner("Analyzing intervention..."):
+                            try:
+                                # LLMに状況説明を求める
+                                intervention_prompt = (
+                                    "## Pacemaker Intervention\n"
+                                    f"Type: {intervention.type} | Severity: {intervention.severity}\n"
+                                    f"{intervention.message}\n\n"
+                                    f"## Recent Execution History\n{summary}\n\n"
+                                    "## Your Task\n"
+                                    "ユーザーに何が起きているか簡潔に説明してください:\n"
+                                    "1. 何をしようとしていたか\n"
+                                    "2. 何が問題だったか\n"
+                                    "3. 続行/中止/方針変更の選択肢を提示\n"
+                                    "::response で返答してください。"
+                                )
+                                messages = [
+                                    {"role": "system", "content": system_prompt}
+                                ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history + [
+                                    {"role": "user", "content": intervention_prompt}
+                                ]
+                                with ui.create_spinner("Analyzing intervention..."):
+                                    action_list = await self.llm.chat(messages, response_model=ActionList)
+                            except Exception as e:
+                                # フォールバック: LLM失敗時は履歴サマリー付きduck_call
+                                logger.warning(f"Intervention LLM call failed: {e}, using fallback")
+                                action_list = ActionList(
+                                    actions=[self.pacemaker.intervene(intervention, summary=summary)],
+                                    reasoning=f"Pacemaker intervention (fallback): {intervention.type}"
+                                )
+                        else:
+                            # Normal LLM call
+                            with ui.create_spinner("Thinking..."):
+                                # Prepare messages
+                                # Few-shot例をsystem直後、会話履歴前に注入
+                                # LLMがSym-Ops構文を出力形式として学習するための会話ペア
+                                messages = [
+                                    {"role": "system", "content": system_prompt}
+                                ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history
+
+                                # Debug output
+                                if self.debug_context_mode:
+                                    ui.print_debug_context(messages, mode=self.debug_context_mode)
+
+                                # Call LLM
                                 action_list = await self.llm.chat(messages, response_model=ActionList)
-                        except Exception as e:
-                            # フォールバック: LLM失敗時は履歴サマリー付きduck_call
-                            logger.warning(f"Intervention LLM call failed: {e}, using fallback")
-                            action_list = ActionList(
-                                actions=[self.pacemaker.intervene(intervention, summary=summary)],
-                                reasoning=f"Pacemaker intervention (fallback): {intervention.type}"
-                            )
-                    else:
-                        # Normal LLM call
-                        with ui.create_spinner("Thinking..."):
-                            # Prepare messages
-                            # Few-shot例をsystem直後、会話履歴前に注入
-                            # LLMがSym-Ops構文を出力形式として学習するための会話ペア
-                            messages = [
-                                {"role": "system", "content": system_prompt}
-                            ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history
-
-                            # Debug output
-                            if self.debug_context_mode:
-                                ui.print_debug_context(messages, mode=self.debug_context_mode)
-
-                            # Call LLM
-                            action_list = await self.llm.chat(messages, response_model=ActionList)
+                            
+                            logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
+                            
+                            # Sym-Ops v3.1: バイタルを更新 (c=confidence, s=safety, m=memory, f=focus)
+                            if action_list.vitals:
+                                logger.info(f"Updating vitals from response: {action_list.vitals}")
+                                if "confidence" in action_list.vitals:
+                                    self.state.vitals.confidence = action_list.vitals["confidence"]
+                                if "safety" in action_list.vitals:
+                                    self.state.vitals.safety = action_list.vitals["safety"]
+                                if "memory" in action_list.vitals:
+                                    self.state.vitals.memory = action_list.vitals["memory"]
+                                if "focus" in action_list.vitals:
+                                    self.state.vitals.focus = action_list.vitals["focus"]
+                            
+                            # Display reasoning
+                            ui.print_thinking(action_list.reasoning)
                         
-                        logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
-                        
-                        # Sym-Ops v3.1: バイタルを更新 (c=confidence, s=safety, m=memory, f=focus)
-                        if action_list.vitals:
-                            logger.info(f"Updating vitals from response: {action_list.vitals}")
-                            if "confidence" in action_list.vitals:
-                                self.state.vitals.confidence = action_list.vitals["confidence"]
-                            if "safety" in action_list.vitals:
-                                self.state.vitals.safety = action_list.vitals["safety"]
-                            if "memory" in action_list.vitals:
-                                self.state.vitals.memory = action_list.vitals["memory"]
-                            if "focus" in action_list.vitals:
-                                self.state.vitals.focus = action_list.vitals["focus"]
-                        
-                        # Display reasoning
-                        ui.print_thinking(action_list.reasoning)
-                    
-                    # 3. Execute Actions
-                    self.state.phase = AgentPhase.EXECUTING
-                    if action_list.actions:
-                        await self.execute_actions(action_list)
+                        # 3. Execute Actions
+                        self.state.phase = AgentPhase.EXECUTING
+                        if action_list.actions:
+                            await self.execute_actions(action_list)
 
 
-                        # Decide next action: Continue loop OR return to user
-                        # LLM should decide based on what happened (results, current state, task progress)
+                            # Decide next action: Continue loop OR return to user
+                            # LLM should decide based on what happened (results, current state, task progress)
 
-                        # Check if we should return to user
-                        # If 'response', 'report', 'exit', 'duck_call', or 'finish' action was executed, break the inner loop
-                        # 'note' does NOT end the loop - it's for progress notifications while continuing execution
-                        should_return_to_user = False
-                        for action in action_list.actions:
-                            if action.name in ["response", "exit", "duck_call", "finish"]:
-                                should_return_to_user = True
+                            # Check if we should return to user
+                            # If 'response', 'report', 'exit', 'duck_call', or 'finish' action was executed, break the inner loop
+                            # 'note' does NOT end the loop - it's for progress notifications while continuing execution
+                            should_return_to_user = False
+                            for action in action_list.actions:
+                                if action.name in ["response", "exit", "duck_call", "finish"]:
+                                    should_return_to_user = True
+                                    break
+
+                            if should_return_to_user:
+                                logger.info("Autonomous loop ending: response/exit/duck_call action executed")
+                                # Reset pacemaker for next session
+                                self.pacemaker.reset()
                                 break
-
-                        if should_return_to_user:
-                            logger.info("Autonomous loop ending: response/exit/duck_call action executed")
-                            # Reset pacemaker for next session
+                        else:
+                            # No actions proposed, break the inner loop
+                            logger.info("Autonomous loop ending: no actions proposed")
                             self.pacemaker.reset()
                             break
-                    else:
-                        # No actions proposed, break the inner loop
-                        logger.info("Autonomous loop ending: no actions proposed")
-                        self.pacemaker.reset()
-                        break
+                except KeyboardInterrupt:
+                    ui.print_warning("\n⚠️  Interrupted by user. Returning to manual input.")
+                    self.pacemaker.reset()
+                    self.state.phase = AgentPhase.AWAITING_USER
+                finally:
+                    ui.stop_live()
                 # ---------------------------------
 
                 # ターン完了: セッションを保存する
@@ -561,163 +569,168 @@ class DuckAgent:
         terminal = [a for a in action_list.actions if a.name in TERMINAL_ACTIONS]
         action_list.actions = non_terminal + terminal
 
-        for action in action_list.actions:
-            ui.print_action(action.name, action.parameters, action.thought)
+        try:
+            for action in action_list.actions:
+                ui.print_action(action.name, action.parameters, action.thought)
 
-            # --- Approval Check ---
-            requires_approval = False
-            was_approved = False
-            warning_msg = ""
-            
-            if action.name in ["delete_file", "replace_in_file", "edit_lines", "edit_file"]:
-                requires_approval = True
-                warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
-            
-            elif action.name == "write_file":
-                path = action.parameters.get("path")
-                if path and file_ops.file_exists(path):
+                # --- Approval Check ---
+                requires_approval = False
+                was_approved = False
+                warning_msg = ""
+                
+                if action.name in ["delete_file", "replace_in_file", "edit_lines", "edit_file"]:
                     requires_approval = True
-                    warning_msg = f"File '{path}' already exists. Overwrite?"
-            
-            if requires_approval:
-                if not ui.request_confirmation(warning_msg):
-                    msg = f"Action '{action.name}' denied by user."
-                    ui.print_result(msg, is_error=True)
-                    self.state.last_action_result = msg
-                    
-                    # Add denial to conversation history so LLM knows what happened
-                    denial_context = (
-                        f"[User denied approval for action '{action.name}'] "
-                        f"Reason: {warning_msg}. "
-                        f"The user refused to proceed with this operation. "
-                        f"Please either: 1) Ask the user what to do instead, "
-                        f"2) Try a different approach, or 3) Explain the situation."
-                    )
-                    self.state.add_message("user", denial_context)
-                    
-                    # Update Pacemaker vitals (denial is treated as an error)
-                    self.pacemaker.update_vitals(action, msg, is_error=True)
-                    
-                    results.append(msg)
-                    continue
-                else:
-                    # User approved - mark this action as approved
-                    was_approved = True
-                    logger.info(f"User approved action: {action.name}")
-            # ----------------------
-            
-            if action.name in self.tools:
-                try:
-                    # Execute tool
-                    func = self.tools[action.name]
-                    logger.info(f"Calling tool: {action.name}")
-                    
-                    # Check if function is async
-                    if asyncio.iscoroutinefunction(func):
-                        result = await func(**action.parameters)
-                    else:
-                        result = func(**action.parameters)
-                    
-                    logger.info(f"Tool {action.name} returned. Result length: {len(str(result))}")
-                    
-                    # Record result
-                    self.state.last_action_result = f"Action '{action.name}' succeeded: {result}"
-                    
-                    # Add result to conversation history (for LLM context in next cycle)
-                    if action.name not in ("response",):
-                        # Prepare tool result for conversion
-                        tool_status = ToolStatus.OK
-                        # We could implement truncation check here if needed later
+                    warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
+                
+                elif action.name == "write_file":
+                    path = action.parameters.get("path")
+                    if path and file_ops.file_exists(path):
+                        requires_approval = True
+                        warning_msg = f"File '{path}' already exists. Overwrite?"
+                
+                if requires_approval:
+                    if not ui.request_confirmation(warning_msg):
+                        msg = f"Action '{action.name}' denied by user."
+                        ui.print_result(msg, is_error=True)
+                        self.state.last_action_result = msg
                         
-                        tool_res = ToolResult(
-                            status=tool_status,
+                        # Add denial to conversation history so LLM knows what happened
+                        denial_context = (
+                            f"[User denied approval for action '{action.name}'] "
+                            f"Reason: {warning_msg}. "
+                            f"The user refused to proceed with this operation. "
+                            f"Please either: 1) Ask the user what to do instead, "
+                            f"2) Try a different approach, or 3) Explain the situation."
+                        )
+                        self.state.add_message("user", denial_context)
+                        
+                        # Update Pacemaker vitals (denial is treated as an error)
+                        self.pacemaker.update_vitals(action, msg, is_error=True)
+                        
+                        results.append(msg)
+                        continue
+                    else:
+                        # User approved - mark this action as approved
+                        was_approved = True
+                        logger.info(f"User approved action: {action.name}")
+                # ----------------------
+                
+                if action.name in self.tools:
+                    try:
+                        # Execute tool
+                        func = self.tools[action.name]
+                        logger.info(f"Calling tool: {action.name}")
+                        
+                        # Check if function is async
+                        if asyncio.iscoroutinefunction(func):
+                            result = await func(**action.parameters)
+                        else:
+                            result = func(**action.parameters)
+                        
+                        logger.info(f"Tool {action.name} returned. Result length: {len(str(result))}")
+                        
+                        # Record result
+                        self.state.last_action_result = f"Action '{action.name}' succeeded: {result}"
+                        
+                        # Add result to conversation history (for LLM context in next cycle)
+                        if action.name not in ("response",):
+                            # Prepare tool result for conversion
+                            tool_status = ToolStatus.OK
+                            # We could implement truncation check here if needed later
+                            
+                            tool_res = ToolResult(
+                                status=tool_status,
+                                tool_name=action.name,
+                                target=action.parameters.get("path", action.parameters.get("command", "task")),
+                                content=result
+                            )
+                            formatted_res = format_symops_response(tool_res)
+
+                            # If this action required approval, add explicit completion message
+                            if was_approved:
+                                completion_msg = (
+                                    f"{formatted_res}\n\n"
+                                    f"[System: User approved action. Proceed with next steps.]"
+                                )
+                                self.state.add_message("user", completion_msg)
+                            else:
+                                self.state.add_message("user", formatted_res)
+                            
+                            if isinstance(result, str):
+                                ui.print_result(result)
+                            else:
+                                ui.print_result(serialize_to_text(result))
+                        
+                        results.append(result)
+
+                        # Update Pacemaker vitals (success)
+                        self.pacemaker.update_vitals(action, result, is_error=False)
+                        consecutive_errors = 0  # 成功したらリセット
+
+                    except Exception as e:
+                        error_msg = f"Action '{action.name}' failed: {str(e)}"
+                        logger.error(error_msg, exc_info=True)
+                        self.state.last_action_result = error_msg
+                        ui.print_result(str(e), is_error=True)
+
+                        # 引数不足などの TypeError を構文エラーとして記録
+                        if isinstance(e, TypeError):
+                            self.state.last_syntax_errors.append(SyntaxErrorInfo(
+                                error_type='missing_param',
+                                raw_snippet=str(e)[:200],
+                                correction_hint='Required parameter is missing. Check the tool signature.',
+                            ))
+
+                        # Add error to conversation history in Sym-Ops format
+                        err_res = ToolResult(
+                            status=ToolStatus.ERROR,
                             tool_name=action.name,
                             target=action.parameters.get("path", action.parameters.get("command", "task")),
-                            content=result
+                            content=e
                         )
-                        formatted_res = format_symops_response(tool_res)
+                        self.state.add_message("user", format_symops_response(err_res))
 
-                        # If this action required approval, add explicit completion message
-                        if was_approved:
-                            completion_msg = (
-                                f"{formatted_res}\n\n"
-                                f"[System: User approved action. Proceed with next steps.]"
-                            )
-                            self.state.add_message("user", completion_msg)
-                        else:
-                            self.state.add_message("user", formatted_res)
-                        
-                        if isinstance(result, str):
-                            ui.print_result(result)
-                        else:
-                            ui.print_result(serialize_to_text(result))
+                        results.append(error_msg)
+
+                        # Update Pacemaker vitals (error)
+                        self.pacemaker.update_vitals(action, error_msg, is_error=True)
+
+                        # --- Fail-fast: 連続エラーで残りのアクションを中断 ---
+                        consecutive_errors += 1
+                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
+                            remaining = len(action_list.actions) - action_list.actions.index(action) - 1
+                            if remaining > 0:
+                                logger.warning(f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions")
+                                ui.print_warning(f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。")
+                                self.state.add_message(
+                                    "user",
+                                    f"[SYSTEM] 連続{consecutive_errors}回のエラーにより残り{remaining}件のアクションを中断しました。"
+                                    "原因を確認してから再試行してください。"
+                                )
+                            break
+                else:
+                    msg = f"Unknown tool: {action.name}"
+                    logger.warning(msg)
+                    self.state.last_action_result = msg
+                    ui.print_result(msg, is_error=True)
                     
-                    results.append(result)
-
-                    # Update Pacemaker vitals (success)
-                    self.pacemaker.update_vitals(action, result, is_error=False)
-                    consecutive_errors = 0  # 成功したらリセット
-
-                except Exception as e:
-                    error_msg = f"Action '{action.name}' failed: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
-                    self.state.last_action_result = error_msg
-                    ui.print_result(str(e), is_error=True)
-
-                    # 引数不足などの TypeError を構文エラーとして記録
-                    if isinstance(e, TypeError):
-                        self.state.last_syntax_errors.append(SyntaxErrorInfo(
-                            error_type='missing_param',
-                            raw_snippet=str(e)[:200],
-                            correction_hint='Required parameter is missing. Check the tool signature.',
-                        ))
-
-                    # Add error to conversation history in Sym-Ops format
-                    err_res = ToolResult(
-                        status=ToolStatus.ERROR,
-                        tool_name=action.name,
-                        target=action.parameters.get("path", action.parameters.get("command", "task")),
-                        content=e
+                    # Add unknown tool error to conversation history
+                    available_tools = ", ".join(self.tools.keys())
+                    self.state.add_message(
+                        "user", 
+                        f"[Error] Tool '{action.name}' does not exist. "
+                        f"Available tools: {available_tools}. "
+                        f"Please use one of the available tools."
                     )
-                    self.state.add_message("user", format_symops_response(err_res))
-
-                    results.append(error_msg)
-
-                    # Update Pacemaker vitals (error)
-                    self.pacemaker.update_vitals(action, error_msg, is_error=True)
-
-                    # --- Fail-fast: 連続エラーで残りのアクションを中断 ---
-                    consecutive_errors += 1
-                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                        remaining = len(action_list.actions) - action_list.actions.index(action) - 1
-                        if remaining > 0:
-                            logger.warning(f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions")
-                            ui.print_warning(f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。")
-                            self.state.add_message(
-                                "user",
-                                f"[SYSTEM] 連続{consecutive_errors}回のエラーにより残り{remaining}件のアクションを中断しました。"
-                                "原因を確認してから再試行してください。"
-                            )
-                        break
-            else:
-                msg = f"Unknown tool: {action.name}"
-                logger.warning(msg)
-                self.state.last_action_result = msg
-                ui.print_result(msg, is_error=True)
-                
-                # Add unknown tool error to conversation history
-                available_tools = ", ".join(self.tools.keys())
-                self.state.add_message(
-                    "user", 
-                    f"[Error] Tool '{action.name}' does not exist. "
-                    f"Available tools: {available_tools}. "
-                    f"Please use one of the available tools."
-                )
-                
-                results.append(msg)
-                
-                # Update Pacemaker vitals (error - unknown tool)
-                self.pacemaker.update_vitals(action, msg, is_error=True)
+                    
+                    results.append(msg)
+                    
+                    # Update Pacemaker vitals (error - unknown tool)
+                    self.pacemaker.update_vitals(action, msg, is_error=True)
+        except KeyboardInterrupt:
+            ui.print_warning("Execution interrupted by user.")
+            self.state.add_message("user", "[System: Execution was interrupted by the user (Ctrl+C). Please wait for new instructions.]")
+            # results might be partial, but that's okay
         
         # Update token usage display
         if ui:
@@ -766,14 +779,7 @@ class DuckAgent:
 
         self.state.add_message("assistant", message)
 
-        from rich.panel import Panel
-        from rich.markdown import Markdown
-        ui.console.print(Panel(
-            Markdown(message),
-            title="[duck]🦆 Duckflow[/duck]",
-            border_style="duck",
-            expand=False
-        ))
+        ui.print_conversation_message(message, speaker="assistant")
         return "Responded to user."
 
     async def action_report(self, message: str = "") -> str:
@@ -790,14 +796,8 @@ class DuckAgent:
         """
         self.state.add_message("assistant", f"[REPORT]\n{message}")
 
-        from rich.panel import Panel
-        from rich.markdown import Markdown
-        ui.console.print(Panel(
-            Markdown(message),
-            title="[duck]📋 Duckflow Report[/duck]",
-            border_style="cyan",
-            expand=False
-        ))
+        ui.print_system("Generating report...")
+        ui.print_markdown(message)
         return "Report delivered to user."
 
     async def action_status(self) -> str:

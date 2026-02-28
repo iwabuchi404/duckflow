@@ -20,10 +20,21 @@ from rich.traceback import install
 # Install rich traceback handler
 install(show_locals=False)
 
+from companion.ui import ui
+
+class UILogHandler(logging.Handler):
+    """Custom logging handler to send logs to the DuckUI sidebar."""
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            ui.add_log(msg)
+        except Exception:
+            self.handleError(record)
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(name)s: %(message)s',
     handlers=[
         RotatingFileHandler(
             "duckflow_v4.log",
@@ -31,7 +42,7 @@ logging.basicConfig(
             backupCount=3,
             encoding='utf-8'
         ),
-        logging.StreamHandler(sys.stdout)
+        UILogHandler()  # Use UI sidebar instead of StreamHandler
     ]
 )
 # Set external libs to WARNING to reduce noise

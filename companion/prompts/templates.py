@@ -60,11 +60,19 @@ You interact with the system ONLY through the tools listed below. Use only the t
 
 4. **Terminal Actions (Ends the turn)**:
    - `::note <<< msg >>>`: Progress update (loop continues).
-   - `::response <<< msg >>>`: For short answers only (max 3-4 sentences). For longer analysis, use `::response`.
-   - `::response <<< msg >>>`: Structured delivery. MUST include `## 要約`, `## 詳細`, `## 結論`.
+   - `::response <<< msg >>>`: For ::response, adapt answer length to context and content complexity. 
+    - Simple confirmations: Brief 
+    - Complex analysis/explanations: Detailed as needed     
+    - Prioritize clarity and helpfulness over brevity.     
 
 ## Available Tools
 {tool_descriptions}
+
+## モード遷移の条件
+- Investigation → Planning: 根本原因を特定し、::finish_investigation を呼んだ時
+- Planning → Task: propose_plan + generate_tasks が完了した時
+- Task → Planning: 現ステップの全タスクが完了した時
+- 任意 → Investigation: 3回連続でエラーが発生した時（自動遷移）
 """
 
 INVESTIGATION_MODE_INSTRUCTIONS = """

@@ -29,22 +29,34 @@ class ParseError(Exception):
 
 class AutoRepair:
     """
-    Pattern-based auto-repair engine v2
-    Automatically fixes typical LLM output errors
+    Pattern-based auto-repair engine v2.1
+    Automatically fixes typical LLM output errors with higher tolerance.
     """
     
     def repair(self, text: str) -> str:
         """Apply all repair rules"""
         text = self._fix_markdown_blocks(text)
         text = self._fix_missing_symbols(text)
+        text = self._fix_vitals_format(text)
         text = self._fix_delimiters(text)
         text = self._fix_indentation(text)
-        text = self._fix_vitals_format(text)
+        text = self._fix_unclosed_blocks(text)
         return text
     
+    def _fix_unclosed_blocks(self, text: str) -> str:
+        """Ensure all <<< blocks are closed with >>> at the end of text."""
+        open_count = text.count('<<<')
+        close_count = text.count('>>>')
+        
+        if open_count > close_count:
+            # Add missing closing delimiters
+            text = text.rstrip() + '\n' + ('>>>\n' * (open_count - close_count))
+        return text
+
     def _fix_markdown_blocks(self, text: str) -> str:
         """Convert Markdown code blocks to v2 format"""
-        pattern = r'```(?:python|py|javascript|js|bash|sh|json|yaml|sql|markdown|md)?\n(.*?)```'
+        # Improved regex to handle language identifier better
+        pattern = r'```[\w\-]*\n(.*?)(?:```|$)'
         
         def replace_block(match):
             content = match.group(1).rstrip('\n')
@@ -53,38 +65,45 @@ class AutoRepair:
         return re.sub(pattern, replace_block, text, flags=re.DOTALL | re.MULTILINE)
     
     def _fix_missing_symbols(self, text: str) -> str:
-        """Complement missing symbols from action lines v2"""
+        """Complement missing symbols from action lines v2.1 v2.1"""
         lines = text.split('\n')
         fixed_lines = []
         
+        # Expanded action verbs with common variants
         action_verbs = {
-            'create', 'edit', 'delete', 'remove', 'update',
-            'run', 'execute', 'test', 'check', 'verify', 'finish', 'response',
+            'create', 'edit', 'delete', 'remove', 'update', 'write', 'read',
+            'run', 'execute', 'test', 'check', 'verify', 'finish', 'response', 'report',
             'propose_plan', 'duck_call', 'create_file', 'edit_file', 'delete_file',
-            'run_command', 'read_file', 'list_directory',
-            'execute_batch',  # Sym-Ops v3.2
+            'run_command', 'read_file', 'list_directory', 'get_project_tree',
+            'execute_batch', 'note', 'search_archives', 'recall'
         }
         
         for line in lines:
             stripped = line.strip()
             
-            if stripped.startswith('::'):
+            # Already has protocol prefix
+            if stripped.startswith('::') or stripped.startswith('>>') or stripped.startswith('<<<'):
                 fixed_lines.append(line)
                 continue
             
+            # Support $ as a prefix (common LLM mistake)
             if stripped.startswith('$'):
                 indent = line[:len(line) - len(line.lstrip())]
-                line = indent + line.lstrip().replace('$', '::', 1)
+                line = indent + ':: ' + line.lstrip().replace('$', '', 1).strip()
                 fixed_lines.append(line)
                 continue
             
-            match = re.match(r'^(' + '|'.join(action_verbs) + r')\s+(.+)', stripped, re.IGNORECASE)
+            # Look for "verb @ path" or "verb path"
+            # Support case-insensitive and leading whitespace
+            match = re.match(r'^(' + '|'.join(action_verbs) + r')\b\s*(?:@\s*)?([^\n]+)?', stripped, re.IGNORECASE)
             
             if match:
                 action, rest = match.groups()
-                if '@' not in rest:
-                    indent = line[:len(line) - len(line.lstrip())]
-                    line = f'{indent}:: {action} @ {rest}'
+                indent = line[:len(line) - len(line.lstrip())]
+                if rest:
+                    line = f'{indent}:: {action.lower()} @ {rest.strip()}'
+                else:
+                    line = f'{indent}:: {action.lower()}'
             
             fixed_lines.append(line)
         
@@ -174,18 +193,35 @@ class AutoRepair:
         return '\n'.join(fixed_lines)
     
     def _fix_vitals_format(self, text: str) -> str:
-        """Normalize Duck Vitals format to v3.1.
-        c=confidence, s=safety, m=memory, f=focus
-        """
-        text = re.sub(r'#([cmfs])', r'::\1', text)
-        text = re.sub(r'\bconfidence:\s*([\d.]+)', r'::c\1', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bsafety:\s*([\d.]+)', r'::s\1', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bmemory:\s*([\d.]+)', r'::m\1', text, flags=re.IGNORECASE)
-        text = re.sub(r'\bfocus:\s*([\d.]+)', r'::f\1', text, flags=re.IGNORECASE)
+        """Normalize Duck Vitals format with tolerance for natural language and percentages."""
+        # 1. Natural language: "Confidence: 95%" -> "::c0.95"
+        def norm_percent(match):
+            key_map = {'confidence': 'c', 'safety': 's', 'memory': 'm', 'focus': 'f'}
+            key = match.group(1).lower()
+            val = float(match.group(2)) / 100.0
+            return f'::{key_map[key]}{val:.2f}'
+
+        text = re.sub(r'\b(confidence|safety|memory|focus):\s*(\d+)%', norm_percent, text, flags=re.IGNORECASE)
+        
+        # 2. Natural language: "Confidence: 0.95" -> "::c0.95"
+        def norm_plain(match):
+            key_map = {'confidence': 'c', 'safety': 's', 'memory': 'm', 'focus': 'f'}
+            key = match.group(1).lower()
+            val = match.group(2)
+            return f'::{key_map[key]}{val}'
+
+        text = re.sub(r'\b(confidence|safety|memory|focus):\s*([\d.]+)', norm_plain, text, flags=re.IGNORECASE)
+
+        # 3. Handle #c0.9 style
+        text = re.sub(r'#([cmfs])\s*([\d.]+)', r'::\1\2', text)
+        
+        # 4. Standardize spacing: "::c 0.9" -> "::c0.9"
+        text = re.sub(r'::([cmfs])\s+([\d.]+)', r'::\1\2', text)
+        
         return text
 
 class FuzzyParser:
-    """Tolerant parser v2"""
+    """Tolerant parser v2.1"""
     
     def strict_parse(self, text: str) -> ParsedResult:
         """Strict parse v3.1 format. execute_batch ブロックを認識する。"""
@@ -202,7 +238,8 @@ class FuzzyParser:
 
             if stripped == '<<<':
                 if not current_action:
-                    raise ParseError("Content block without action")
+                    # Robustness: Create a default action if content starts without one
+                    current_action = Action(type="response", path="")
                 in_content = True
                 i += 1
                 continue
@@ -210,7 +247,9 @@ class FuzzyParser:
             # v3.2: >>> は行頭（column 0）のみブロック終端として認識する（doctest保護）
             if line.rstrip() == '>>>':
                 if not in_content:
-                    raise ParseError("Unexpected closing delimiter >>>")
+                    i += 1
+                    continue # Ignore orphan >>>
+                
                 if current_action:
                     if current_action.type == 'execute_batch':
                         # バッチブロックを %%% で分割してサブアクションに展開
@@ -307,38 +346,27 @@ class FuzzyParser:
             return {}, content
 
     def _extract_line_params(self, raw_path: str) -> tuple[str, dict]:
-        """
-        Extract key=value parameters from the action line string.
-        Example: "file.txt start_line=1 max_lines=5" -> ("file.txt", {"start_line": "1", "max_lines": "5"})
-        """
+        """Enhanced parameter extraction supporting quoted values and mixed content."""
         if not raw_path:
             return "", {}
         
-        # Split by spaces but preserve quoted values
-        # This is a simple regex for key=value or key="value"
         params = {}
+        # Improved regex: key=value or key="quoted value" or key='quoted value'
+        param_pattern = r'(\w+)=((?:"[^"]*")|(?:\'[^\']*\')|(?:[^\s]*))'
         
-        # 1. First, find all key=value patterns
-        # [^\s=]+: key (no spaces or =)
-        # =: literal =
-        # (?:"[^"]*"|[^\s]*): value (either "quoted strings" or non-space chars)
-        param_pattern = r'([^\s=]+)=("[^"]*"|[^\s]*)'
-        matches = re.finditer(param_pattern, raw_path)
-        
-        extracted_keys_indices = []
-        
+        # Find all parameters
+        matches = list(re.finditer(param_pattern, raw_path))
+        if not matches:
+            return raw_path.strip(), {}
+
+        # Reconstruct path (everything before the first param)
+        first_match_start = matches[0].start()
+        clean_path = raw_path[:first_match_start].strip()
+
         for match in matches:
             key = match.group(1)
-            value = match.group(2).strip('"')
+            value = match.group(2).strip('\"\'')
             params[key] = value
-            extracted_keys_indices.append((match.start(), match.end()))
-        
-        # 2. Reconstruct the "clean" path by removing the parameters
-        # We assume the path is the first part before any parameter
-        clean_path = raw_path
-        if extracted_keys_indices:
-            # Reconstruct from first char until start of first parameter
-            clean_path = raw_path[:extracted_keys_indices[0][0]].strip()
         
         return clean_path, params
 
@@ -524,7 +552,7 @@ class FuzzyParser:
         return actions
     
     def _parse_vitals(self, line: str, vitals: dict) -> None:
-        """Parse Duck Vitals v3.1: c=confidence, s=safety, m=memory, f=focus"""
+        """Parse multiple vitals from a single line."""
         patterns = {
             'confidence': r'::c([\d.]+)',
             'safety':     r'::s([\d.]+)',
@@ -532,23 +560,21 @@ class FuzzyParser:
             'focus':      r'::f([\d.]+)',
         }
         for key, pattern in patterns.items():
-            match = re.search(pattern, line)
-            if match:
+            matches = re.finditer(pattern, line)
+            for match in matches:
                 try:
                     vitals[key] = float(match.group(1))
                 except ValueError:
                     pass
     
     def _is_vitals(self, line: str) -> bool:
-        """Vitals行かどうかを判定する。
-        ::c0, ::s1, ::m0.5, ::f1.0 など小数点なしも認識する。
-        行内の全 :: トークンがVitalsパターンの場合のみTrueを返す。
-        """
-        tokens = re.findall(r'::\S+', line)
-        if not tokens:
+        """Robust vitals line check."""
+        # Check if line contains mostly vitals markers
+        v_matches = re.findall(r'::[cmfs][\d.]+', line)
+        if not v_matches:
             return False
-        vitals_pat = re.compile(r'^::[cmfs][\d.]+$')
-        return all(vitals_pat.match(t) for t in tokens)
+        # If the line starts with vitals and doesn't look like an action verb
+        return True
     
     def _parse_action(self, line: str) -> Action:
         """Parse action line v2"""

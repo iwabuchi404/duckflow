@@ -61,80 +61,86 @@ class TaskExecutor:
 
         self.execution_log.clear()
 
-        for i, task in enumerate(tasks):
-            # Skip if already completed (re-entrance check)
-            if task.status == TaskStatus.COMPLETED:
-                completed += 1
-                continue
-
-            # Check if task requires user confirmation
-            if self._requires_confirmation(task):
-                # Ask user for confirmation
-                ui.print_action(task.action.name, task.parameters, task.thought)
-
-                prompt = f"📋 {task.title}\n\n{task.description}\n\nこのタスクを実行しますか？"
-
-                result = ui.request_confirmation(prompt)
-
-                if not result:
-                    # User declined → skip this task
-                    logger.info(f"Task '{task.title}' declined by user")
+        try:
+            for i, task in enumerate(tasks):
+                # Skip if already completed (re-entrance check)
+                if task.status == TaskStatus.COMPLETED:
+                    completed += 1
                     continue
-                # User approved → continue to execution
-                logger.info(f"Task '{task.title}' approved by user")
+
+                # Check if task requires user confirmation
+                if self._requires_confirmation(task):
+                    # Ask user for confirmation
+                    ui.print_action(task.action.name, task.parameters, task.thought)
+
+                    prompt = f"📋 {task.title}\n\n{task.description}\n\nこのタスクを実行しますか？"
+
+                    result = ui.request_confirmation(prompt)
+
+                    if not result:
+                        # User declined → skip this task
+                        logger.info(f"Task '{task.title}' declined by user")
+                        continue
+                    # User approved → continue to execution
+                    logger.info(f"Task '{task.title}' approved by user")
+                    
+                logger.info(f"Executing task {i+1}/{total_tasks}: {task.title}")
+                print(f"\n📋 Task {i+1}/{total_tasks}: {task.title}")
                 
-            logger.info(f"Executing task {i+1}/{total_tasks}: {task.title}")
-            print(f"\n📋 Task {i+1}/{total_tasks}: {task.title}")
-            
-            task.status = TaskStatus.IN_PROGRESS
-            
-            try:
-                # Execute the task
-                result = await self._execute_single_task(task)
+                task.status = TaskStatus.IN_PROGRESS
                 
-                # Mark as completed
-                task.status = TaskStatus.COMPLETED
-                task.result = str(result)
-                completed += 1
-                
-                # Log success
-                self.execution_log.append({
-                    "task_index": i,
-                    "task_title": task.title,
-                    "status": "completed",
-                    "result": str(result)
-                })
-                
-                print(f"   ✅ Completed: {result}")
-                
-            except ReplanRequiredError as e:
-                # YIELD: Stop execution and return control to LLM
-                task.status = TaskStatus.PENDING # Reset status so it can be replanned
-                yielded = True
-                yield_reason = f"Yielded at task '{task.title}': Dynamic planning required."
-                print(f"   ⚠️  Yielding: {yield_reason}")
-                logger.info(yield_reason)
-                break
-                
-            except Exception as e:
-                # Mark as failed
-                task.status = TaskStatus.FAILED
-                task.result = f"Error: {str(e)}"
-                failed += 1
-                
-                # Log failure
-                self.execution_log.append({
-                    "task_index": i,
-                    "task_title": task.title,
-                    "status": "failed",
-                    "error": str(e)
-                })
-                
-                print(f"   ❌ Failed: {str(e)}")
-                logger.error(f"Task failed: {task.title} - {str(e)}")
-                
-                # Stop on failure? For now, yes, to allow replanning
-                break
+                try:
+                    # Execute the task
+                    result = await self._execute_single_task(task)
+                    
+                    # Mark as completed
+                    task.status = TaskStatus.COMPLETED
+                    task.result = str(result)
+                    completed += 1
+                    
+                    # Log success
+                    self.execution_log.append({
+                        "task_index": i,
+                        "task_title": task.title,
+                        "status": "completed",
+                        "result": str(result)
+                    })
+                    
+                    print(f"   ✅ Completed: {result}")
+                    
+                except ReplanRequiredError as e:
+                    # YIELD: Stop execution and return control to LLM
+                    task.status = TaskStatus.PENDING # Reset status so it can be replanned
+                    yielded = True
+                    yield_reason = f"Yielded at task '{task.title}': Dynamic planning required."
+                    print(f"   ⚠️  Yielding: {yield_reason}")
+                    logger.info(yield_reason)
+                    break
+                    
+                except Exception as e:
+                    # Mark as failed
+                    task.status = TaskStatus.FAILED
+                    task.result = f"Error: {str(e)}"
+                    failed += 1
+                    
+                    # Log failure
+                    self.execution_log.append({
+                        "task_index": i,
+                        "task_title": task.title,
+                        "status": "failed",
+                        "error": str(e)
+                    })
+                    
+                    print(f"   ❌ Failed: {str(e)}")
+                    logger.error(f"Task failed: {task.title} - {str(e)}")
+                    
+                    # Stop on failure? For now, yes, to allow replanning
+                    break
+        except KeyboardInterrupt:
+            yielded = True
+            yield_reason = "Execution interrupted by user (Ctrl+C)."
+            print(f"\n   ⚠️  Interrupted: {yield_reason}")
+            logger.info(yield_reason)
         
         # Generate summary
         summary = {

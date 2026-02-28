@@ -24,6 +24,7 @@ class CommandHandler:
             "/clear": self.handle_clear,
             "/model": self.handle_model,
             "/scan": self.handle_scan,
+            "/log": self.handle_log,
         }
 
     def is_command(self, input_text: str) -> bool:
@@ -115,15 +116,19 @@ class CommandHandler:
         else:
              ui.print_error(f"Unknown config subcommand: {subcmd}")
 
+    async def handle_log(self, args: List[str]):
+        """Toggle full log verbosity."""
+        ui.show_full_logs = not ui.show_full_logs
+        status = "ON (Full Logs)" if ui.show_full_logs else "OFF (Abbreviated)"
+        ui.print_success(f"Log verbosity toggled: {status}")
+
     async def handle_status(self, args: List[str]):
         if self.agent.pacemaker:
             vitals = self.agent.state.vitals
-            # Note: The new ui.py might not have print_vitals, let's assume it doesn't and implement simple status
-            # Actually codecrafter's ConsoleUI had print_vitals. 
-            # We should probably add print_vitals to the new ui.py later or just format it here.
-            # For now, let's format it manually to be safe.
-            msg = f"Mood: {vitals.mood:.2f} | Focus: {vitals.focus:.2f} | Stamina: {vitals.stamina:.2f} | Loop: {self.agent.pacemaker.loop_count}/{self.agent.pacemaker.max_loops}"
-            ui.print_info(msg)
+            ui.print_vitals(vitals, self.agent.pacemaker.loop_count, self.agent.pacemaker.max_loops)
+            ui.print_info(f"Model: {self.agent.llm.model}")
+            ui.print_info(f"turn_count: {self.agent.state.turn_count}")
+            ui.print_info(f"current_mode: {self.agent.state.current_mode}")
         else:
             ui.print_info("Pacemaker not initialized.")
 
@@ -142,6 +147,7 @@ class CommandHandler:
         [cyan]/clear[/cyan]              - Clear conversation history
         [cyan]/exit[/cyan]               - Exit the agent
         [cyan]/scan <depth>[/cyan]     - Show project tree (default depth: 3)
+        [cyan]/log[/cyan]              - Toggle full log verbosity (Alt+V also works)
         [cyan]/help[/cyan]               - Show this help
         """
         if hasattr(ui, 'console'):
