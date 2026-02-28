@@ -203,12 +203,26 @@ class FileOps:
                 seg_body = seg.strip('\n')
 
             if not seg_anchors:
-                raise ValueError(
-                    f"No anchors provided for edit segment. "
-                    f"Please specify anchors via YAML frontmatter (---\\nanchors: \"start:hash end:hash\"\\n---) "
-                    f"or via the anchors= parameter."
+                return (
+                    f"::status error\n"
+                    f"Reason: No anchors specified for edit segment.\n"
+                    f"Fix: You must provide anchors using hashline format (line:hash). "
+                    f"Always run 'read_file' first to get the current anchors.\n"
+                    f"Example:\n"
+                    f"---\n"
+                    f"anchors: \"42:a3f 43:f10\"\n"
+                    f"---\n"
+                    f"...new content..."
                 )
             edits.append((seg_anchors, seg_body))
+
+        if not edits:
+            return (
+                f"::status error\n"
+                f"Reason: No edit segments found. The content block was empty or contained only whitespace.\n"
+                f"Fix: Provide the replacement content after the anchors. "
+                f"To delete lines, provide a single empty line as content."
+            )
 
         # ファイルを読み込み
         with open(full_path, "r", encoding="utf-8") as f:
@@ -220,15 +234,26 @@ class FileOps:
         for seg_anchors, seg_body in edits:
             anchor_parts = seg_anchors.strip().split()
             if len(anchor_parts) != 2:
-                raise ValueError(
-                    f"Invalid anchors format: '{seg_anchors}'. "
-                    f"Expected: 'start_anchor end_anchor' (e.g., '42:a3f 43:f10')"
+                return (
+                    f"::status error\n"
+                    f"Reason: Invalid anchors format: '{seg_anchors}'.\n"
+                    f"Fix: Expected exactly two anchors: 'start_line:hash end_line:hash'.\n"
+                    f"Example: anchors: \"10:abc 15:def\""
                 )
             start_anchor, end_anchor = anchor_parts
-            start_idx, end_idx, _ = HashlineHelper.extract_content_block(
-                file_lines, start_anchor, end_anchor
-            )
-            resolved.append((start_idx, end_idx, seg_body))
+            try:
+                start_idx, end_idx, _ = HashlineHelper.extract_content_block(
+                    file_lines, start_anchor, end_anchor
+                )
+                resolved.append((start_idx, end_idx, seg_body))
+            except ValueError as e:
+                # ハッシュ不一致や範囲外エラーをLLMへのヒントとして返す
+                return (
+                    f"::status error\n"
+                    f"Reason: {str(e)}\n"
+                    f"Fix: The file content or structure has changed. "
+                    f"Please run 'read_file' again to get updated anchors, then retry the edit with the NEW anchors."
+                )
 
         # 開始行の降順（ファイル下部 → 上部）でソート
         resolved.sort(key=lambda x: x[0], reverse=True)
@@ -516,6 +541,108 @@ class FileOps:
 
         search_dir(start_dir)
         return sorted(results)
+
+    async def delete_lines(self, path: str, content: str) -> str:
+        """
+        Hashline アンカーで指定した行範囲をファイルから削除する。
+
+        edit_file と同じ YAML フロントマター形式で anchors を受け取る。
+        アンカーのハッシュ照合により、ファイルが変更されていないかを検証してから削除する。
+
+        Sym-Ops format:
+        ::delete_lines @path/to/file.py
+        <<<
+        ---
+        anchors: "42:a3f 45:f10"
+        ---
+        >>>
+
+        Args:
+            path: 対象ファイルのパス（ワークスペースルートからの相対パス）
+            content: YAML フロントマターで anchors を指定するコンテンツブロック
+
+        Returns:
+            成功時: "Successfully deleted N lines from {path}\n\n--- Updated Context ---\n..."
+            失敗時: "::status error\nReason: ..."
+        """
+        import re as _re
+
+        full_path = self._get_full_path(path)
+        if not full_path.exists():
+            return (
+                f"::status error\n"
+                f"Reason: File not found: {path}"
+            )
+
+        # YAML フロントマターから anchors を抽出
+        anchors = ''
+        fm_match = _re.match(r'^---\n(.*?)\n---', content.strip(), _re.DOTALL)
+        if fm_match:
+            import yaml as _yaml
+            try:
+                fm = _yaml.safe_load(fm_match.group(1))
+                anchors = str(fm.get('anchors', '')).strip()
+            except Exception:
+                pass
+
+        if not anchors:
+            return (
+                f"::status error\n"
+                f"Reason: No anchors found. Use YAML front matter inside the content block.\n"
+                f"Example:\n"
+                f"---\n"
+                f"anchors: \"42:a3f 45:f10\"\n"
+                f"---"
+            )
+
+        # アンカー解析
+        parts = anchors.strip().split()
+        if len(parts) != 2:
+            return (
+                f"::status error\n"
+                f"Reason: anchors must be 'start_anchor end_anchor' (e.g., '42:a3f 45:f10'). "
+                f"Got: {repr(anchors)}"
+            )
+        start_anchor, end_anchor = parts
+
+        # ファイル読み込み
+        try:
+            raw_content = full_path.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            raw_content = full_path.read_text(encoding='latin-1')
+
+        file_lines = raw_content.split('\n')
+
+        # アンカー検証と範囲特定
+        try:
+            start_idx, end_idx, _ = HashlineHelper.extract_content_block(
+                file_lines, start_anchor, end_anchor
+            )
+        except ValueError as e:
+            return f"::status error\nReason: {e}"
+
+        # 行削除
+        deleted_count = end_idx - start_idx + 1
+        del file_lines[start_idx:end_idx + 1]
+
+        # ファイル書き込み
+        full_path.write_text('\n'.join(file_lines), encoding='utf-8')
+
+        # 編集後コンテキストを返す（削除位置の前後）
+        # 削除後は start_idx が次の行を指すため end_idx は start_idx - 1 とみなす
+        context = HashlineHelper.format_context_after_edit(
+            file_lines,
+            edit_start_idx=start_idx,
+            edit_end_idx=max(start_idx - 1, 0),
+            context_lines=3
+        )
+
+        return (
+            f"Successfully deleted {deleted_count} line(s) from {path}\n\n"
+            f"--- Updated Context (for reference in next edit) ---\n"
+            f"{context}\n"
+            f"--- End of Context ---"
+        )
 
     async def delete_file(self, path: str) -> str:
         """

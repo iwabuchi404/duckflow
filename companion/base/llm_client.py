@@ -592,97 +592,78 @@ class LLMClient:
                 
                 logger.debug(f"🔍 Mapping action: type={tool_name}, path={action.path}, content_len={len(action.content) if action.content else 0}")
                 
-                # Map path/command from @ notation
-                # IMPORTANT: Tool signatures use 'path' not 'file_path'!
-                if action.path:
-                    if tool_name in ("create_file", "edit_file", "read_file", "delete_file", "write_file", "list_directory", "mkdir", "replace_in_file", "edit_lines", "find_files", "generate_code", "analyze_structure", "get_project_tree"):
-                        # read_file の位置引数対応: "path 1 500" → path, start_line=1, max_lines=500
-                        if tool_name == "read_file":
-                            parts = action.path.split()
-                            params["path"] = parts[0]
-                            if len(parts) >= 2 and parts[1].isdigit():
-                                params["start_line"] = int(parts[1])
-                            if len(parts) >= 3 and parts[2].isdigit():
-                                params["max_lines"] = int(parts[2])
-                        else:
-                            params["path"] = action.path
-                        logger.debug(f"  → Set path={params.get('path', action.path)}")
-                    elif tool_name == "run_command":
-                        params["command"] = action.path
-                        logger.debug(f"  → Set command={action.path}")
-                    elif tool_name == "investigate":
-                        params["reason"] = action.path
-                        logger.debug(f"  → Set reason={action.path}")
-                    elif tool_name == "submit_hypothesis":
-                        params["hypothesis"] = action.path
-                        logger.debug(f"  → Set hypothesis={action.path}")
-                    elif tool_name == "finish_investigation":
-                        params["conclusion"] = action.path
-                        logger.debug(f"  → Set conclusion={action.path}")
-                    elif tool_name in ("search_archives", "recall"):
-                        params["query"] = action.path
-                        logger.debug(f"  → Set query={action.path}")
-                    elif tool_name in ("note", "response", "report", "duck_call"):
-                        params["message"] = action.path
-                        logger.debug(f"  → Set message={action.path}")
-                    elif tool_name == "finish":
-                        params["result"] = action.path
-                        logger.debug(f"  → Set result={action.path}")
+                # --- Sym-Ops → parameters マッピング ---
+                # 特殊ルール: @target が "path" 以外のパラメータ名にマップされるツール
+                # デフォルト: @target → params["path"]
+                _TARGET_PARAM = {
+                    "run_command":        "command",
+                    "investigate":        "reason",
+                    "submit_hypothesis":  "hypothesis",
+                    "finish_investigation": "conclusion",
+                    "search_archives":    "query",
+                    "recall":             "query",
+                    "note":               "message",
+                    "response":           "message",
+                    "report":             "message",
+                    "duck_call":          "message",
+                    "finish":             "result",
+                }
+                # 特殊ルール: <<<content>>> が "content" 以外のパラメータ名にマップされるツール
+                # デフォルト: <<<content>>> → params["content"]
+                _CONTENT_PARAM = {
+                    "run_command":        "command",
+                    "investigate":        "reason",
+                    "submit_hypothesis":  "hypothesis",
+                    "finish_investigation": "conclusion",
+                    "search_archives":    "query",
+                    "recall":             "query",
+                    "note":               "message",
+                    "response":           "message",
+                    "report":             "message",
+                    "duck_call":          "message",
+                    "finish":             "result",
+                    "propose_plan":       "goal",
+                }
 
-                # Map content (priority over @path for run_command & investigation)
+                # @target マッピング
+                if action.path:
+                    if tool_name == "read_file":
+                        # 拡張構文: "path 1 500" → path, start_line=1, max_lines=500
+                        parts = action.path.split()
+                        params["path"] = parts[0]
+                        if len(parts) >= 2 and parts[1].isdigit():
+                            params["start_line"] = int(parts[1])
+                        if len(parts) >= 3 and parts[2].isdigit():
+                            params["max_lines"] = int(parts[2])
+                    elif tool_name == "mark_task_complete":
+                        # @0, @1 などを task_index に変換
+                        try:
+                            params["task_index"] = int(action.path)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Could not parse task_index from path: {action.path!r}")
+                            params["task_index"] = 0
+                    else:
+                        # デフォルト or 特殊マップから解決
+                        param_name = _TARGET_PARAM.get(tool_name, "path")
+                        params[param_name] = action.path
+                    logger.debug(f"  → Set @target: {params}")
+
+                # <<<content>>> マッピング
                 if action.content:
                     if tool_name == "replace_in_file":
-                        # replace_in_file のコンテンツブロックから search/replace を抽出
-                        # フォーマット: search=... と replace=... をコンテンツから解析
+                        # YAML 風フォーマットから search/replace を抽出
                         self._parse_replace_content(action.content, params)
                         logger.debug(f"  → Parsed replace_in_file: search={params.get('search', '')[:30]}, replace={params.get('replace', '')[:30]}")
-                    elif tool_name in ("create_file", "edit_file", "write_file", "edit_lines", "generate_code", "summarize_context"):
-                        params["content"] = action.content
-                        logger.debug(f"  → Set content (length={len(action.content)})")
-                    elif tool_name == "run_command":
-                        params["command"] = action.content
-                        logger.debug(f"  → Set command from content block (length={len(action.content)})")
-                    elif tool_name == "investigate":
-                        params["reason"] = action.content
-                        logger.debug(f"  → Set reason from content block")
-                    elif tool_name == "submit_hypothesis":
-                        params["hypothesis"] = action.content
-                        logger.debug(f"  → Set hypothesis from content block")
-                    elif tool_name == "finish_investigation":
-                        params["conclusion"] = action.content
-                        logger.debug(f"  → Set conclusion from content block")
-                    elif tool_name in ("search_archives", "recall"):
-                        params["query"] = action.content
-                        logger.debug(f"  → Set query from content block")
-                    elif tool_name == "note":
-                        params["message"] = action.content
-                        logger.debug(f"  → Set message from content block (length={len(action.content)})")
-                    elif tool_name in ("response", "report", "duck_call"):
-                        params["message"] = action.content
-                        logger.debug(f"  → Set message (length={len(action.content)})")
-                    elif tool_name == "finish":
-                        params["result"] = action.content
-                        logger.debug(f"  → Set result (length={len(action.content)})")
-                    elif tool_name == "propose_plan":
-                        params["goal"] = action.content
-                        logger.debug(f"  → Set goal (length={len(action.content)})")
                     elif tool_name == "mark_task_complete":
-                        # Map path to task_index (e.g. ::mark_task_complete @0)
-                        if "path" in params:
-                            try:
-                                # Extract number from path if possible, or use raw path
-                                # This handles @0, @1 etc.
-                                val = params.pop("path")
-                                params["task_index"] = int(val)
-                                logger.debug(f"  → Set task_index={params['task_index']} from path")
-                            except ValueError:
-                                # Fallback if path isn't a simple number
-                                logger.warning(f"Could not parse task_index from path: {val}")
-                                params["task_index"] = 0 # Default fallback? Or maybe keep raw?
-                        else:
-                             # Fallback if path is missing entirely
-                             logger.warning("Sym-Ops: 'mark_task_complete' missing path (@index). Defaulting to index 0.")
-                             params["task_index"] = 0
+                        # @target で処理済み。content ブロックは無視
+                        if "task_index" not in params:
+                            logger.warning("Sym-Ops: 'mark_task_complete' missing @index. Defaulting to 0.")
+                            params["task_index"] = 0
+                    else:
+                        # デフォルト or 特殊マップから解決
+                        param_name = _CONTENT_PARAM.get(tool_name, "content")
+                        params[param_name] = action.content
+                        logger.debug(f"  → Set content → {param_name} (length={len(action.content)})")
                                 
                 logger.debug(f"  → Final params: {list(params.keys())}")
                 

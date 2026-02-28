@@ -92,6 +92,7 @@ class DuckAgent:
         # self.register_tool("edit_lines", file_ops.edit_lines)
         self.register_tool("edit_file", file_ops.edit_file)  # Alias - Changed to write_file (overwrite) as agent uses it for full content
         self.register_tool("find_files", file_ops.find_files)
+        self.register_tool("delete_lines", file_ops.delete_lines)
         self.register_tool("delete_file", file_ops.delete_file)
 
         # Register Planning Tools
@@ -229,7 +230,7 @@ class DuckAgent:
             # ファイル読み取り
             "read_file", "list_directory", "find_files",
             # ファイル編集
-            "replace_in_file", "edit_lines", "edit_file", "write_file", "create_file", "delete_file",
+            "replace_in_file", "edit_lines", "edit_file", "write_file", "create_file", "delete_lines", "delete_file",
             # 分析
             "analyze_structure",
             # 完了管理
@@ -592,7 +593,7 @@ class DuckAgent:
                 was_approved = False
                 warning_msg = ""
                 
-                if action.name in ["delete_file", "replace_in_file", "edit_lines", "edit_file"]:
+                if action.name in ["delete_file", "delete_lines", "replace_in_file", "edit_lines", "edit_file"]:
                     requires_approval = True
                     warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
                 
