@@ -372,7 +372,13 @@ class LLMClient:
 
             if temperature is None:
                 temperature = config.get("llm.temperature", 0.7)
-            max_tokens = config.get("llm.max_output_tokens", 4096)
+            
+            # Pull additional tuning parameters from config
+            top_p = config.get("llm.top_p", 0.9)
+            presence_penalty = config.get("llm.presence_penalty", 0.1)
+            
+            # Ensure max_tokens is pulled reliably, default to 8192 for long code generation
+            max_tokens = config.get("llm.max_output_tokens") or config.get("max_output_tokens", 8192)
             
             content = None
             for attempt in range(1, MAX_EMPTY_RETRIES + 2):
@@ -381,6 +387,8 @@ class LLMClient:
                     model=self.model,
                     messages=processed_messages,
                     temperature=temperature,
+                    top_p=top_p,
+                    presence_penalty=presence_penalty,
                     max_tokens=max_tokens,
                     extra_headers=extra_headers
                 )

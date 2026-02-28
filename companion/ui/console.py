@@ -161,19 +161,23 @@ class DuckUI:
         self.console.print(f"   {icon} [bold]{style.upper()}[/bold]: ", end="")
         lines = content.splitlines()
         
-        if self.show_full_logs:
-            # Show everything
-            self.console.print()
-            for line in lines:
-                self.console.print(f"     [dim]{line}[/dim]")
-        else:
+        # Increased threshold for non-verbose mode to avoid cutting off meaningful code
+        line_threshold = 20 if not self.show_full_logs else 10000
+        
+        if len(lines) > line_threshold and not self.show_full_logs:
             # Abbreviated mode
-            if len(lines) > 1 or len(content) > 80:
+            self.console.print()
+            for line in lines[:line_threshold]:
+                self.console.print(f"     [dim]{line}[/dim]")
+            
+            remaining = len(lines) - line_threshold
+            self.console.print(f"     [bold yellow]... ({remaining} more lines hidden. Press 'v' to toggle full logs)[/bold yellow]")
+        else:
+            # Show everything (either fits threshold or show_full_logs is True)
+            if len(lines) > 1:
                 self.console.print()
-                for line in lines[:10]:
+                for line in lines:
                     self.console.print(f"     [dim]{line}[/dim]")
-                if len(lines) > 10:
-                    self.console.print(f"     [dim]... ({len(lines)-10} more lines. Press 'v' to see all next time)[/dim]")
             else:
                 self.console.print(f"[dim]{content}[/dim]")
 
