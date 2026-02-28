@@ -635,12 +635,33 @@ class DuckAgent:
                         # Execute tool
                         func = self.tools[action.name]
                         logger.info(f"Calling tool: {action.name}")
-                        
+
+                        # --- シグネチャフィルタ ---
+                        # 関数が受け付けないkwargs（例: content）を除去してTypeErrorを防ぐ
+                        import inspect as _inspect
+                        _sig = _inspect.signature(func)
+                        _has_var_kw = any(
+                            p.kind == _inspect.Parameter.VAR_KEYWORD
+                            for p in _sig.parameters.values()
+                        )
+                        if _has_var_kw:
+                            # **kwargs を受け付ける関数はすべて渡す
+                            call_params = action.parameters
+                        else:
+                            _valid = set(_sig.parameters.keys())
+                            _dropped = set(action.parameters.keys()) - _valid
+                            if _dropped:
+                                logger.warning(
+                                    f"Tool '{action.name}': dropping unexpected params: {_dropped}"
+                                )
+                            call_params = {k: v for k, v in action.parameters.items() if k in _valid}
+                        # -----------------------
+
                         # Check if function is async
                         if asyncio.iscoroutinefunction(func):
-                            result = await func(**action.parameters)
+                            result = await func(**call_params)
                         else:
-                            result = func(**action.parameters)
+                            result = func(**call_params)
                         
                         logger.info(f"Tool {action.name} returned. Result length: {len(str(result))}")
                         
@@ -1064,8 +1085,11 @@ class DuckAgent:
     async def action_execute_batch(self, **kwargs) -> str:
         """
         Sym-Ops v3.1 Fast Path: 複数の独立したアクションをバッチ実行する。
-        LLMが直接呼ぶ必要はない。パーサーが ::execute_batch ブロックを
-        個別アクションに自動展開するため、このメソッドはフォールバック用。
+        パーサーが ::execute_batch ブロックを個別アクションに展開するため、
+        このメソッドは展開失敗時のフォールバックとして機能する。
+
+        LLM向け説明: 独立したタスクを並列的に実行したい場合に使用する。
+        各アクションを %%% で区切り、content ブロック内に記述する。
 
         Returns:
             パーサー未展開時のフォールバックメッセージ

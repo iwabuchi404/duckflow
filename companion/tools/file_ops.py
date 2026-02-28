@@ -559,7 +559,9 @@ class FileOps:
 
         Args:
             path: 対象ファイルのパス（ワークスペースルートからの相対パス）
-            content: YAML フロントマターで anchors を指定するコンテンツブロック
+            content: YAML フロントマターで anchors を指定するコンテンツブロック。
+                     anchors には read_file で取得した "start_line:hash end_line:hash" 形式を指定する。
+                     例: "---\\nanchors: \\"42:a3f 45:f10\\"\\n---"
 
         Returns:
             成功時: "Successfully deleted N lines from {path}\n\n--- Updated Context ---\n..."

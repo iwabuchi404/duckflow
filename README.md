@@ -186,6 +186,39 @@ export DUCKFLOW_DEBUG=true
 uv run python main.py
 ```
 
+### プロンプトインスペクター
+
+LLM に実際に送られるプロンプトを確認するデバッグツールです。ツール登録漏れやプロンプト設計の問題を素早くキャッチできます。
+
+```bash
+# task モードのプロンプトを標準出力に表示
+uv run python -X utf8 dump_prompt.py task
+
+# 全モード（planning / investigation / task）を表示
+uv run python -X utf8 dump_prompt.py all
+
+# ファイルに出力
+uv run python -X utf8 dump_prompt.py all --output prompt_dump.txt
+
+# JSON形式（プログラム処理用）
+uv run python -X utf8 dump_prompt.py task --raw
+```
+
+出力はメッセージブロック単位で構造化されます。
+
+```text
+[1] SYSTEM  (2771 chars)   ← Sym-Ops プロトコル共通定義
+[2] SYSTEM  (3xxx chars)   ← ツール説明 + モード固有指示
+[3..N] USER/ASSISTANT      ← Few-shot 例
+[N+1] SYSTEM               ← 動的コンテキスト（AgentState）
+```
+
+特定ツールの存在確認:
+
+```bash
+uv run python -X utf8 dump_prompt.py task | grep delete_lines
+```
+
 ## 🤝 貢献
 
 このプロジェクトへの貢献を歓迎します！

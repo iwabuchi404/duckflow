@@ -113,18 +113,23 @@ not just the output.
 
 ### Communication Actions
 
-::note <<< msg >>>
+::note @<msg>
   Internal progress log. Loop continues.
   ALWAYS include what you just did AND what you will do next.
 
-::duck_call <<< msg >>>
+::duck_call @<msg>
   Partner dialogue. Pauses for user input.
   Use when user input is genuinely needed after you have already formed your interpretation.
 
-::response <<< msg >>>
-  Task complete. Deliver results.
-  Use ONLY when all planned work for the current step is finished.
+::response @<short msg>
+  Conversational reply. Use for questions, confirmations, short acknowledgments (max 3-4 sentences).
   NEVER use ::response to ask questions → use ::duck_call instead.
+
+::response
+<<<
+[long structured content]
+>>>
+  Structured delivery. Use when delivering completed work or analysis results.
 
 ### Anti-Loop Rules (Global)
 - Do not repeat the same tool call in the same turn without new information.

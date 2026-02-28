@@ -29,26 +29,22 @@ Use for INDEPENDENT, deterministic tasks. If one fails, others may still run. Us
 
 ::execute_batch
 <<<
-create_file @path1.py
+write_file @path1.py
 content for path1...
 %%%
-create_file @path2.py
+write_file @path2.py
 content for path2...
 %%%
-run_command
-python path1.py
+run_command @python path1.py
 >>>
 
-### C. Response to User (Short Chat)
-For `::response`, use short answers (max 3-4 sentences). Do NOT use for long analysis.
+### C. Response to User (Conversational)
+Use for questions, confirmations, and short interactive messages. Max 3-4 sentences.
 
-::response
-<<<
-ファイルを作成しました。次にどのファイルを修正しますか？
->>>
+::response @ファイルを作成しました。次にどのファイルを修正しますか？
 
-### D. response (Structured Delivery)
-For `::response`, use structured Markdown with exactly these mandatory headers.
+### D. Response to User (Structured Delivery)
+Use when delivering completed work or analysis results. Use structured Markdown.
 
 ::response
 <<<
@@ -62,10 +58,10 @@ For `::response`, use structured Markdown with exactly these mandatory headers.
 
 ### E. Planning & Investigation
 - `::propose_plan` — List steps in content block.
-- `::investigate` — Enter Investigation Mode with a reason.
-- `::submit_hypothesis` — Register a hypothesis for verification.
-- `::finish_investigation` — End investigation, state conclusion.
-- `::duck_call` — Ask user for guidance when stuck.
+- `::investigate @<reason>` — Enter Investigation Mode, state reason inline.
+- `::submit_hypothesis @<hypothesis>` — Register a hypothesis for verification.
+- `::finish_investigation @<conclusion>` — End investigation, state conclusion.
+- `::duck_call @<message>` — Ask user for guidance when stuck.
 
 ## 4. Complete Examples
 
@@ -74,7 +70,7 @@ For `::response`, use structured Markdown with exactly these mandatory headers.
 
 ::c0.88 ::s1.0 ::m0.1 ::f0.95
 
-::create_file @utils.py
+::write_file @utils.py
 <<<
 def calc(data: str) -> str:
     return data.lower()
@@ -85,18 +81,16 @@ def calc(data: str) -> str:
 
 ::c0.70 ::s1.0 ::m0.3 ::f0.80
 
-::investigate
-<<<
-Investigating why the database connection is refused.
->>>
+::investigate @Checking why the database connection is refused.
 
 ## 5. Critical Rules (CRITICAL)
-1. **Delimiters**: ALWAYS wrap content in `<<<` and `>>>`.
+1. **Delimiters**: ALWAYS wrap content in `<<<` and `>>>` when using content blocks.
 2. **Raw Content in Blocks**: Content inside `<<< >>>` blocks is always raw text/code. Markdown formatting (including code fences) is not used.
 3. **Symbol Syntax Only**: All actions use Sym-Ops v3.2 symbol syntax exclusively (`::action @path`).
 4. **Batch separators**: In `::execute_batch`, use `%%%` to separate actions.
 5. **Block end `>>>`**: Recognized ONLY at **column 0** (start of line). Indented `>>>` (e.g. doctests) is safe.
 6. **Markdown only in terminal tools**: Markdown is ONLY allowed inside `::response`.
+7. **Short messages**: Use `@` inline for short text (C). Use `<<< >>>` content block for long text (D).
 
 Follow this format EXACTLY. Delimiters are NOT optional.
 """

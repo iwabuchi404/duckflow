@@ -628,13 +628,13 @@ class LLMClient:
                 # @target マッピング
                 if action.path:
                     if tool_name == "read_file":
-                        # 拡張構文: "path 1 500" → path, start_line=1, max_lines=500
+                        # 拡張構文: "path 1 500" → path, start=1, end=500
                         parts = action.path.split()
                         params["path"] = parts[0]
                         if len(parts) >= 2 and parts[1].isdigit():
-                            params["start_line"] = int(parts[1])
+                            params["start"] = int(parts[1])
                         if len(parts) >= 3 and parts[2].isdigit():
-                            params["max_lines"] = int(parts[2])
+                            params["end"] = int(parts[2])
                     elif tool_name == "mark_task_complete":
                         # @0, @1 などを task_index に変換
                         try:
