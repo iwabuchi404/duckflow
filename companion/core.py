@@ -92,6 +92,7 @@ class DuckAgent:
         # self.register_tool("edit_lines", file_ops.edit_lines)
         self.register_tool("edit_file", file_ops.edit_file)  # Alias - Changed to write_file (overwrite) as agent uses it for full content
         self.register_tool("find_files", file_ops.find_files)
+        self.register_tool("grep_files", file_ops.grep_files)
         self.register_tool("delete_lines", file_ops.delete_lines)
         self.register_tool("delete_file", file_ops.delete_file)
 
@@ -204,7 +205,7 @@ class DuckAgent:
     MODE_TOOL_MAPPING = {
         "planning": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files",
+            "read_file", "list_directory", "find_files", "grep_files",
             # 分析
             "analyze_structure",
             # 実行
@@ -216,7 +217,7 @@ class DuckAgent:
         },
         "investigation": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files",
+            "read_file", "list_directory", "find_files", "grep_files",
             # 分析
             "analyze_structure",
             # 計画
@@ -226,7 +227,7 @@ class DuckAgent:
         },
         "task": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files",
+            "read_file", "list_directory", "find_files", "grep_files",
             # ファイル編集
             "edit_file", "write_file", "delete_lines", "delete_file",
             # 分析

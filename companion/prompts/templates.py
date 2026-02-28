@@ -106,6 +106,13 @@ not just the output.
 
 5. `analyze_structure @path` — Get class/function map without reading full file.
 
+### Available Search Tools
+
+- `find_files pattern="*.py" path="src"` — ファイル名パターン（glob）でファイルを探す。ファイル名が分かっているとき。
+- `grep_files pattern="def .*_handler" include="*.py" path="companion"` — ファイルの中身を正規表現で検索。コードの場所を探すとき。
+
+  Use `find_files` when you know the filename. Use `grep_files` when you know what's inside.
+
 ### Communication Actions
 
 ::note @<msg>

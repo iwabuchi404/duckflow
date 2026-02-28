@@ -542,6 +542,109 @@ class FileOps:
         search_dir(start_dir)
         return sorted(results)
 
+    async def grep_files(
+        self,
+        pattern: str,
+        path: str = '.',
+        include: str = '*',
+        recursive: bool = True,
+        max_results: int = 50,
+    ) -> str:
+        """
+        ファイルの内容を正規表現パターンで検索する。
+        find_files（ファイル名検索）と異なり、ファイルの中身を検索する。
+
+        Sym-Ops format:
+        ::grep_files
+        <<<
+        ---
+        pattern: "def .*_handler"
+        include: "*.py"
+        path: "companion"
+        ---
+        >>>
+
+        Args:
+            pattern: 検索する正規表現パターン（例: "def .*_handler", "TODO:", "import os"）
+            path: 検索開始ディレクトリ（デフォルト: "."、ワークスペースルートからの相対パス）
+            include: 検索対象ファイルのパターン（デフォルト: "*"、例: "*.py", "*.ts"）
+            recursive: サブディレクトリも再帰的に検索するか（デフォルト: True）
+            max_results: 最大マッチ件数（デフォルト: 50）
+
+        Returns:
+            "filepath:line_num: content" 形式のマッチ行一覧と件数サマリー
+        """
+        import re as _re
+        from fnmatch import fnmatch
+
+        # 正規表現コンパイル
+        try:
+            regex = _re.compile(pattern)
+        except _re.error as e:
+            return f"::status error\nReason: Invalid regex pattern '{pattern}': {e}"
+
+        # 検索開始ディレクトリ
+        start_dir = (self.workspace_root / path).resolve()
+        if not start_dir.exists():
+            return f"::status error\nReason: Path not found: {path}"
+
+        # 検索対象ファイルの収集
+        if start_dir.is_file():
+            files_to_search: List[Path] = [start_dir]
+        else:
+            files_to_search = []
+
+            def collect_files(directory: Path, depth: int = 0) -> None:
+                if depth > 15:
+                    return
+                try:
+                    for item in sorted(directory.iterdir(), key=lambda x: x.name):
+                        if item.name.startswith('.'):
+                            continue
+                        if item.is_file() and fnmatch(item.name, include):
+                            try:
+                                item.relative_to(self.workspace_root)
+                                files_to_search.append(item)
+                            except ValueError:
+                                pass  # ワークスペース外はスキップ
+                        elif item.is_dir() and recursive:
+                            collect_files(item, depth + 1)
+                except PermissionError:
+                    pass
+
+            collect_files(start_dir)
+
+        # 各ファイルを検索
+        results: List[str] = []
+        total_matches = 0
+
+        for file_path in files_to_search:
+            if total_matches >= max_results:
+                break
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    for line_num, line in enumerate(f, 1):
+                        if regex.search(line):
+                            rel_path = file_path.relative_to(self.workspace_root)
+                            results.append(f"{rel_path}:{line_num}: {line.rstrip()}")
+                            total_matches += 1
+                            if total_matches >= max_results:
+                                break
+            except (OSError, PermissionError):
+                pass
+
+        if not results:
+            return f"No matches found for pattern '{pattern}' in '{path}' (include='{include}')"
+
+        if total_matches >= max_results:
+            results.append(
+                f"\n(Results truncated at {max_results}. "
+                f"Use a more specific pattern or path to narrow results.)"
+            )
+
+        results.append(f"\n{total_matches} match(es) found.")
+        return '\n'.join(results)
+
     async def delete_lines(self, path: str, content: str) -> str:
         """
         Hashline アンカーで指定した行範囲をファイルから削除する。
