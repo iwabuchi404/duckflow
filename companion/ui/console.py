@@ -216,7 +216,19 @@ class DuckUI:
         if self.live: self.stop_live()
         from prompt_toolkit import PromptSession
         from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.completion import NestedCompleter
         
+        # Define completer for slash commands
+        completer = NestedCompleter.from_nested_dict({
+            '/config': {'show': None, 'set': None, 'setup': None},
+            '/log': None,
+            '/scan': None,
+            '/help': None,
+            '/exit': None,
+            '/status': None,
+            '/model': {'list': None, 'current': None},
+        })
+
         kb = KeyBindings()
 
         @kb.add('escape', 'v') # Alt+V
@@ -226,7 +238,7 @@ class DuckUI:
             status = "ON" if self.show_full_logs else "OFF"
             self.console.print(f"[thought] (Verbosity toggled: {status})[/thought]")
 
-        session = PromptSession(key_bindings=kb)
+        session = PromptSession(completer=completer, key_bindings=kb)
         try:
             return await session.prompt_async(prompt)
         except (EOFError, KeyboardInterrupt):
@@ -254,6 +266,43 @@ class DuckUI:
     def print_safety_warning(self, safety_score: float):
         self.console.print(Rule(title="🚨 Safety Warning", style="error"))
         self.console.print(f"[error]Safety Score が低いです: {safety_score:.2f}[/error]")
+
+    async def select_from_list(self, title: str, options: List[tuple], description: str = "") -> Optional[int]:
+        """Display a selection dialog with orange theme and return the chosen index."""
+        if self.live: self.stop_live()
+        from prompt_toolkit.shortcuts import radiolist_dialog
+        from prompt_toolkit.styles import Style
+        
+        # Custom orange-themed style
+        custom_style = Style.from_dict({
+            'dialog': 'bg:#222222',
+            'dialog frame.label': 'fg:#ff8700 bold',  # Orange title
+            'dialog.body': 'fg:#cccccc',
+            'radiolist.current': 'fg:#ff8700',        # Orange cursor
+            'radiolist.selected': 'fg:#ff8700 bold',  # Orange selection
+            'button': 'fg:#ffffff bg:#444444',
+            'button.focused': 'fg:#ffffff bg:#ff8700', # Orange focused button
+        })
+        
+        result = await radiolist_dialog(
+            title=title,
+            text=description or "矢印キーで選択し、Enterで決定してください:",
+            values=[(i, opt[0]) for i, opt in enumerate(options)],
+            style=custom_style
+        ).run_async()
+        
+        return result
+
+    async def select_model_interactive(self, models: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Interactive model selector using the restored selection logic."""
+        if not models: return None
+        
+        options = [(f"{m.get('id')} ({m.get('context_length', 0)//1024}k)", m) for m in models]
+        idx = await self.select_from_list("モデルの選択", options, description="使用するモデルを選択してください:")
+        
+        if idx is not None:
+            return models[idx]
+        return None
 
 # Global instance
 ui = DuckUI()

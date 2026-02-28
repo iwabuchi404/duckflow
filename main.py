@@ -112,7 +112,19 @@ async def main():
     parser.add_argument("--dir", type=str, default=".", help="Working directory for the agent")
     parser.add_argument("--debug-context", type=str, choices=["console", "file"], help="Debug: Output context messages")
     parser.add_argument("--no-session", action="store_true", help="セッション保存・復元を無効化して新規起動する")
+    parser.add_argument("--setup", action="store_true", help="Run the setup wizard")
     args = parser.parse_args()
+
+    # 1. Check if setup is needed
+    from companion.ui.setup_wizard import SetupWizard
+    wizard = SetupWizard()
+    if args.setup or wizard.should_run():
+        await wizard.run()
+        # Reload environment and config after setup
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+        from companion.config.config_loader import config
+        config.reload()
 
     # Set workspace
     file_ops.set_workspace_root(args.dir)

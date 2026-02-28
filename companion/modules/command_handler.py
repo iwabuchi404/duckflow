@@ -25,6 +25,7 @@ class CommandHandler:
             "/model": self.handle_model,
             "/scan": self.handle_scan,
             "/log": self.handle_log,
+            "/config": self.handle_config,
         }
 
     def is_command(self, input_text: str) -> bool:
@@ -122,6 +123,69 @@ class CommandHandler:
         status = "ON (Full Logs)" if ui.show_full_logs else "OFF (Abbreviated)"
         ui.print_success(f"Log verbosity toggled: {status}")
 
+    async def handle_config(self, args: List[str]):
+        """Handle configuration commands: /config show | set <key> <value> | setup."""
+        if not args:
+            ui.print_info("Usage: /config [show | set <key> <value> | setup]")
+            return
+
+        subcommand = args[0].lower()
+        
+        if subcommand == "show":
+            # Display current config in a table
+            table = Table(title="Current Configuration", show_header=True, header_style="bold cyan")
+            table.add_column("Key", style="dim")
+            table.add_column("Value", style="yellow")
+            
+            def flatten_dict(d, prefix=""):
+                for k, v in d.items():
+                    key = f"{prefix}{k}"
+                    if isinstance(v, dict):
+                        flatten_dict(v, f"{key}.")
+                    else:
+                        table.add_row(key, str(v))
+            
+            flatten_dict(config._config)
+            ui.console.print(table)
+
+        elif subcommand == "set":
+            if len(args) < 3:
+                ui.print_error("Usage: /config set <key_path> <value>")
+                ui.print_info("Example: /config set language en")
+                return
+            
+            key_path = args[1]
+            value = args[2]
+            
+            # Update in-memory config and persist to YAML
+            from companion.config.config_writer import ConfigWriter
+            writer = ConfigWriter()
+            
+            # Simple conversion for bool/int
+            if value.lower() == "true": value = True
+            elif value.lower() == "false": value = False
+            elif value.isdigit(): value = int(value)
+            
+            # Update YAML via nested dictionary structure
+            keys = key_path.split('.')
+            update_dict = {}
+            curr = update_dict
+            for k in keys[:-1]:
+                curr[k] = {}
+                curr = curr[k]
+            curr[keys[-1]] = value
+            
+            writer.write_yaml(update_dict)
+            config.reload()
+            ui.print_success(f"Config updated and saved: {key_path} = {value}")
+
+        elif subcommand == "setup":
+            from companion.ui.setup_wizard import SetupWizard
+            wizard = SetupWizard()
+            await wizard.run()
+            config.reload()
+            ui.print_success("Setup wizard completed. Config reloaded.")
+
     async def handle_status(self, args: List[str]):
         if self.agent.pacemaker:
             vitals = self.agent.state.vitals
@@ -148,6 +212,7 @@ class CommandHandler:
         [cyan]/exit[/cyan]               - Exit the agent
         [cyan]/scan <depth>[/cyan]     - Show project tree (default depth: 3)
         [cyan]/log[/cyan]              - Toggle full log verbosity (Alt+V also works)
+        [cyan]/config[/cyan]           - Show/set configuration or run setup wizard
         [cyan]/help[/cyan]               - Show this help
         """
         if hasattr(ui, 'console'):
@@ -399,7 +464,7 @@ class CommandHandler:
             return
 
         # Show TUI selection (number input - compatible with all environments)
-        selection = ui.select_from_list(
+        selection = await ui.select_from_list(
             "利用可能なモデル",
             [(m.get("name", m.get("id", "Unknown")), (m.get("provider"), m.get("id"), m.get("name")))
             for m in models_for_ui
