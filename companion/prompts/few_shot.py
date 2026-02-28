@@ -1,65 +1,78 @@
 """
-Few-shot examples モジュール。
-
-LLMがSym-Ops構文を出力形式として学習するための会話ペアを定義する。
+Compressed & Categorized Few-shot Examples for Sym-Ops v3.2
 """
 
-FEW_SHOT_EXAMPLES = [
-    # パターン1: 短い質問 → response で返答
-    {"role": "user", "content": "このプロジェクトは何のツールを使っていますか？"},
-    {"role": "assistant", "content": """>> ユーザーがプロジェクトの技術スタックを質問している
->> 短い質問なので response で返答する
+# Common Base Examples (Always included)
+BASE_EXAMPLES = [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": """\
+>> User greeted. Respond simply.
+::c1.0 ::s1.0 ::m0.0 ::f1.0
+::response @Hello! How can I help you code today?"""}
+]
 
-::c0.90 ::s1.0 ::m0.10 ::f0.95
-
-::response
-<<<
-Pythonベースで、Rich (UI)、Pydantic (状態管理)、PyYAML (設定) を使用しています。詳しく調べますか？
->>>"""},
-
-    # パターン2: ファイル編集依頼 → read_file → edit_file → response
-    {"role": "user", "content": "hello.pyのmain関数にコメントを追加して"},
-    {"role": "assistant", "content": """>> 編集依頼なので、まずファイルを読んでハッシュを確認する
-
-::c0.90 ::s1.0 ::m0.15 ::f0.95
-
+# Task/Edit Specific Examples
+TASK_EXAMPLES = [
+    {"role": "user", "content": "Add a docstring to main in hello.py"},
+    {"role": "assistant", "content": """\
+>> Need hash-lines first.
+::c0.9 ::s1.0 ::m0.1 ::f0.9
 ::read_file @hello.py"""},
-
-    {"role": "assistant", "content": """::result ok
-::tool read_file
-::target hello.py
+    {"role": "assistant", "content": """\
+::result ok
 1:a1b| def main():
-2:c2d|     print('Hello, World!')
-3:e3f| 
-4:g4h| if __name__ == '__main__':
-5:i5j|     main()"""},
-
-    {"role": "assistant", "content": """>> ハッシュを確認した。
->> 置換対象は 1:a1b 1:a1b の行。
->> edit_file で YAML フロントマター形式でコメントを付与する
-
-::c0.95 ::s1.0 ::m0.20 ::f0.95
-
+2:c2d|     print('Hi')"""},
+    {"role": "assistant", "content": """\
+>> Hash confirmed. Inserting docstring.
+::c1.0 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @hello.py
 <<<
 ---
 anchors: "1:a1b 1:a1b"
 ---
-# メイン関数: Hello Worldを出力する
 def main():
->>>"""},
-
-    {"role": "assistant", "content": """::result ok
-::tool edit_file
-::target hello.py
-Successfully edited hello.py."""},
-
-    {"role": "assistant", "content": """>> 編集完了。response で報告する
-
-::c0.95 ::s1.0 ::m0.20 ::f0.95
-
-::response
-<<<
-`hello.py` の `main` 関数にコメントを追加しました。
->>>"""},
+    \"\"\"Entry point.\"\"\"
+>>>"""}
 ]
+
+# Planning Specific Examples
+PLANNING_EXAMPLES = [
+    {"role": "user", "content": "Build a weather app"},
+    {"role": "assistant", "content": """\
+>> App request. Proposing modular plan.
+::c0.9 ::s1.0 ::m0.1 ::f0.9
+::propose_plan
+<<<
+1. Research API (OpenWeather)
+2. Design models
+3. Implement client
+>>>"""}
+]
+
+# Investigation Specific Examples
+INVESTIGATION_EXAMPLES = [
+    {"role": "user", "content": "It crashes with error X"},
+    {"role": "assistant", "content": """\
+>> Unknown crash. Starting investigation.
+::c0.8 ::s1.0 ::m0.2 ::f0.8
+::investigate @Checking logs for error X"""},
+    {"role": "assistant", "content": """\
+>> Found suspicious line in logs. Forming hypothesis.
+::c0.9 ::s1.0 ::m0.3 ::f0.9
+::submit_hypothesis @Null pointer in auth.py:42"""}
+]
+
+def get_examples_for_mode(mode: str) -> list:
+    """Return a compact set of examples relevant to the current mode."""
+    examples = BASE_EXAMPLES.copy()
+    if mode == "task" or mode == "task_execution":
+        examples.extend(TASK_EXAMPLES)
+    elif mode == "planning":
+        examples.extend(PLANNING_EXAMPLES)
+    elif mode == "investigation":
+        examples.extend(INVESTIGATION_EXAMPLES)
+    else:
+        # Mix for generic modes
+        examples.extend(TASK_EXAMPLES[:2])
+        examples.extend(PLANNING_EXAMPLES[:1])
+    return examples

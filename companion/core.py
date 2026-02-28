@@ -193,10 +193,17 @@ class DuckAgent:
 
     # モード別ツールマッピング
     # カテゴリ別にツールを分類し、各モードで公開するツールを定義
+    
+    # 全モード共通の基本ツール
+    UNIVERSAL_TOOLS = {
+        "note", "response", "finish", "exit", "duck_call", "show_status",
+        "search_archives", "recall", "get_project_tree"
+    }
+
     MODE_TOOL_MAPPING = {
         "planning": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files", "get_project_tree",
+            "read_file", "list_directory", "find_files",
             # 分析
             "analyze_structure",
             # 実行
@@ -205,14 +212,10 @@ class DuckAgent:
             "summarize_context", "generate_code",
             # 調査
             "investigate", "submit_hypothesis", "finish_investigation",
-            # 出力（常時公開）
-            "note", "response", "finish", "exit", "duck_call", "show_status",
-            # 記憶
-            "search_archives", "recall",
         },
         "investigation": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files", "get_project_tree",
+            "read_file", "list_directory", "find_files",
             # 分析
             "analyze_structure",
             # 計画
@@ -221,14 +224,10 @@ class DuckAgent:
             "summarize_context",
             # 調査
             "investigate", "submit_hypothesis", "finish_investigation",
-            # 出力（常時公開）
-            "note", "response", "finish", "exit", "duck_call", "show_status",
-            # 記憶
-            "search_archives", "recall",
         },
         "task": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files", "get_project_tree",
+            "read_file", "list_directory", "find_files",
             # ファイル編集
             "replace_in_file", "edit_lines", "edit_file", "write_file", "create_file", "delete_file",
             # 分析
@@ -237,32 +236,32 @@ class DuckAgent:
             "mark_step_complete", "mark_task_complete",
             # 実行
             "run_command", "execute_tasks", "execute_batch",
-            # 出力（常時公開）
-            "note", "response", "finish", "exit", "duck_call", "show_status",
-            # 記憶
-            "search_archives", "recall",
         },
     }
+    # task_execution は task と同じツールセットを使用
+    MODE_TOOL_MAPPING["task_execution"] = MODE_TOOL_MAPPING["task"]
 
     def get_tool_descriptions(self, mode: str = None) -> str:
         """
-        Generate compact tool descriptions for the system prompt (Sym-Ops v3.2).
+        Generate tool descriptions in Sym-Ops syntax (::action @target param=val).
 
         Args:
-            mode: エージェントの現在のモード ("planning", "investigation", "task")
-                  Noneの場合は全ツールを返す（後方互換性のため）
+            mode: Agent's current mode ("planning", "investigation", "task")
+                  If None, returns all tools.
 
         Returns:
-            ツールの説明テキスト（1行1ツール形式）
+            Formatted tool descriptions in Sym-Ops style.
         """
         import inspect
 
         # モードに基づいてツールをフィルタリング
+        allowed_tools = None
         if mode and mode in self.MODE_TOOL_MAPPING:
-            allowed_tools = self.MODE_TOOL_MAPPING[mode]
-        else:
-            # モードが指定されていない場合は全ツールを公開
-            allowed_tools = None
+            # 共通ツール + モード固有ツール
+            allowed_tools = self.UNIVERSAL_TOOLS | self.MODE_TOOL_MAPPING[mode]
+        elif mode:
+            # 未知のモードの場合は共通ツールのみ
+            allowed_tools = self.UNIVERSAL_TOOLS
 
         descriptions = []
         for name, func in self.tools.items():
@@ -270,17 +269,39 @@ class DuckAgent:
             if allowed_tools is not None and name not in allowed_tools:
                 continue
 
-            # Docstringの最初の1段落（概要）のみを抽出
+            # Extract Docstring
             full_doc = inspect.getdoc(func) or "No description."
             summary = full_doc.split('\n\n')[0].replace('\n', ' ')
 
-            # シグネチャを取得
+            # Build Sym-Ops example signature
             try:
                 sig = inspect.signature(func)
-            except (ValueError, TypeError):
-                sig = "(...)"
+                params_list = []
+                target_param = None
+                content_param = None
 
-            descriptions.append(f"- {name}{sig}: {summary}")
+                for p_name, p in sig.parameters.items():
+                    # Heuristics for Sym-Ops mapping:
+                    # 1. 'path', 'command', 'reason', 'hypothesis', 'message', 'result' -> @target
+                    if p_name in ['path', 'command', 'reason', 'hypothesis', 'message', 'result'] and not target_param:
+                        target_param = p_name
+                    # 2. 'content', 'body', 'code', 'plan_data' -> <<< block >>>
+                    elif p_name in ['content', 'body', 'code', 'plan_data'] and not content_param:
+                        content_param = p_name
+                    # 3. others -> inline params
+                    else:
+                        params_list.append(f"{p_name}=val")
+
+                # Format the line
+                target_str = f" @<{target_param}>" if target_param else ""
+                params_str = f" {' '.join(params_list)}" if params_list else ""
+                content_str = "\n  <<< <content> >>>" if content_param else ""
+                
+                line = f"- ::{name}{target_str}{params_str}{content_str}: {summary}"
+                descriptions.append(line)
+
+            except (ValueError, TypeError):
+                descriptions.append(f"- ::{name}: {summary}")
 
         return "\n".join(descriptions)
 
@@ -384,7 +405,7 @@ class DuckAgent:
 
                         # system_promptを介入・通常両方で使うため先に生成
                         prompt_builder = PromptBuilder(self.state)
-                        system_prompt = prompt_builder.build(self.get_tool_descriptions(self.state.current_mode.value))
+                        base_messages = prompt_builder.build_messages(self.get_tool_descriptions(self.state.current_mode.value))
                         # エラーフィードバックはプロンプトに注入済み。1ターン限りなのでクリア
                         self.state.last_syntax_errors = []
 
@@ -409,9 +430,7 @@ class DuckAgent:
                                     "3. 続行/中止/方針変更の選択肢を提示\n"
                                     "::response で返答してください。"
                                 )
-                                messages = [
-                                    {"role": "system", "content": system_prompt}
-                                ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history + [
+                                messages = base_messages + self.state.conversation_history + [
                                     {"role": "user", "content": intervention_prompt}
                                 ]
                                 with ui.create_spinner("Analyzing intervention..."):
@@ -427,11 +446,7 @@ class DuckAgent:
                             # Normal LLM call
                             with ui.create_spinner("Thinking..."):
                                 # Prepare messages
-                                # Few-shot例をsystem直後、会話履歴前に注入
-                                # LLMがSym-Ops構文を出力形式として学習するための会話ペア
-                                messages = [
-                                    {"role": "system", "content": system_prompt}
-                                ] + prompt_builder.get_few_shot_examples() + self.state.conversation_history
+                                messages = base_messages + self.state.conversation_history
 
                                 # Debug output
                                 if self.debug_context_mode:

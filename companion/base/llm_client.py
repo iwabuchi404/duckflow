@@ -343,9 +343,27 @@ class LLMClient:
         """
         Send messages to LLM and get a JSON response.
         If response_model is provided, validates and returns that Pydantic model.
+        Supports prompt caching for OpenRouter and Anthropic.
         """
         if self.use_mock:
             return self._mock_chat(messages, response_model, raw=raw)
+
+        # 1. プロバイダーに応じてメッセージを調整（キャッシュマーカーの処理）
+        processed_messages = []
+        supports_caching = self.provider in ["openrouter", "anthropic", "deepseek"]
+        
+        for msg in messages:
+            m = msg.copy()
+            if "cache_control" in m and not supports_caching:
+                # キャッシュ非対応プロバイダー（OpenAI純正等）の場合はマーカーを削除
+                del m["cache_control"]
+            processed_messages.append(m)
+
+        # 2. 追加のヘッダー（OpenRouter用）
+        extra_headers = {}
+        if self.provider == "openrouter":
+            extra_headers["HTTP-Referer"] = "https://github.com/duckflow/duckflow"
+            extra_headers["X-Title"] = "Duckflow Agent"
 
         MAX_EMPTY_RETRIES = 2
 
@@ -355,14 +373,16 @@ class LLMClient:
             if temperature is None:
                 temperature = config.get("llm.temperature", 0.7)
             max_tokens = config.get("llm.max_output_tokens", 4096)
-            repetition_penalty = 1.1
+            
             content = None
-            for attempt in range(1, MAX_EMPTY_RETRIES + 2):  # 初回 + リトライ回数
+            for attempt in range(1, MAX_EMPTY_RETRIES + 2):
+                # OpenAI SDKを使用してリクエスト送信
                 response = await self.client.chat.completions.create(
                     model=self.model,
-                    messages=messages,
+                    messages=processed_messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    extra_headers=extra_headers
                 )
 
                 # Update usage stats
@@ -370,6 +390,17 @@ class LLMClient:
                     self.usage_stats["input_tokens"] += response.usage.prompt_tokens
                     self.usage_stats["output_tokens"] += response.usage.completion_tokens
                     self.usage_stats["total_tokens"] += response.usage.total_tokens
+                    
+                    # キャッシュヒット情報をログに記録（OpenRouter/Anthropic拡張）
+                    if hasattr(response.usage, 'extra_fields'):
+                        # OpenRouter might put cache info here
+                        pass
+                    
+                    # Log caching info if available in response
+                    usage_dict = response.usage.model_dump()
+                    cache_read = usage_dict.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+                    if cache_read > 0:
+                        logger.info(f"🚀 Prompt Cache Hit: {cache_read:,} tokens")
 
                 content = response.choices[0].message.content
 

@@ -236,7 +236,7 @@ class DuckUI:
         if speaker == "user":
             self.console.print(f"\n[user]👤 User:[/user] {message}")
         else:
-            self.console.print(f"\n[success]🤖 Assistant:[/success]\n{message}")
+            self.console.print(f"\n[success]🦆 Assistant:[/success]\n{message}")
 
     def print_separator(self):
         self.console.print(Rule(style="dim"))
