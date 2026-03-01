@@ -93,6 +93,13 @@ class PromptBuilder:
             '  ---\n'
             '  Check the tool description for required parameters.'
         ),
+        'empty_response': (
+            '  If investigation is in progress:\n'
+            '    `::read_file @path/to/file.py`  — observe first\n'
+            '  If ready to deliver result:\n'
+            '    `::response @Your analysis here.`  — inline\n'
+            '    or use <<< >>> block for long output'
+        ),
     }
 
     def _build_error_feedback(self) -> str:

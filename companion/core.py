@@ -499,11 +499,29 @@ class DuckAgent:
                             # Check if we should return to user
                             # If 'response', 'report', 'exit', 'duck_call', or 'finish' action was executed, break the inner loop
                             # 'note' does NOT end the loop - it's for progress notifications while continuing execution
+                            # Exception: empty ::response (message="") is treated as a no-op (loop continues + syntax error recorded)
                             should_return_to_user = False
                             for action in action_list.actions:
-                                if action.name in ["response", "exit", "duck_call", "finish"]:
+                                if action.name in ["exit", "duck_call", "finish"]:
                                     should_return_to_user = True
                                     break
+                                if action.name == "response":
+                                    msg = action.parameters.get("message", "").strip()
+                                    if msg:
+                                        should_return_to_user = True
+                                        break
+                                    else:
+                                        # 空の ::response → ループ継続 + エラーフィードバック
+                                        logger.warning("Empty ::response detected — continuing loop.")
+                                        self.state.last_syntax_errors.append(SyntaxErrorInfo(
+                                            error_type='empty_response',
+                                            raw_snippet='::response (empty)',
+                                            correction_hint=(
+                                                '::response was called with no message. '
+                                                'If investigation is in progress, continue observing. '
+                                                'Use ::response only when you have a result to deliver.'
+                                            ),
+                                        ))
 
                             if should_return_to_user:
                                 logger.info("Autonomous loop ending: response/exit/duck_call action executed")
@@ -1072,7 +1090,17 @@ class DuckAgent:
         self.state.enter_investigation_mode()
         ui.print_system(f"🔍 Investigation Mode に切り替えました。理由: {reason}")
         logger.info(f"Entering Investigation Mode: {reason}")
-        return f"Investigation Mode started. Reason: {reason}"
+        return (
+            f"Investigation Mode started. Reason: {reason}\n"
+            "━━━ NEXT ACTION REQUIRED ━━━\n"
+            "Do NOT call ::response or ::duck_call yet.\n"
+            "You must observe first. Call ONE of:\n"
+            "  ::read_file @<path>      — read a relevant file\n"
+            "  ::grep_files pattern=... — search code/logs\n"
+            "  ::run_command @<cmd>     — check system state\n"
+            "  ::list_directory @<dir>  — explore structure\n"
+            "Gather evidence, then ::submit_hypothesis."
+        )
 
     async def action_submit_hypothesis(self, hypothesis: str) -> str:
         """

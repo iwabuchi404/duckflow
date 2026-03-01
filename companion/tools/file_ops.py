@@ -110,12 +110,9 @@ class FileOps:
 
     async def write_file(self, path: str, content: str) -> str:
         """
-        :: write @ or overwrite a file with the provided content.
+        Write or overwrite a file with the provided content.
+        ⚑ BEFORE CALLING: content must be complete — no '...' or 'TODO' placeholders.
         Creates parent directories automatically.
-        既存ファイルを上書きする場合はユーザー承認が必要。
-
-        :: note @ : Use a Sym-Ops content block (<<< >>>) for the 'content' parameter
-        when writing multi-line files or code.
         """
         full_path = self._get_full_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +123,9 @@ class FileOps:
     async def edit_file(self, path: str, anchors: str = "", content: str = "") -> str:
         '''
         Hashline-based file editing with precise line identification.
+        ⚑ BEFORE CALLING: anchors must match your LATEST read_file output exactly.
+           If the file may have changed, re-run read_file first to get fresh hashes.
+        
         Supports multi-edit via %%% segment separators.
 
         Uses hashline anchors (line_number:hash) to identify and replace content.
@@ -751,8 +751,9 @@ class FileOps:
 
     async def delete_file(self, path: str) -> str:
         """
-        Delete a file. This is a dangerous operation - use with caution.
-        実行前にユーザー承認が必要。ディレクトリの削除には対応しない。
+        Delete a file. This is irreversible.
+        ⚑ BEFORE CALLING: set ::s low (e.g. ::s0.3) to trigger user confirmation.
+        ディレクトリの削除には対応しない。
 
         Args:
             path: 削除するファイルパス

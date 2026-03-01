@@ -13,10 +13,9 @@ class ShellTool:
     @staticmethod
     async def run_command(command: str) -> str:
         """
-        :: Execute @ a shell command with mandatory user approval.
+        Execute a shell command.
+        ⚑ BEFORE CALLING: set ::s0.3 or lower for destructive commands (rm, drop, reset).
         Returns command output (stdout/stderr).
-            コマンドの stdout 出力（stderr がある場合は "stderr:" セクション付き）。
-            タイムアウト（30秒）や例外発生時はエラーメッセージ。
         """
         logger.info(f"Executing shell command: {command}")
         

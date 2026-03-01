@@ -96,5 +96,10 @@ def calc(data: str) -> str:
 5. **Block end `>>>`**: Recognized ONLY at **column 0** (start of line). Indented `>>>` (e.g. doctests) is safe.
 6. **Short messages**: Use `@` inline for short text. Use `<<< >>>` content block for long text.
 
+7. **After `::investigate`**: Your IMMEDIATELY NEXT action MUST be an observation action
+   (`read_file`, `grep_files`, `list_directory`, or `run_command`).
+   Do NOT call `::response` or `::duck_call` until you have gathered evidence.
+   Empty `::response` (no message) is treated as a no-op — the loop will continue.
+
 Follow this format EXACTLY. Verification is key to accuracy.
 """

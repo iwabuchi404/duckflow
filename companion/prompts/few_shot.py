@@ -75,16 +75,37 @@ PLANNING_EXAMPLES = [
 ]
 
 # Investigation Specific Examples
+# CRITICAL: Shows the FULL pattern — investigate → observe → hypothesis
+# The "user" role after investigate simulates the tool result returned by the system.
 INVESTIGATION_EXAMPLES = [
     {"role": "user", "content": "It crashes with error X"},
+    # Turn 1: Enter investigation mode
     {"role": "assistant", "content": """\
 >> Unknown crash. Starting investigation.
 ::c0.8 ::s1.0 ::m0.2 ::f0.8
 ::investigate @Checking logs for error X"""},
+    # Turn 1 result (tool result injected as user message)
+    {"role": "user", "content": """\
+::result ok
+Investigation Mode started. Reason: Checking logs for error X
+━━━ NEXT ACTION REQUIRED ━━━
+Do NOT call ::response or ::duck_call yet.
+Call read_file, grep_files, list_directory, or run_command to observe."""},
+    # Turn 2: MUST observe — do NOT call response here
     {"role": "assistant", "content": """\
->> Found suspicious line in logs. Forming hypothesis.
+>> Investigation active. Reading logs to find error X.
+::c0.85 ::s1.0 ::m0.3 ::f0.9
+::read_file @logs/app.log start=1 end=50"""},
+    # Turn 2 result
+    {"role": "user", "content": """\
+::result ok
+1:aa1| [ERROR] NullPointerException at auth.py:42
+2:bb2| [TRACE] called from login.py:17"""},
+    # Turn 3: Form hypothesis based on evidence
+    {"role": "assistant", "content": """\
+>> Found error location. auth.py:42 is a null reference.
 ::c0.9 ::s1.0 ::m0.3 ::f0.9
-::submit_hypothesis @Null pointer in auth.py:42"""}
+::submit_hypothesis @NullPointerException at auth.py:42 — user object is None when login is called without session."""}
 ]
 
 def get_examples_for_mode(mode: str) -> list:
