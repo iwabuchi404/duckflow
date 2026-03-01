@@ -103,7 +103,18 @@ class DuckflowParser:
                 # Check for content end
                 if line.strip() == '>>>':
                     if current_action_data:
-                        current_action_data['content'] = '\n'.join(content_buffer)
+                        content = '\n'.join(content_buffer)
+                        # Extract YAML front matter if present
+                        if content.startswith('---'):
+                            parts = content.split('---', 2)
+                            if len(parts) >= 3:
+                                yaml_str = parts[1].strip()
+                                for y_line in yaml_str.split('\n'):
+                                    if ':' in y_line:
+                                        k, v = y_line.split(':', 1)
+                                        current_action_data['params'][k.strip()] = v.strip()
+                                content = parts[2].strip()
+                        current_action_data['content'] = content
                     in_content = False
                     continue
                 
@@ -123,9 +134,11 @@ class DuckflowParser:
                     params = {}
                     if params_str:
                         for param in params_str.split():
+                            param = param.strip()
                             if '=' in param:
-                                key, value = param.split('=', 1)
-                                params[key] = value
+                                parts = param.split('=', 1)
+                                if len(parts) == 2:
+                                    params[parts[0]] = parts[1]
                     
                     current_action_data = {
                         'type': action_name,

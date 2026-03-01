@@ -76,6 +76,25 @@ class PromptBuilder:
             state_context="" 
         ).strip()
 
+    # エラータイプ別の「正しい例」マップ
+    _CORRECTION_EXAMPLES: dict = {
+        'unknown_tool': (
+            '  Good: `::note @Done. Moving to next step.`\n'
+            '  Good: `::response @Here is the result.`'
+        ),
+        'anchor_mismatch': (
+            '  Step 1: `::read_file @path/to/file.py` — get fresh hashlines\n'
+            '  Step 2: retry `::edit_file` with the NEW anchor values from step 1'
+        ),
+        'missing_param': (
+            '  For edit_file, anchors are required:\n'
+            '  ---\n'
+            '  anchors: "10:abc 12:def"\n'
+            '  ---\n'
+            '  Check the tool description for required parameters.'
+        ),
+    }
+
     def _build_error_feedback(self) -> str:
         """
         直前ターンの構文エラーから Correction Guide セクションを生成する。
@@ -88,6 +107,9 @@ class PromptBuilder:
         for err in errors:
             lines.append(f'- **{err.error_type}**: {err.correction_hint}')
             if err.raw_snippet:
-                lines.append(f'  Your output: `{err.raw_snippet[:100]}`')
+                lines.append(f'  Your output: `{err.raw_snippet[:300]}`')
+            example = self._CORRECTION_EXAMPLES.get(err.error_type)
+            if example:
+                lines.append(f'  Example fix:\n{example}')
         lines.append('Apply these corrections in your next output.')
         return '\n'.join(lines)

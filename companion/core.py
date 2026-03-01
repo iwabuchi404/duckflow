@@ -127,13 +127,29 @@ class DuckAgent:
         # Register Project Tree Tool
         self.register_tool("get_project_tree", get_project_tree)
 
-        # status: LLMが "::status ok" のようにプロトコル報告として出力するため、
-        # 無害なno-opとして登録し、エラーやフィルタ警告を防ぐ
-        # self.register_tool("show_status", self.action_status)
+        # ::status / ::result はツール出力やエラーメッセージ中に頻出する文字列で、
+        # LLMがアクションとして呼んでしまうことがある。ダミーツールとして登録し、
+        # 呼ばれた際に正しい使い方をフィードバックする。
+        self.register_tool("status", self._action_noop_symops_marker)
+        self.register_tool("result", self._action_noop_symops_marker)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
         self.tools[name] = func
+
+    def _action_noop_symops_marker(self, **_) -> str:
+        """
+        ::status and ::result are output markers, NOT callable actions.
+        They appear inside tool results and error messages, but cannot be invoked directly.
+        Use ::note for progress logging. Use ::response to deliver results.
+        """
+        return (
+            "::status / ::result are output markers, not callable actions.\n"
+            "Correct usage:\n"
+            "  ::note @<progress message>      — internal log, loop continues\n"
+            "  ::response @<short message>     — deliver result to user\n"
+            "Do NOT call ::status or ::result as actions."
+        )
     
     async def switch_model(self, provider: str, model: str) -> bool:
         """
@@ -530,6 +546,7 @@ class DuckAgent:
         # --- Unknown Tool Filter ---
         # LLMがハルシネーションで存在しないツールを呼ぶことがあるため、
         # 実行前にフィルタリングする（会話履歴を汚染しない）
+        import difflib as _difflib
         known_actions = []
         for action in action_list.actions:
             if action.name in self.tools:
@@ -537,11 +554,26 @@ class DuckAgent:
             else:
                 logger.warning(f"Filtered out unknown tool: {action.name}")
                 ui.print_warning(f"Unknown tool '{action.name}' was ignored.")
-                available = ', '.join(self.tools.keys())
+
+                # 現在モードで有効なツール名のみをヒントに（全ツールリストは長すぎる）
+                mode_val = self.state.current_mode.value if self.state.current_mode else None
+                if mode_val and mode_val in self.MODE_TOOL_MAPPING:
+                    mode_tools = sorted(self.UNIVERSAL_TOOLS | self.MODE_TOOL_MAPPING[mode_val])
+                else:
+                    mode_tools = sorted(self.UNIVERSAL_TOOLS)
+
+                # 近似ツール候補を提示（スペルミス・類似名の誘導）
+                close = _difflib.get_close_matches(action.name, self.tools.keys(), n=2, cutoff=0.5)
+                if close:
+                    hint = f"'{action.name}' is not a valid tool. Did you mean: {', '.join(close)}?"
+                else:
+                    hint = f"'{action.name}' is not a valid tool."
+                hint += f" Valid tools in this mode: {', '.join(mode_tools)}"
+
                 self.state.last_syntax_errors.append(SyntaxErrorInfo(
                     error_type='unknown_tool',
                     raw_snippet=action.name,
-                    correction_hint=f'Use only registered tools: {available}',
+                    correction_hint=hint,
                 ))
         action_list.actions = known_actions
 
@@ -708,12 +740,26 @@ class DuckAgent:
                         self.state.last_action_result = error_msg
                         ui.print_result(str(e), is_error=True)
 
+                        # edit_file / delete_lines の ValueError → アンカー関連エラー専用ヒント
+                        if action.name in ('edit_file', 'delete_lines') and isinstance(e, ValueError):
+                            self.state.last_syntax_errors.append(SyntaxErrorInfo(
+                                error_type='anchor_mismatch',
+                                raw_snippet=str(e)[:300],
+                                correction_hint=(
+                                    'Anchors are stale or invalid. '
+                                    'The file may have changed since read_file was called. '
+                                    'Re-run read_file to get fresh anchors, then retry with the NEW hash values.'
+                                ),
+                            ))
                         # 引数不足などの TypeError を構文エラーとして記録
-                        if isinstance(e, TypeError):
+                        elif isinstance(e, TypeError):
                             self.state.last_syntax_errors.append(SyntaxErrorInfo(
                                 error_type='missing_param',
-                                raw_snippet=str(e)[:200],
-                                correction_hint='Required parameter is missing. Check the tool signature.',
+                                raw_snippet=str(e)[:300],
+                                correction_hint=(
+                                    f"Wrong or missing parameter for '{action.name}'. "
+                                    'Check the tool description for correct parameter names and format.'
+                                ),
                             ))
 
                         # Add error to conversation history in Sym-Ops format

@@ -15,7 +15,7 @@ BASE_EXAMPLES = [
 TASK_EXAMPLES = [
     {"role": "user", "content": "Add a docstring to main in hello.py"},
     {"role": "assistant", "content": """\
->> Need hash-lines first.
+>> Need hash-lines first to perform a safe edit.
 ::c0.9 ::s1.0 ::m0.1 ::f0.9
 ::read_file @hello.py"""},
     {"role": "assistant", "content": """\
@@ -24,6 +24,7 @@ TASK_EXAMPLES = [
 2:c2d|     print('Hi')"""},
     {"role": "assistant", "content": """\
 >> Hash confirmed. Inserting docstring.
+>> [CHECK] @path=hello.py, anchors="1:a1b 1:a1b" match exactly.
 ::c1.0 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @hello.py
 <<<
@@ -32,6 +33,30 @@ anchors: "1:a1b 1:a1b"
 ---
 def main():
     \"\"\"Entry point.\"\"\"
+>>>"""}
+]
+
+# Self-Correction Example
+CORRECTION_EXAMPLES = [
+    {"role": "user", "content": "Update the print message in hello.py"},
+    {"role": "assistant", "content": """\
+>> Re-reading file to get fresh hashes.
+::c0.9 ::s1.0 ::m0.1 ::f0.9
+::read_file @hello.py"""},
+    {"role": "assistant", "content": """\
+::result ok
+1:a1b| def main():
+2:c2d|     print('Old Message')"""},
+    {"role": "assistant", "content": """\
+>> [CHECK] Wait, I almost used '2:c2x' but the last read said '2:c2d'.
+>> Fixing anchor to 2:c2d and applying edit.
+::c1.0 ::s1.0 ::m0.2 ::f1.0
+::edit_file @hello.py
+<<<
+---
+anchors: "2:c2d 2:c2d"
+---
+    print('New Message')
 >>>"""}
 ]
 
