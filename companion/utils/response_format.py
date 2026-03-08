@@ -101,5 +101,11 @@ def calc(data: str) -> str:
    Do NOT call `::response` or `::duck_call` until you have gathered evidence.
    Empty `::response` (no message) is treated as a no-op — the loop will continue.
 
+8. **After `::submit_hypothesis`**: Choose exactly one:
+   - Not confirmed yet → verify with `read_file` / `grep_files` / `run_command`.
+   - Confirmed → call `::finish_investigation @<conclusion>` **immediately**.
+   Do NOT call `::edit_file`, `::write_file`, or `::response` until investigation is closed.
+   File edits during Investigation Mode are **blocked by the system**.
+
 Follow this format EXACTLY. Verification is key to accuracy.
 """

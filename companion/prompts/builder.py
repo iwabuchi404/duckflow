@@ -100,6 +100,11 @@ class PromptBuilder:
             '    `::response @Your analysis here.`  — inline\n'
             '    or use <<< >>> block for long output'
         ),
+        'investigation_edit_blocked': (
+            '  You are in Investigation Mode — file edits are blocked.\n'
+            '  Step 1: `::finish_investigation @<root cause conclusion>`\n'
+            '  Step 2: After switching to Planning/Task mode, apply edits.'
+        ),
     }
 
     def _build_error_feedback(self) -> str:

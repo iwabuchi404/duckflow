@@ -637,11 +637,39 @@ class DuckAgent:
             for action in action_list.actions:
                 ui.print_action(action.name, action.parameters, action.thought)
 
+                # --- Investigation Mode Guard ---
+                # Investigation モード中はファイル変更系アクションをブロック（read-only）
+                _EDIT_ACTIONS = {"edit_file", "write_file", "delete_file", "delete_lines"}
+                if action.name in _EDIT_ACTIONS and self.state.get_context_mode() == "investigation":
+                    _blocked_msg = (
+                        f"[BLOCKED] '{action.name}' is not allowed during Investigation Mode. "
+                        "Investigation is read-only. "
+                        "Allowed: read_file, grep_files, list_directory, run_command, "
+                        "submit_hypothesis, finish_investigation. "
+                        "Call ::finish_investigation @<conclusion> when root cause is confirmed, "
+                        "then apply edits in Planning/Task mode."
+                    )
+                    ui.print_warning(f"Investigation Mode中のファイル変更をブロック: {action.name}")
+                    logger.warning(f"Blocked edit action in Investigation Mode: {action.name}")
+                    self.state.last_action_result = _blocked_msg
+                    self.state.last_syntax_errors.append(SyntaxErrorInfo(
+                        error_type='investigation_edit_blocked',
+                        raw_snippet=f'::{action.name}',
+                        correction_hint=(
+                            f"'{action.name}' cannot be called during Investigation Mode. "
+                            "Close investigation first: ::finish_investigation @<conclusion>, "
+                            "then re-enter Task mode to apply edits."
+                        ),
+                    ))
+                    results.append(_blocked_msg)
+                    continue
+                # ------------------------------------------------
+
                 # --- Approval Check ---
                 requires_approval = False
                 was_approved = False
                 warning_msg = ""
-                
+
                 if action.name in ["delete_file", "delete_lines", "edit_file"]:
                     requires_approval = True
                     warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
@@ -1128,9 +1156,13 @@ class DuckAgent:
         )
         logger.info(f"Hypothesis #{inv.hypothesis_attempts} submitted: {hypothesis}")
         return (
-            f"Hypothesis #{inv.hypothesis_attempts} registered: '{hypothesis}'. "
-            "Now verify this hypothesis using read_file / run_command / list_directory. "
-            f"Remaining attempts before duck_call: {max(0, 2 - inv.hypothesis_attempts)}"
+            f"Hypothesis #{inv.hypothesis_attempts} registered: '{hypothesis}'.\n"
+            "━━━ NEXT ACTION REQUIRED ━━━\n"
+            "Choose ONE of the following:\n"
+            "  [Not confirmed yet] Verify with: read_file / grep_files / run_command\n"
+            "  [Confirmed]         Close with:  ::finish_investigation @<conclusion>\n"
+            "Do NOT call ::edit_file, ::write_file, or ::response until investigation is closed.\n"
+            f"Remaining hypothesis attempts before duck_call: {max(0, 2 - inv.hypothesis_attempts)}"
         )
 
     async def action_finish_investigation(self, conclusion: str = "") -> str:

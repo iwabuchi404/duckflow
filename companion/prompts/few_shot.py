@@ -105,7 +105,22 @@ Call read_file, grep_files, list_directory, or run_command to observe."""},
     {"role": "assistant", "content": """\
 >> Found error location. auth.py:42 is a null reference.
 ::c0.9 ::s1.0 ::m0.3 ::f0.9
-::submit_hypothesis @NullPointerException at auth.py:42 — user object is None when login is called without session."""}
+::submit_hypothesis @NullPointerException at auth.py:42 — user object is None when login is called without session."""},
+    # Turn 3 result — system confirms hypothesis and demands next action
+    {"role": "user", "content": """\
+::result ok
+Hypothesis #1 registered: 'NullPointerException at auth.py:42 — user object is None when login is called without session.'.
+━━━ NEXT ACTION REQUIRED ━━━
+Choose ONE of the following:
+  [Not confirmed yet] Verify with: read_file / grep_files / run_command
+  [Confirmed]         Close with:  ::finish_investigation @<conclusion>
+Do NOT call ::edit_file, ::write_file, or ::response until investigation is closed.
+Remaining hypothesis attempts before duck_call: 1"""},
+    # Turn 4: Hypothesis is confirmed — close investigation immediately
+    {"role": "assistant", "content": """\
+>> Evidence is clear: auth.py:42 dereferences user without None check. Root cause confirmed.
+::c0.95 ::s1.0 ::m0.3 ::f0.95
+::finish_investigation @Root cause: auth.py:42 calls user.id without checking if user is None. Fix: add null guard before login()."""}
 ]
 
 def get_examples_for_mode(mode: str) -> list:
