@@ -75,28 +75,30 @@ not just the output.
 ### Edit Tools
 
 1. `edit_file`
-   - **Description**: Atomic editing using line-hash anchors. Most reliable for large files.
-   - **Constraint**: You MUST call `read_file` first to get current hashes.
-   - **Structure**:
-     ```
-     ::edit_file @path
-     <<<
-     ---
-     anchors: "start_line:hash end_line:hash"
-     ---
-     [New Code]
-     >>>
-     ```
+   - **Description**: Atomic editing using context match (find/replace). Search for a unique block of code and replace it. Whitespace differences are ignored.
+   - **Constraint**: The `find` block must be unique enough to identify a single location.
+    - **Structure**:
+      ```
+      ::edit_file @path
+      <<<
+      find: |
+          [Copy exact block from read_file]
+      replace: |
+          [New code]
+      >>>
+      ```
+    - **Note**: If a match fails, the tool returns a detailed `diff` showing exactly where your snippet differs from the file. Use this to self-correct.
+    - **Pro Tip**: Use a large enough `find` block to ensure uniqueness, but keep it precise.
 
 2. `delete_lines`
-   - **Description**: Remove a range of lines.
+   - **Description**: Remove a specific code block using context match.
    - **Structure**:
      ::delete_lines @path
      <<<
-     ---
-     anchors: "start_line:hash end_line:hash"
-     ---
+     find: |
+         [Code to Delete]
      >>>
+
 
 3. `write_file`
    - **Description**: Creates a new file or overwrites an existing one entirely.
@@ -130,8 +132,8 @@ not just the output.
 
 ### Anti-Loop Rules
 - NEVER repeat the same tool call with same params if it failed once.
-- NEVER use `edit_file` with guessed hashes.
 - ALWAYS verify the file content with `read_file` after a major edit.
+
 </tools>
 
 <available_tools>

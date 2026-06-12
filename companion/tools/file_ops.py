@@ -2,6 +2,7 @@ import os
 import shutil
 from typing import List, Optional
 from pathlib import Path
+import yaml
 from .hashline import HashlineHelper
 
 class FileOps:
@@ -91,9 +92,9 @@ class FileOps:
                 except StopIteration:
                     has_more = False
 
-            # hashline 形式に変換
+            # 行番号付き形式に変換（ハッシュは除外して読みやすくする）
             if content_lines:
-                content = HashlineHelper.format_with_hashlines('\n'.join(content_lines), start_line=start_line)
+                content = HashlineHelper.format_with_hashlines('\n'.join(content_lines), start_line=start_line, include_hash=False)
             else:
                 content = "(Empty file)"
 
@@ -108,194 +109,413 @@ class FileOps:
         except UnicodeDecodeError:
             return {"error": f"File {path} is not a valid UTF-8 text file (encoding error)."}
 
+    def _normalize_line(self, line: str) -> str:
+        """
+        1行の比較用正規化（_find_similar_lines 向け）。
+        1. 行番号/ハッシュ接頭辞を除去。
+        2. タブをスペース4つに変換。
+        3. 連続空白を1つに縮退してトリム。
+        """
+        import re as _re
+        line = _re.sub(r'^\s*\d+(?::[0-9a-fA-F]+)?\|\s*', '', line)
+        line = _re.sub(r'\t', '    ', line)
+        line = _re.sub(r' +', ' ', line).strip()
+        return line
+
+    def _normalize_block(self, lines: list[str]) -> list[str]:
+        """
+        ブロック単位の正規化。相対インデントを保持する。
+
+        1. 行番号/ハッシュ接頭辞を除去。
+        2. タブをスペース4つに変換。
+        3. ブロック全体の最小インデントを算出して除去
+           （絶対インデントの差を吸収しつつ、相対構造は維持）。
+        4. 末尾空白を除去。
+
+        例:
+            file の「    def foo():\\n        pass」も
+            find の「def foo():\\n    pass」も
+            どちらも「def foo():\\n    pass」に正規化されてマッチする。
+        """
+        import re as _re
+
+        # Step 1: ハッシュ接頭辞除去 & タブ変換
+        processed = []
+        for line in lines:
+            line = _re.sub(r'^\s*\d+(?::[0-9a-fA-F]+)?\|\s*', '', line)
+            line = line.replace('\t', '    ')
+            processed.append(line)
+
+        # Step 2: 非空行の最小インデントを計算
+        indents = [len(l) - len(l.lstrip(' ')) for l in processed if l.strip()]
+        min_indent = min(indents) if indents else 0
+
+        # Step 3: 最小インデント除去 + 末尾トリム
+        normalized = []
+        for line in processed:
+            if line.strip():
+                normalized.append(line[min_indent:].rstrip())
+            else:
+                normalized.append('')
+
+        return normalized
+
+    def _find_context_match(self, file_lines: list[str], find_text: str, occurrence: int = 1) -> tuple[int, int] | None:
+        """
+        findテキストにマッチする行範囲を返す。
+
+        ブロック単位の相対インデント正規化でマッチングする。
+        タブ/スペースの差、絶対インデントの差は吸収するが、
+        ブロック内の相対的なインデント構造は保持して比較する。
+        """
+        find_lines = [l.rstrip('\n') for l in find_text.splitlines()]
+        find_len = len(find_lines)
+        if find_len == 0:
+            return None
+
+        norm_find = self._normalize_block(find_lines)
+
+        match_count = 0
+        for i in range(len(file_lines) - find_len + 1):
+            window = file_lines[i:i + find_len]
+            norm_window = self._normalize_block(window)
+
+            if norm_window == norm_find:
+                match_count += 1
+                if match_count == occurrence:
+                    return (i, i + find_len - 1)
+
+        return None
+
+    def _find_similar_lines(self, file_lines: list[str], find_first_line: str, diff_threshold: float = 0.5) -> list[tuple[int, str]]:
+        """
+        マッチ失敗時に候補を提示するため、findの1行目に似た行を探す。
+        """
+        import difflib as _difflib
+        norm_find = self._normalize_line(find_first_line)
+        if not norm_find:
+            return []
+            
+        candidates = []
+        for i, line in enumerate(file_lines):
+            norm_line = self._normalize_line(line)
+            if not norm_line:
+                continue
+            ratio = _difflib.SequenceMatcher(None, norm_find, norm_line).ratio()
+            if ratio >= diff_threshold:
+                candidates.append((i + 1, line))
+        return sorted(candidates, key=lambda x: _difflib.SequenceMatcher(None, norm_find, self._normalize_line(x[1])).ratio(), reverse=True)[:5]
+
+    def _generate_match_failure_diff(self, find_lines: list[str], candidate_lines: list[str]) -> str:
+        """
+        期待値(find)と実際(candidate)の間の差異を可視化する。
+        """
+        import difflib as _difflib
+        # 各行を正規化して比較しやすくする
+        f_norm = [self._normalize_line(l) for l in find_lines]
+        c_norm = [self._normalize_line(l) for l in candidate_lines]
+        
+        diff = _difflib.ndiff(f_norm, c_norm)
+        return "\n".join([line for line in diff if line.startswith(('-', '+', '?'))])
+
     async def write_file(self, path: str, content: str) -> str:
         """
         Write or overwrite a file with the provided content.
         ⚑ BEFORE CALLING: content must be complete — no '...' or 'TODO' placeholders.
         Creates parent directories automatically.
         """
+        # Sanitize content before writing
+        clean_content = self._sanitize_content(content)
+        
         full_path = self._get_full_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
-            f.write(content)
+            f.write(clean_content)
         return f"Successfully wrote to {path}"
 
-    async def edit_file(self, path: str, anchors: str = "", content: str = "") -> str:
+    async def edit_file(self, path: str, find: str = "", replace: str = "", occurrence: int = 1, content: str = "") -> str:
         '''
-        Hashline-based file editing with precise line identification.
-        ⚑ BEFORE CALLING: anchors must match your LATEST read_file output exactly.
-           If the file may have changed, re-run read_file first to get fresh hashes.
+        Context Match (Fuzzy) based file editing with search-and-replace.
+         whitespace differences (tabs/spaces) are ignored during matching.
         
         Supports multi-edit via %%% segment separators.
-
-        Uses hashline anchors (line_number:hash) to identify and replace content.
-        The hash ensures the file hasn't changed since read_file was called.
 
         Sym-Ops format (single edit):
         ::edit_file @utils.py
         <<<
-        ---
-        anchors: "42:a3f 43:f10"
-        ---
-        def calculate_total(items: list[int]) -> int:
-            """Calculate the total sum."""
-            return sum(items)
+        find: |
+            def calculate_total(items: list[int]) -> int:
+                """Original docstring."""
+                return sum(items)
+        replace: |
+            def calculate_total(items: list[int]) -> int:
+                """Updated docstring."""
+                return sum(items)
         >>>
 
         Sym-Ops format (multi-edit using %%% separator; applied bottom-to-top):
         ::edit_file @utils.py
         <<<
-        ---
-        anchors: "3:abc 3:abc"
-        ---
-        TAX_RATE = 0.10
+        find: |
+            OLD_CONSTANT = 1
+        replace: |
+            NEW_CONSTANT = 100
         %%%
-        ---
-        anchors: "10:def 12:ghe"
-        ---
-        def calculate(x):
-            return x * TAX_RATE
+        find: |
+            return x * OLD_CONSTANT
+        replace: |
+            return x * NEW_CONSTANT
         >>>
 
         Args:
             path: 対象ファイルパス
-            anchors: アンカー文字列（例: "42:a3f 43:f10"）。YAML フロントマター方式の場合は省略可。
-            content: 置換する新しい内容。YAML フロントマターで anchors を渡す場合はその後に本文。
+            find: 置換対象のコードスニペット
+            replace: 置換後のコード
+            occurrence: 同一スニペットが複数ある場合の指定（1始まり）
+            content: 複数編集を行う場合の %%% 区切りコンテンツ
 
         Returns:
-            変更成功メッセージと、各変更箇所の更新済み hashline コンテキスト
-
-        Raises:
-            ValueError: アンカーが見つからない、またはハッシュが不一致の場合
+            変更成功メッセージ（デフ形式）またはエラーメッセージ（候補提示付き）
         '''
         full_path = self._get_full_path(path)
         if not full_path.exists():
-            raise FileNotFoundError(f"File not found: {path}")
+            return f"::status error\nReason: File not found: {path}"
         if not full_path.is_file():
-            raise IsADirectoryError(f"Path is a directory: {path}")
+            return f"::status error\nReason: Path is a directory: {path}"
 
-        # %%% でセグメントに分割（マルチエディットサポート）
+        # セグメントの収集
         import re as _re
         segments_raw = _re.split(r'\n%%%', content)
-
-        # 各セグメントから (anchors_str, body) を抽出
-        # セグメント内の YAML フロントマターを解釈する
-        edits: list[tuple[str, str]] = []
+        
+        # 各セグメントからパース
+        edits_params = []
+        
+        # 1つ目のアクション（トップレベル引数）を最初に追加（もし存在すれば）
+        if find:
+            edits_params.append({'find': find, 'replace': replace, 'occurrence': int(occurrence)})
+            
+        # コンテンツブロック内のセグメントをパース
         for seg in segments_raw:
             seg = seg.strip('\n')
             if not seg.strip():
                 continue
-
-            # YAML フロントマター検出
+            
+            # YAMLフロントマター、またはブロックそのものがYAMLの場合を考慮
+            found_params = {}
             fm_match = _re.match(r'^---\n(.*?)\n---\n?(.*)', seg, _re.DOTALL)
             if fm_match:
-                import yaml as _yaml
                 try:
-                    fm = _yaml.safe_load(fm_match.group(1))
-                    seg_anchors = str(fm.get('anchors', anchors)).strip()
-                    seg_body = fm_match.group(2).strip('\n')
+                    p = yaml.safe_load(fm_match.group(1))
+                    if isinstance(p, dict):
+                        found_params = p
                 except Exception:
-                    seg_anchors = anchors
-                    seg_body = seg
+                    pass
             else:
-                # フロントマターなし: グローバル anchors 引数を使う
-                seg_anchors = anchors
-                seg_body = seg.strip('\n')
+                # ブロックそのものをYAMLとしてパースを試みる
+                try:
+                    p = yaml.safe_load(seg)
+                    if isinstance(p, dict) and ('find' in p or 'replace' in p):
+                        found_params = p
+                except Exception:
+                    pass
 
-            if not seg_anchors:
-                return (
-                    f"::status error\n"
-                    f"Reason: No anchors specified for edit segment.\n"
-                    f"Fix: You must provide anchors using hashline format (line:hash). "
-                    f"Always run 'read_file' first to get the current anchors.\n"
-                    f"Example:\n"
-                    f"---\n"
-                    f"anchors: \"42:a3f 43:f10\"\n"
-                    f"---\n"
-                    f"...new content..."
-                )
-            edits.append((seg_anchors, seg_body))
+            # フォールバック：正規表現による find/replace 抽出 (Hybrid Parsing)
+            if not found_params.get('find'):
+                fallback = self._extract_find_replace_fallback(seg)
+                if fallback:
+                    found_params.update(fallback)
+            
+            if 'find' in found_params:
+                edits_params.append({
+                    'find': found_params.get('find', ''),
+                    'replace': found_params.get('replace', ''),
+                    'occurrence': int(found_params.get('occurrence', 1))
+                })
 
-        if not edits:
+        if not edits_params:
+            snippet = content[:100] + "..." if len(content) > 100 else content
             return (
                 f"::status error\n"
-                f"Reason: No edit segments found. The content block was empty or contained only whitespace.\n"
-                f"Fix: Provide the replacement content after the anchors. "
-                f"To delete lines, provide a single empty line as content."
+                f"Reason: No find/replace details found in content block.\n"
+                f"Received Content Snippet: [ {snippet} ]\n"
+                f"Fix: Ensure 'find:' and 'replace:' keys are clearly defined. Use | for multi-line blocks.\n"
+                f"Example:\n"
+                f"find: |\n"
+                f"    old code\n"
+                f"replace: |\n"
+                f"    new code"
             )
 
         # ファイルを読み込み
-        with open(full_path, "r", encoding="utf-8") as f:
-            file_lines = [line.rstrip('\n') for line in f.readlines()]
+        try:
+            raw_content = full_path.read_text(encoding='utf-8')
+        except UnicodeDecodeError:
+            raw_content = full_path.read_text(encoding='latin-1')
+            
+        file_lines = [l.rstrip('\n') for l in raw_content.split('\n')]
 
-        # 逆順に適用（下から上）することで行番号のズレを防ぐ
-        # まず全セグメントの位置を解決し、開始行で降順ソートする
+        # すべてのマッチ箇所を特定
         resolved = []
-        for seg_anchors, seg_body in edits:
-            anchor_parts = seg_anchors.strip().split()
-            if len(anchor_parts) != 2:
-                return (
-                    f"::status error\n"
-                    f"Reason: Invalid anchors format: '{seg_anchors}'.\n"
-                    f"Fix: Expected exactly two anchors: 'start_line:hash end_line:hash'.\n"
-                    f"Example: anchors: \"10:abc 15:def\""
-                )
-            start_anchor, end_anchor = anchor_parts
-            try:
-                start_idx, end_idx, _ = HashlineHelper.extract_content_block(
-                    file_lines, start_anchor, end_anchor
-                )
-                resolved.append((start_idx, end_idx, seg_body))
-            except ValueError as e:
-                # ハッシュ不一致や範囲外エラーをLLMへのヒントとして返す
-                return (
-                    f"::status error\n"
-                    f"Reason: {str(e)}\n"
-                    f"Fix: The file content or structure has changed. "
-                    f"Please run 'read_file' again to get updated anchors, then retry the edit with the NEW anchors."
-                )
+        for i, p in enumerate(edits_params):
+            f = p['find']
+            r = p['replace']
+            occ = p['occurrence']
+            
+            match = self._find_context_match(file_lines, f, occ)
+            if match is None:
+                first_line = f.splitlines()[0] if f.strip() else ""
+                candidates = self._find_similar_lines(file_lines, first_line)
+                
+                # 差分フィードバックの生成
+                diff_hint = ""
+                if candidates:
+                    best_cand_idx = candidates[0][0] - 1
+                    cand_lines = file_lines[best_cand_idx : best_cand_idx + len(f.splitlines())]
+                    diff_hint = f"\nDetailed Diff with closest candidate (Line {candidates[0][0]}):\n"
+                    diff_hint += self._generate_match_failure_diff(f.splitlines(), cand_lines)
 
-        # 開始行の降順（ファイル下部 → 上部）でソート
+                cand_str = "\n".join([f"  - line {l}: \"{c}\"" for l, c in candidates])
+                
+                return (
+                    f"::status error\n"
+                    f"Reason: find_not_matched (Edit {i+1})\n"
+                    f"Message: The specified find snippet was not found in {path}.\n"
+                    f"Candidates near the first line of 'find':\n{cand_str}\n"
+                    f"{diff_hint}\n"
+                    f"Hint: Ensure the 'find' block exactly matches the characters in the file, including spaces and punctuation."
+                )
+            resolved.append((match[0], match[1], r))
+
+        # 下から順に適用（インデックスズレ回避）
         resolved.sort(key=lambda x: x[0], reverse=True)
-
-        # 逐次適用
-        results_info = []
-        for start_idx, end_idx, seg_body in resolved:
-            new_lines = seg_body.split('\n')
-            old_count = end_idx - start_idx + 1
-            file_lines[start_idx:end_idx + 1] = new_lines
-            results_info.append((start_idx, start_idx + len(new_lines) - 1, old_count, len(new_lines)))
+        
+        # 逐次適用と結果収集
+        for start_idx, end_idx, r_text in resolved:
+            # 置換後のコードからもハッシュや行番号を除去
+            r_lines = [self._strip_hash_from_content(l) for l in r_text.splitlines()]
+            file_lines[start_idx:end_idx + 1] = r_lines
 
         # 書き込み
-        with open(full_path, "w", encoding="utf-8") as f:
-            f.write('\n'.join(file_lines))
+        final_text = '\n'.join(file_lines)
+        clean_text = self._sanitize_content(final_text)
+        full_path.write_text(clean_text, encoding='utf-8')
 
-        # 結果サマリーと最終コンテキストを生成
-        if len(results_info) == 1:
-            s, e, old, new = results_info[0]
-            context = HashlineHelper.format_context_after_edit(file_lines, s, e, context_lines=5)
-            return (
-                f"Successfully edited {path}.\n"
-                f"Replaced {old} line(s) with {new} line(s).\n"
-                f"--- Updated Context (for reference in next edit) ---\n"
-                f"{context}\n"
-                f"--- End of Context ---"
-            )
+        # デフ表示またはコンテキストを返す
+        summary = f"Successfully edited {path} ({len(resolved)} match(es))."
+        context = HashlineHelper.format_context_after_edit(
+            file_lines, 
+            resolved[-1][0], 
+            resolved[-1][0] + len(resolved[-1][2].split('\n')) - 1, 
+            context_lines=5
+        )
+        
+        return (
+            f"{summary}\n"
+            f"--- Updated Context ---\n"
+            f"{context}\n"
+            f"--- End of Context ---"
+        )
+
+    def _extract_find_replace_fallback(self, text: str) -> dict:
+        """
+        YAMLパースに失敗した場合の正規表現による抽出。
+        ブロックの共通インデントを自動で削除する。
+        1行形式 (find: old_text) にも対応 (v2.2)。
+        """
+        import re as _re
+        res = {}
+        
+        def clean_block(block_text: str) -> str:
+            if not block_text:
+                return ""
+            lines = block_text.splitlines()
+            # 空行を除いた各行のインデントを調べる
+            indents = [len(l) - len(l.lstrip()) for l in lines if l.strip()]
+            if not indents:
+                return block_text.strip()
+            min_indent = min(indents)
+            return "\n".join([l[min_indent:] if l.strip() else "" for l in lines]).rstrip()
+
+        # 1. Multi-line search (find: | または find: > に続くテキスト)
+        find_match = _re.search(r'find:\s*[|>]?\n(.*?)(?:\n\s*\w+:|$)', text, _re.DOTALL)
+        if find_match:
+            res['find'] = clean_block(find_match.group(1))
         else:
-            # 逆順に記録されているので表示用に正順に戻す
-            results_info_asc = sorted(results_info, key=lambda x: x[0])
-            summary_lines = [f"Successfully applied {len(results_info)} edits to {path}."]
-            for i, (s, e, old, new) in enumerate(results_info_asc, 1):
-                summary_lines.append(f"  Edit {i}: lines {s+1}-{e+1} ({old} → {new} line(s))")
-            context = HashlineHelper.format_context_after_edit(
-                file_lines, results_info_asc[0][0], results_info_asc[-1][1], context_lines=3
-            )
-            return (
-                '\n'.join(summary_lines) + "\n"
-                f"--- Updated Context ---\n"
-                f"{context}\n"
-                f"--- End of Context ---"
-            )
+            # 2. Single-line fallback (find: value)
+            find_match_sl = _re.search(r'find:\s*(.*?)(?:\n|$)', text)
+            if find_match_sl:
+                res['find'] = find_match_sl.group(1).strip()
+            
+        # 3. Multi-line replace (replace: | または replace: > に続くテキスト)
+        replace_match = _re.search(r'replace:\s*[|>]?\n(.*?)(?:\n\s*\w+:|$)', text, _re.DOTALL)
+        if replace_match:
+            res['replace'] = clean_block(replace_match.group(1))
+        else:
+            # 4. Single-line fallback (replace: value)
+            replace_match_sl = _re.search(r'replace:\s*(.*?)(?:\n|$)', text)
+            if replace_match_sl:
+                res['replace'] = replace_match_sl.group(1).strip()
+            
+        # occurrence
+        occ_match = _re.search(r'occurrence:\s*(\d+)', text)
+        if occ_match:
+            res['occurrence'] = int(occ_match.group(1))
+            
+        return res if res.get('find') else None
+
+    # Sym-Ops の既知アクション動詞（コード中に現れても除去対象とするもの）
+    _PROTOCOL_VERB_PATTERN = (
+        r'(?:response|edit_file|write_file|read_file|delete_file|delete_lines|'
+        r'edit_lines|replace_in_file|run_command|duck_call|note|finish|'
+        r'investigate|execute_batch|propose_plan|list_directory|find_files|'
+        r'grep_files|generate_code|analyze_structure|submit_hypothesis|'
+        r'finish_investigation|generate_tasks|search_archives|recall|'
+        r'result|status)'
+    )
+
+    def _sanitize_content(self, text: str) -> str:
+        """
+        プロトコル記号が誤ってコード内に漏洩するのを防ぐガード機能(v2.3)。
+
+        v2.2 からの変更:
+        - 以前は r'^\\s*::.*$' で全 :: 行を除去していたため、
+          Ruby の ::SomeClass 等の正規コードも削除してしまっていた。
+        - v2.3 では既知の Sym-Ops アクション動詞または Vitals 形式の
+          行のみを除去対象とし、誤削除を防ぐ。
+        """
+        import re as _re
+        lines = text.splitlines()
+        clean_lines = []
+
+        # 既知のプロトコルアクション行（::verb ...）
+        action_re = _re.compile(
+            rf'^\s*::\s*{self._PROTOCOL_VERB_PATTERN}\b.*$'
+        )
+        # Vitals 行（::c0.9 ::s1.0 形式）
+        vitals_re = _re.compile(
+            r'^\s*(?:::[cmfs][\d.]+\s*)+$'
+        )
+        # ブロック区切り（単独行のみ）
+        block_re = _re.compile(
+            r'^\s*(?:>>>|<<<|%%%+)\s*$'
+        )
+
+        for line in lines:
+            if action_re.match(line) or vitals_re.match(line) or block_re.match(line):
+                # 漏洩したプロトコル記号とみなし、この行をスキップ
+                continue
+            clean_lines.append(line)
+
+        return "\n".join(clean_lines)
+
+    def _strip_hash_from_content(self, line: str) -> str:
+        """
+        コンテンツから行番号/ハッシュの接頭辞を完全に除去。
+        normalizeとは異なり、こちらは書き出しの際にも使われる。
+        """
+        import re as _re
+        return _re.sub(r'^\s*\d+(?::[0-9a-fA-F]+)?\|\s*', '', line)
+
 
     async def list_files(self, path: str = ".") -> List[str]:
         """
@@ -368,9 +588,12 @@ class FileOps:
         # Replace
         new_content = content.replace(search, replace)
         
+        # Sanitize before writing
+        clean_new_content = self._sanitize_content(new_content)
+        
         # Write back
         with open(full_path, "w", encoding="utf-8") as f:
-            f.write(new_content)
+            f.write(clean_new_content)
         
         return f"Replaced {count} occurrence(s) of '{search}' in {path}"
 
@@ -455,8 +678,11 @@ class FileOps:
         # Execute the edit
         lines[start - 1:end] = new_content_lines
         
+        # Sanitize before writing
+        clean_final_content = self._sanitize_content("".join(lines))
+        
         with open(full_path, 'w', encoding='utf-8') as f:
-            f.writelines(lines)
+            f.write(clean_final_content)
         
         # --- 事後検証プレビュー（Post-edit Preview） ---
         post_preview_start = max(1, start - 5)
@@ -645,70 +871,53 @@ class FileOps:
         results.append(f"\n{total_matches} match(es) found.")
         return '\n'.join(results)
 
-    async def delete_lines(self, path: str, content: str) -> str:
+    async def delete_lines(self, path: str, find: str = "", occurrence: int = 1, content: str = "") -> str:
         """
-        Hashline アンカーで指定した行範囲をファイルから削除する。
-
-        edit_file と同じ YAML フロントマター形式で anchors を受け取る。
-        アンカーのハッシュ照合により、ファイルが変更されていないかを検証してから削除する。
+        Context Match (Fuzzy) based line deletion.
+        指定したスニペットにマッチする行範囲をファイルから削除する。
 
         Sym-Ops format:
         ::delete_lines @path/to/file.py
         <<<
-        ---
-        anchors: "42:a3f 45:f10"
-        ---
+        find: |
+            def legacy_function():
+                pass
         >>>
 
         Args:
-            path: 対象ファイルのパス（ワークスペースルートからの相対パス）
-            content: YAML フロントマターで anchors を指定するコンテンツブロック。
-                     anchors には read_file で取得した "start_line:hash end_line:hash" 形式を指定する。
-                     例: "---\\nanchors: \\"42:a3f 45:f10\\"\\n---"
+            path: 対象ファイルのパス
+            find: 削除対象のコードスニペット
+            occurrence: 同一スニペットが複数ある場合の指定
+            content: YAMLブロックが含まれるコンテンツ
 
         Returns:
-            成功時: "Successfully deleted N lines from {path}\n\n--- Updated Context ---\n..."
-            失敗時: "::status error\nReason: ..."
+            成功時メッセージまたはエラーメッセージ
         """
         import re as _re
 
         full_path = self._get_full_path(path)
         if not full_path.exists():
-            return (
-                f"::status error\n"
-                f"Reason: File not found: {path}"
-            )
+            return f"::status error\nReason: File not found: {path}"
 
-        # YAML フロントマターから anchors を抽出
-        anchors = ''
-        fm_match = _re.match(r'^---\n(.*?)\n---', content.strip(), _re.DOTALL)
-        if fm_match:
-            import yaml as _yaml
+        # 引数またはコンテンツ内から find を取得
+        f_text = find
+        occ = occurrence
+        
+        if not f_text:
             try:
-                fm = _yaml.safe_load(fm_match.group(1))
-                anchors = str(fm.get('anchors', '')).strip()
+                p = yaml.safe_load(content)
+                if isinstance(p, dict):
+                    f_text = p.get('find', '')
+                    occ = int(p.get('occurrence', 1))
             except Exception:
                 pass
 
-        if not anchors:
+        if not f_text:
             return (
                 f"::status error\n"
-                f"Reason: No anchors found. Use YAML front matter inside the content block.\n"
-                f"Example:\n"
-                f"---\n"
-                f"anchors: \"42:a3f 45:f10\"\n"
-                f"---"
+                f"Reason: No 'find' snippet specified for deletion.\n"
+                f"Fix: Use 'find:' key in content block."
             )
-
-        # アンカー解析
-        parts = anchors.strip().split()
-        if len(parts) != 2:
-            return (
-                f"::status error\n"
-                f"Reason: anchors must be 'start_anchor end_anchor' (e.g., '42:a3f 45:f10'). "
-                f"Got: {repr(anchors)}"
-            )
-        start_anchor, end_anchor = parts
 
         # ファイル読み込み
         try:
@@ -716,25 +925,31 @@ class FileOps:
         except UnicodeDecodeError:
             raw_content = full_path.read_text(encoding='latin-1')
 
-        file_lines = raw_content.split('\n')
+        file_lines = [l.rstrip('\n') for l in raw_content.split('\n')]
 
-        # アンカー検証と範囲特定
-        try:
-            start_idx, end_idx, _ = HashlineHelper.extract_content_block(
-                file_lines, start_anchor, end_anchor
+        # マッチング
+        match = self._find_context_match(file_lines, f_text, occ)
+        if match is None:
+            first_line = f_text.splitlines()[0] if f_text.strip() else ""
+            candidates = self._find_similar_lines(file_lines, first_line)
+            cand_str = "\n".join([f"  - line {l}: \"{c}\"" for l, c in candidates])
+            return (
+                f"::status error\n"
+                f"Reason: find_not_matched\n"
+                f"Candidates:\n{cand_str}"
             )
-        except ValueError as e:
-            return f"::status error\nReason: {e}"
 
-        # 行削除
+        start_idx, end_idx = match
         deleted_count = end_idx - start_idx + 1
+        
         del file_lines[start_idx:end_idx + 1]
 
-        # ファイル書き込み
-        full_path.write_text('\n'.join(file_lines), encoding='utf-8')
+        # 書き込み
+        final_text = '\n'.join(file_lines)
+        clean_text = self._sanitize_content(final_text)
+        full_path.write_text(clean_text, encoding='utf-8')
 
-        # 編集後コンテキストを返す（削除位置の前後）
-        # 削除後は start_idx が次の行を指すため end_idx は start_idx - 1 とみなす
+        # コンテキスト
         context = HashlineHelper.format_context_after_edit(
             file_lines,
             edit_start_idx=start_idx,
@@ -744,10 +959,11 @@ class FileOps:
 
         return (
             f"Successfully deleted {deleted_count} line(s) from {path}\n\n"
-            f"--- Updated Context (for reference in next edit) ---\n"
+            f"--- Updated Context ---\n"
             f"{context}\n"
             f"--- End of Context ---"
         )
+
 
     async def delete_file(self, path: str) -> str:
         """

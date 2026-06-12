@@ -15,24 +15,25 @@ BASE_EXAMPLES = [
 TASK_EXAMPLES = [
     {"role": "user", "content": "Add a docstring to main in hello.py"},
     {"role": "assistant", "content": """\
->> Need hash-lines first to perform a safe edit.
+>> Reading hello.py to see the current main() definition.
 ::c0.9 ::s1.0 ::m0.1 ::f0.9
 ::read_file @hello.py"""},
     {"role": "assistant", "content": """\
 ::result ok
-1:a1b| def main():
-2:c2d|     print('Hi')"""},
+1| def main():
+2|     print('Hi')"""},
     {"role": "assistant", "content": """\
->> Hash confirmed. Inserting docstring.
->> [CHECK] @path=hello.py, anchors="1:a1b 1:a1b" match exactly.
+>> Found main(). Adding docstring.
 ::c1.0 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @hello.py
 <<<
----
-anchors: "1:a1b 1:a1b"
----
-def main():
-    \"\"\"Entry point.\"\"\"
+find: |
+    def main():
+        print('Hi')
+replace: |
+    def main():
+        \"\"\"Entry point.\"\"\"
+        print('Hi')
 >>>"""}
 ]
 
@@ -40,24 +41,76 @@ def main():
 CORRECTION_EXAMPLES = [
     {"role": "user", "content": "Update the print message in hello.py"},
     {"role": "assistant", "content": """\
->> Re-reading file to get fresh hashes.
+>> Reading file content.
 ::c0.9 ::s1.0 ::m0.1 ::f0.9
 ::read_file @hello.py"""},
     {"role": "assistant", "content": """\
 ::result ok
-1:a1b| def main():
-2:c2d|     print('Old Message')"""},
+1| def main():
+2|     print('Old Message')"""},
     {"role": "assistant", "content": """\
->> [CHECK] Wait, I almost used '2:c2x' but the last read said '2:c2d'.
->> Fixing anchor to 2:c2d and applying edit.
+>> Replacing the old print message.
 ::c1.0 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @hello.py
 <<<
----
-anchors: "2:c2d 2:c2d"
----
+find: |
+    print('Old Message')
+replace: |
     print('New Message')
 >>>"""}
+]
+
+# Recovery Examples: edit_file 失敗 or 意図しない結果 → write_file で全書き直し
+RECOVERY_EXAMPLES = [
+    {"role": "user", "content": "fix_func の引数名を items から values に変える"},
+    {"role": "assistant", "content": """\
+>> Reading file to get exact content before editing.
+::c0.9 ::s1.0 ::m0.1 ::f0.9
+::read_file @utils.py"""},
+    {"role": "user", "content": """\
+::result ok
+1| def fix_func(items: list) -> list:
+2|     return [x * 2 for x in items]"""},
+    {"role": "assistant", "content": """\
+>> Renaming parameter items -> values.
+::c1.0 ::s1.0 ::m0.2 ::f1.0
+::edit_file @utils.py
+<<<
+find: |
+    def fix_func(items: list) -> list:
+        return [x * 2 for x in items]
+replace: |
+    def fix_func(values: list) -> list:
+        return [x * 2 for x in values]
+>>>"""},
+    {"role": "user", "content": """\
+::result error
+Reason: find_not_matched (Edit 1)
+Candidates near the first line of 'find':
+  - line 1: "def fix_func(items: list) -> list:"
+Detailed Diff with closest candidate (Line 1):
+- def fix_func(items: list) -> list:
++ def fix_func(items: list) -> list:"""},
+    {"role": "assistant", "content": """\
+>> find_not_matched. Re-reading file to check exact content.
+::c0.7 ::s1.0 ::m0.2 ::f0.9
+::read_file @utils.py"""},
+    {"role": "user", "content": """\
+::result ok
+1| def fix_func(items : list) -> list:
+2|     return [x * 2 for x in items]"""},
+    {"role": "assistant", "content": """\
+>> Extra space before colon. Adjusting find block to match exact content.
+::c0.95 ::s1.0 ::m0.2 ::f1.0
+::edit_file @utils.py
+<<<
+find: |
+    def fix_func(items : list) -> list:
+        return [x * 2 for x in items]
+replace: |
+    def fix_func(values: list) -> list:
+        return [x * 2 for x in values]
+>>>"""},
 ]
 
 # Planning Specific Examples
@@ -128,6 +181,8 @@ def get_examples_for_mode(mode: str) -> list:
     examples = BASE_EXAMPLES.copy()
     if mode == "task" or mode == "task_execution":
         examples.extend(TASK_EXAMPLES)
+        # edit_file 失敗時のリカバリーパターンを常に含める
+        examples.extend(RECOVERY_EXAMPLES)
     elif mode == "planning":
         examples.extend(PLANNING_EXAMPLES)
     elif mode == "investigation":
@@ -135,5 +190,6 @@ def get_examples_for_mode(mode: str) -> list:
     else:
         # Mix for generic modes
         examples.extend(TASK_EXAMPLES[:2])
+        examples.extend(RECOVERY_EXAMPLES)
         examples.extend(PLANNING_EXAMPLES[:1])
     return examples

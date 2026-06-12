@@ -85,10 +85,9 @@ def calc(data: str) -> str:
 
 ## 5. Critical Rules (CRITICAL)
 1. **Self-Verification Checklist**: Before every `::action`, you MUST include a `>> [CHECK]` line in your thoughts to verify:
-   - `@path`: Is the path correct and absolute or relative to project root?
-   - `anchors`: For `edit_file`, do they match the last `read_file` output EXACTLY (line number and hash)?
-   - `syntax`: Are you using `<<<` and `>>>` correctly? No Markdown code fences (```) inside blocks.
-   - `completeness`: No `...` or `TODO` left in the generated code.
+    - `context match`: For `edit_file`, check if the `find` snippet exactly matches the `read_file` output.
+    - `syntax`: Are you using `<<<` and `>>>` correctly? No Markdown code fences (```) inside blocks.
+    - `completeness`: No `...` or `TODO` left in the generated code.
 
 2. **Block Syntax**: Content inside `<<< >>>` blocks is always raw text/code. Markdown formatting (including code fences) is NOT used.
 3. **Symbol Syntax Only**: All actions use Sym-Ops v3.2 symbol syntax exclusively (`::action @path`).

@@ -9,6 +9,10 @@ llm:
     provider: openai
     model: gpt-4o-mini
     description: 軽量版GPT-4o。高速で低コスト
+  - name: google/gemini-2.5-flash
+    provider: openrouter
+    model: google/gemini-2.5-flash
+    description: ''
   - name: anthropic/claude-sonnet-4.5
     provider: openrouter
     model: anthropic/claude-sonnet-4.5
@@ -42,7 +46,7 @@ llm:
     model: google/gemini-2.5-pro
     description: ''
   openrouter:
-    model: google/gemini-3-flash-preview
+    model: stepfun/step-3.5-flash:free
   openai:
     model: gpt-4o-mini
   groq:

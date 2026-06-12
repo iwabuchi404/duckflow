@@ -346,26 +346,63 @@ class FuzzyParser:
             return {}, content
 
     def _extract_line_params(self, raw_path: str) -> tuple[str, dict]:
-        """Enhanced parameter extraction supporting quoted values and mixed content."""
+        """
+        Enhanced parameter extraction supporting quoted values and mixed content.
+        Uses a greedy approach to capture the last parameter's full content even without quotes.
+        """
         if not raw_path:
             return "", {}
         
         params = {}
-        # Improved regex: key=value or key="quoted value" or key='quoted value'
-        param_pattern = r'(\w+)=((?:"[^"]*")|(?:\'[^\']*\')|(?:[^\s]*))'
+        # Identify all potential "key=" start positions
+        # Pattern: space followed by word followed by =
+        # Special case: first parameter might not have a leading space if it follows @ immediately
+        # (though @ logic usually strips leading/trailing space)
         
-        # Find all parameters
-        matches = list(re.finditer(param_pattern, raw_path))
+        raw_path = raw_path.strip()
+        
+        # Regex to find all key=val occurrences. 
+        # We look for key= and then match values carefully.
+        # This regex handles: key="quoted val", key='quoted val', key=unquoted_val
+        # The key must be at the start or preceded by a space.
+        param_regex = r'(?:^|\s)(\w+)=((?:"[^"]*")|(?:\'[^\']*\')|(?:\S+))'
+        
+        matches = list(re.finditer(param_regex, raw_path))
         if not matches:
             return raw_path.strip(), {}
 
-        # Reconstruct path (everything before the first param)
-        first_match_start = matches[0].start()
-        clean_path = raw_path[:first_match_start].strip()
+        # Path is everything before the first parameter match
+        first_match = matches[0]
+        # Calculate where the first key= starts (excluding the potential leading space in regex)
+        first_key_start = first_match.start()
+        if raw_path[first_key_start].isspace():
+            first_key_start += 1
+            
+        clean_path = raw_path[:first_key_start].strip()
 
-        for match in matches:
+        # Iterate and extract. To handle the "greedy last parameter" issue:
+        # Each parameter value goes from '=' to the start of the NEXT parameter.
+        for i, match in enumerate(matches):
             key = match.group(1)
-            value = match.group(2).strip('\"\'')
+            
+            # Start position of value is after '='
+            # match.group(0) is the whole " key=val"
+            # match.start(2) is the exact start of the value part
+            val_start = match.start(2)
+            
+            if i < len(matches) - 1:
+                # Value ends before the next key starts
+                val_end = matches[i+1].start()
+                # If there's a space before next key, strip it
+                value = raw_path[val_start:val_end].strip()
+            else:
+                # Last parameter takes everything until end of string
+                value = raw_path[val_start:].strip()
+                
+            # Strip outer quotes if present
+            if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+                
             params[key] = value
         
         return clean_path, params
