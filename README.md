@@ -1,7 +1,7 @@
 # Duckflow
 
-**バージョン**: v0.1.0 (Phase 1.5+)  
-**ステータス**: Phase 1.5（基本ファイル操作）完了 100%
+**バージョン**: v0.3.0 (Phase 1.6)  
+**ステータス**: Phase 1.6（コード実行機能）進行中・全体進捗 約85%
 
 Duckflowは、開発者のローカル環境で動作する対話型AIコーディングエージェントです。AIとの対話を通じて、ファイルの作成・編集・実行を支援します。
 
@@ -28,7 +28,7 @@ git clone <repository-url>
 cd duckflow
 
 # 依存関係をインストール（uv使用）
-uv install
+uv sync
 
 # または pip使用
 pip install -e .
@@ -66,10 +66,10 @@ OPENROUTER_API_KEY=your_api_key_here
 
 ```bash
 # uv使用
-uv run python main.py
+uv run python -X utf8 main.py
 
 # または直接実行
-python main.py
+python -X utf8 main.py
 ```
 
 ## 📋 基本的な使い方
@@ -116,11 +116,9 @@ duckflow/
 │   ├── base/                 # LLMクライアント抽象化
 │   ├── state/                # AgentState (Single Source of Truth)
 │   ├── tools/                # ツール群 (File, Plan, Task, etc.)
-│   ├── orchestration/        # 実行制御
+│   ├── execution/            # 実行制御
 │   ├── modules/              # 記憶管理, Pacemaker
 │   └── ui/                   # Rich UI実装
-├── codecrafter/              # 以前のコードベース（参考用）
-├── config/                   # 設定テンプレート（レガシー）
 ├── duckflow.yaml             # メイン設定ファイル
 ├── .env                      # APIキー（git exclude）
 ├── main.py                   # エントリーポイント
@@ -172,11 +170,10 @@ uv add --dev pytest
 
 **2. LLM APIキーエラー**
 - `.env`ファイルにAPIキーが正しく設定されているか確認
-- 使用するプロバイダーが`config.yaml`で正しく指定されているか確認
+- 使用するプロバイダーが`duckflow.yaml`で正しく指定されているか確認
 
 **3. ファイル書き込み権限エラー**
-- セキュリティ設定で承認が必要になっている可能性があります
-- `config/config.yaml`の`security.require_approval.file_write`を確認
+- ファイルの上書き・削除・コマンド実行はエージェント内蔵の承認機能により、実行前に必ず確認ダイアログが表示されます
 
 ### デバッグモード
 
@@ -233,8 +230,8 @@ uv add --dev pytest pytest-cov black ruff mypy
 uv run pytest tests/ -v
 
 # コードフォーマット
-uv run black codecrafter/
-uv run ruff check codecrafter/
+uv run black companion/
+uv run ruff check companion/
 ```
 
 ### 貢献ガイドライン

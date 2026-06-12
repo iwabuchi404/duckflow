@@ -23,7 +23,14 @@ from companion.modules.command_handler import CommandHandler
 from companion.modules.session_manager import SessionManager
 from companion.tools.shell_tool import ShellTool
 from companion.tools import get_project_tree
-from companion.tools.results import ToolStatus, ToolResult, format_symops_response, serialize_to_text
+from companion.tools.results import (
+    ToolStatus,
+    ToolResult,
+    format_symops_response,
+    serialize_to_text,
+    wrap_tool_result,
+    is_tool_result_message,
+)
 from companion.tools.sub_llm_tools import SubLLMTools
 from companion.modules.sub_llm_manager import SubLLMManager
 
@@ -356,8 +363,14 @@ class DuckAgent:
                 for msg in history_to_show:
                     role = msg.get("role", "unknown")
                     content = msg.get("content", "")
-                    if role in ["user", "assistant"]:
-                        ui.print_conversation_message(content, speaker=role)
+                    if role not in ["user", "assistant"]:
+                        continue
+                    # ツール結果やシステム通知は実際の会話ではないため表示しない
+                    if is_tool_result_message(content) or content.startswith(
+                        ("[System", "[SYSTEM", "[Error]", "[User denied")
+                    ):
+                        continue
+                    ui.print_conversation_message(content, speaker=role)
                 ui.print_separator()
         
         while self.running:
@@ -757,7 +770,9 @@ class DuckAgent:
                                 target=action.parameters.get("path", action.parameters.get("command", "task")),
                                 content=result
                             )
-                            formatted_res = format_symops_response(tool_res)
+                            # ツール結果はエンベロープで包み、ユーザー発言と区別できる形で
+                            # 履歴に注入する（中身はデータであり指示ではない）
+                            formatted_res = wrap_tool_result(format_symops_response(tool_res))
 
                             # If this action required approval, add explicit completion message
                             if was_approved:
@@ -815,7 +830,7 @@ class DuckAgent:
                             target=action.parameters.get("path", action.parameters.get("command", "task")),
                             content=e
                         )
-                        self.state.add_message("user", format_symops_response(err_res))
+                        self.state.add_message("user", wrap_tool_result(format_symops_response(err_res)))
 
                         results.append(error_msg)
 

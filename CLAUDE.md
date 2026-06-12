@@ -1,202 +1,184 @@
+# Duckflow プロジェクト指示書
 
-# プロジェクトDuckflow 設計ドキュメント
+**バージョン:** 2.0（2026-06-13 全面改訂）
+**現在地:** Phase 1.6（コード実行機能）進行中・全体進捗 約85%
 
-**バージョン:** 1.2
-**ステータス:** ステップ1（最小限実装）がほぼ完了。ステップ2への移行準備段階。
+このドキュメントは Duckflow 開発の「憲法」です。AIとしてこのプロジェクトに貢献する際は、必ずここに書かれた実態とルールに従ってください。
 
-## 1. プロジェクトのビジョンと目的
+> **重要な経緯:** 本プロジェクトは旧 `codecrafter` パッケージから `companion` パッケージ（v4アーキテクチャ）へ移行済みです。初期計画にあった LangGraph への移行は**撤回**され、「グラフ構造を排した明示的な制御ループ」が現在の設計方針です。古い資料（docs/old/ 等）の記述よりこのドキュメントと実コードを優先してください。
 
-Duckflowは、開発者のローカル環境で動作する、対話型のAIコーディングエージェントです。その主な目的は、ソフトウェア開発者にとっての知的なパートナーとして、コードの生成、リファクタリング、プロジェクト管理を直接支援することです。
+## 1. プロジェクトのビジョン
 
-**このプロジェクトが解決したいこと:**
-既存のツールが持つ「Tool Use（ツールの利用）の精度の低さ」や「文脈理解の甘さ」といった課題を、以下の3つの柱に重点を置くことで克服します。
-1.  **効率的な文脈管理:** LLMを呼び出すたびに、関連性の高い情報を最小限の形で賢く組み立てる。
-2.  **柔軟な実行制御:** グラフベースの制御フローを用いて、複雑なタスクやエラーからの自己修正を可能にする。
-3.  **開発者中心の体験:** ターミナル上で、キーボード中心のシームレスな操作感を提供する。
+Duckflowは、開発者のローカル環境で動作する対話型AIコーディングエージェントです。単なるツールではなく、開発を共にする「相棒（Companion）」を目指します。
+
+**3つの柱:**
+1. **効率的な文脈管理:** LLM呼び出しごとに、関連性の高い情報を最小限の形で賢く組み立てる
+2. **予測可能な実行制御:** 隠蔽されたグラフではなく、明示的な Think-Decide-Execute ループで制御する
+3. **開発者中心の体験:** ターミナル上でキーボード中心のシームレスな操作感を提供する
+
+**設計思想:** 「LLMは間違える」前提で、ガードレールを幾重にも張る（未知ツールフィルタ、承認、Hashlineアンカー、Correction Guide、Pacemaker介入、fail-fast）。
 
 ## 2. 開発の基本方針（AIへの指示）
 
-このプロジェクトは、開発するエージェント（Duckflow）自身を開発プロセスに活用することを推奨します。AIとしてこのプロジェクトの開発に貢献する際は、以下の原則に**必ず**従ってください。
+1. **役割分担が明確なモジュール構成:**
+   - 機能ごと（ツール群、UI、状態管理など）にファイルを明確に分ける。複数の役割を一つのファイルに混ぜない。
+   - 指示は「`companion/tools/file_ops.py` に新しいツールを追加して」のような具体的な形で行われる。
 
-1.  **役割分担が明確なモジュール構成:**
-    *   機能ごと（例: ツール群、UI、状態管理）に、ファイルを明確に分けてください。
-    *   新しい機能を追加する際は、既存の適切なファイルに追加するか、新しいファイルを作成してください。複数の役割を一つのファイルに混ぜないでください。
-    *   あなたへの指示は、「`codecrafter/tools/file_tools.py`に新しいツールを追加してください」のような具体的な形で行われます。
+2. **Docstringと型ヒント（交渉の余地なし）:**
+   - すべての関数・メソッド・クラスに、目的・引数（`Args:`）・戻り値（`Returns:`）を説明するDocstringを必ず記述する。
+   - すべての引数と戻り値に正確な型ヒントを必ず付ける。
 
-2.  **丁寧な説明書（Docstring）と型ヒント:**
-    *   **すべての**関数、メソッド、クラスには、その目的、引数(`Args:`)、戻り値(`Returns:`)を説明する、分かりやすいDocstringを**必ず**記述してください。
-    *   **すべての**引数と戻り値には、正確な型ヒントを**必ず**付けてください。
-    *   これは交渉の余地がありません。あなた自身がコードベースを理解するための最も重要な情報源です。
+3. **テストを重視する文化:**
+   - 新しいツールや重要機能には `tests/` に対応するテストを書く。
+   - コード変更タスクの完了前に `uv run pytest tests/ -v` を実行し、リグレッションがないか確認する。
 
-3.  **テストを重視する文化:**
-    *   新しいツールや重要な機能を追加した際には、`tests/`ディレクトリに対応するテストを記述してください。
-    *   コードを変更するタスクを完了する前には、`run_tests`ツールを実行し、既存の機能を壊していないか（リグレッション）を確認してください。
-    *   テストカバレッジを維持、向上させることが目標です。
+4. **設定はコードの外に:**
+   - モデル名・プロンプトテンプレート等の設定値をコードに直書きしない。`duckflow.yaml`（設定）と `.env`（APIキー）で管理する。
 
-4.  **設定はコードの外に:**
-    *   プロンプトのテンプレートやモデル名といった設定値を、コード内に直接書き込まないでください。
-    *   これらは`config.yaml`のような設定ファイルで管理し、コードからはその設定を読み込むようにしてください。
+5. **Pythonの実行は必ず UV + `-X utf8`:**
+   - 例: `uv run python -X utf8 main.py`（Windows環境の文字化け防止のため必須）
 
-## 3. アーキテクチャと技術スタック
+6. **進捗の記録:** タスク完了時は `PROGRESS.md` の更新履歴に追記する（日付は絶対表記）。
 
-### ステップ1（現在）: 最小限実装
-シンプルな`while`ループベースの構成で基本機能を実装。
+## 3. アーキテクチャ（Duckflow v4）
 
-*   **UI:** `Rich` を利用したターミナルUI
-*   **ベース:** 直接LLM APIクライアントの抽象化
-*   **ツール:** Python関数によるファイル操作ツール群
-*   **プロンプト:** 文字列テンプレートによるシステムプロンプト
-*   **状態管理:** `Pydantic`モデルで定義されたエージェントの記憶
-*   **オーケストレーション:** シンプルなメインループ
-*   **品質保証:** 人間による承認機能
+### Think-Decide-Execute ループ
+中心は `companion/core.py` の `DuckAgent`。
 
-### ステップ2（計画）: MVP実装
-システムは7つの部品から構成され、これらは`LangGraph`によって制御（オーケストレーション）される予定。
+1. **Think & Decide:** `PromptBuilder` が AgentState からプロンプトを構築（プロンプトキャッシュ最適化のため「静的プロトコル → モード別ツール説明 → Few-shot例 → 動的状態」の順に階層化）。LLMが `ActionList`（reasoning + actions + vitals）を返す。
+2. **Execute:** `execute_actions()` がアクションを順次実行。`response`・`exit`・`duck_call` でユーザーに制御を返し、それ以外は自律ループを継続。
+3. ターン完了ごとに `SessionManager` がセッションを自動保存。
 
-*   **UI:** `Textual` を利用したターミナルUI
-*   **ベース:** `LangChain` を利用したLLMクライアントの抽象化
-*   **ツール:** `@tool`デコレータを付けたPython関数の集まり
-*   **プロンプト:** 状態（State）から動的に組み立てられるプロンプト
-*   **状態管理:** `Pydantic`モデルで定義されたエージェントの記憶
-*   **オーケストレーション:** `LangGraph` によるメインの実行ループ
-*   **品質保証:** 人間による承認と、自動化されたテスト
+### Sym-Ops プロトコル（v3.2）
+LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテンツブロック、YAMLフロントマター引数、`::c/s/m/f` バイタル表記からなる。`companion/utils/sym_ops.py` の `SymOpsProcessor` が「前処理 → AutoRepair（典型ミスの自動修復）→ パース」のパイプラインで処理する。
 
-### 技術スタック（現在）
-*   **言語:** Python 3.10以降 UVの使用、起動オプションに必ず-X utf8をつける
-*   **UI:** Rich（現在）, Textual（計画）
-*   **LLMプロバイダー:** OpenAI, Anthropic, Google, Groq, OpenRouter対応
-*   **状態・設定管理:** Pydantic, PyYAML, python-dotenv
+### 3モード制
+`AgentMode`（planning / investigation / task）ごとに公開ツールが異なる（`core.py` の `MODE_TOOL_MAPPING`）。**Investigation モードは read-only 強制**で、ファイル編集系アクションはブロックされる。仮説2回失敗で duck_call（ユーザー相談）を強制。
 
-### 開発時注意
-*   **Pythonの実行:** 必ずUVを使う、文字化けを防ぐため-X utf8オプションをつける
+### ファイル編集方式（find/replace コンテキストマッチ）
+`edit_file` は `find:`（既存コードの断片）と `replace:` を指定するコンテキストマッチ方式（`companion/tools/file_ops.py`）。マッチ失敗時は近似行の候補と差分ヒントを返してLLMの自己修正を促す。`companion/tools/hashline.py` の Hashline 形式（`行番号:ハッシュ|内容`）は read_file の表示補助として残っているが、編集のアンカーとしては現在使われていない（`tests/test_hashline.py` の失敗はこの移行にテストが追従していないため）。
 
+### 多層防御（execute_actions 内）
+- 未知ツールのフィルタ＋近似候補の提示（difflib）
+- 1ターンあたりアクション数上限（6件）
+- safety スコア < 0.5 で実行前にユーザー確認
+- ファイルの上書き・編集・削除、コマンド実行は**人間の承認必須**
+- 連続2回エラーで残りアクションを中断（fail-fast）
+- エラーは `SyntaxErrorInfo` として記録され、次ターンのプロンプトに「Correction Guide」（修正例つき）として1ターン限り注入される
 
-## 4. ディレクトリ構成（現在）
+### Vitals & Pacemaker
+- **Vitals:** confidence / safety / memory / focus（LLMの自己申告＋システム側のdecay/回復）
+- **Pacemaker**（`companion/modules/pacemaker.py`）: max_loops をタスク量とバイタルから動的計算（3〜35）。異常検知時は、LLM自身に「何が起きたか・選択肢」を説明させるハイブリッド介入を行う。
+
+### メモリ管理
+`MemoryManager`（`companion/modules/memory.py`）がモデルのコンテキスト長から履歴予算を動的設定（約60%を履歴に、8K〜200Kでクランプ）。使用率80%超で重要度スコアリングによる pruning を行い、削除分は ArchiveStorage に保存（`search_archives` / `recall` ツールで検索可能）。
+
+### LLMクライアント
+`companion/base/llm_client.py`。OpenAI SDK互換APIで openai / anthropic / google / groq / openrouter を統一的に扱う。コンテキスト長はAPI取得失敗時にフォールバックテーブルを参照。`/model` コマンドによる切替は `duckflow.yaml` に永続化される。
+
+## 4. ディレクトリ構成（実態）
 
 ```
-.
-├── codecrafter/             # メインパッケージ
-│   ├── __init__.py
-│   ├── main.py              # ✅ メインアプリケーション
-│   ├── base/
-│   │   ├── __init__.py
-│   │   ├── config.py        # ✅ 設定管理
-│   │   └── llm_client.py    # ✅ LLMクライアント抽象化
-│   ├── state/
-│   │   ├── __init__.py
-│   │   └── agent_state.py   # ✅ AgentStateのPydanticモデル
-│   ├── tools/
-│   │   ├── __init__.py
-│   │   └── file_tools.py    # ✅ ファイル操作ツール群
-│   ├── ui/
-│   │   ├── __init__.py
-│   │   └── rich_ui.py       # ✅ Richベースの UI
-│   ├── prompts/             # ✅ 構造のみ（未実装）
-│   │   └── __init__.py
-│   └── security/            # ✅ 構造のみ（未実装）
-│       └── __init__.py
-├── tests/                   # ❌ 未実装
-│   └── __init__.py
-├── config/
-│   └── config.yaml          # ✅ 設定ファイル
-├── main.py                  # ✅ エントリーポイント
-├── pyproject.toml          # ✅ プロジェクト設定
-├── requirements.txt        # ✅ 依存関係
-├── PROGRESS.md             # ✅ 進捗記録
-└── CLAUDE.md              # ✅ このドキュメント
+duckflow/
+├── companion/                 # メインパッケージ（v4）
+│   ├── core.py                # DuckAgent: メインループとアクション実行（※肥大化中、分割予定）
+│   ├── base/                  # LLMクライアント、レスポンス前処理
+│   ├── state/                 # AgentState ほか Pydantic モデル（Single Source of Truth）
+│   ├── prompts/               # PromptBuilder, システムプロンプト, Few-shot例
+│   ├── tools/                 # ファイル操作, hashline, 計画, シェル, Sub-LLM ほか
+│   │   └── archive/           # 旧実装の退避場所（参照のみ・変更禁止）
+│   ├── execution/             # TaskExecutor, ResultSummarizer
+│   ├── modules/               # Pacemaker, MemoryManager, SessionManager, コマンド処理
+│   ├── memory/                # 会話メモリ
+│   ├── ui/                    # Rich ベースの UI（console.py, setup_wizard.py 等）
+│   ├── utils/                 # Sym-Ops パーサー, 前処理
+│   ├── config/                # 設定ローダー/ライター
+│   ├── security/              # ファイル保護
+│   ├── validators/            # LLM出力検証
+│   └── output/ / logging/ / task_management/
+├── tests/                     # pytest テスト（hashline, response_format, frontmatter 等）
+├── docs/                      # 設計ドキュメント群（old/ は陳腐化注意）
+├── duckflow.yaml              # メイン設定ファイル
+├── .env                       # APIキー（git管理外、.env.template 参照）
+├── main.py                    # エントリーポイント
+├── dump_prompt.py             # プロンプトインスペクター（デバッグ用）
+├── PROGRESS.md                # 開発進捗記録
+└── CLAUDE.md                  # このドキュメント
 ```
 
-## 5. AgentStateオブジェクト：エージェントの記憶（実装済み）
+※ 旧 `codecrafter/` ディレクトリおよびルートの `config/` ディレクトリは**既に存在しない**。`pyproject.toml` のプロジェクト名が `codecrafter` のままなのは既知の課題（§8）。
 
-これは、エージェントの「記憶」を表現する中心的なデータです。現在はシンプルなループで使用され、将来的にLangGraphの各処理（ノード）で使用される予定です。
+## 5. エージェントのツール一覧（登録済みアクション）
 
-```python
-from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Any
-from datetime import datetime
+| カテゴリ | ツール | 備考 |
+|---|---|---|
+| 共通 | `note`, `response`, `exit`, `duck_call`, `search_archives`/`recall`, `get_project_tree` | 全モードで使用可 |
+| ファイル読取 | `read_file`, `list_directory`, `find_files`, `grep_files` | read_file は行番号付きで返す |
+| ファイル編集 | `write_file`, `edit_file`, `delete_lines`, `delete_file` | 承認必須。task モードのみ |
+| 計画 | `propose_plan`, `generate_tasks`, `mark_step_complete`, `mark_task_complete`, `execute_tasks` | Plan → Step → Task の階層管理 |
+| 実行 | `run_command`（承認必須）, `execute_batch` | execute_batch はパーサーが展開 |
+| 調査 | `investigate`, `submit_hypothesis`, `finish_investigation` | OODAループ、read-only |
+| Sub-LLM | `analyze_structure`, `generate_code` | 補助LLMへの委譲 |
 
-class ConversationMessage(BaseModel):
-    """対話メッセージを表現するクラス"""
-    role: str = Field(description="メッセージの役割 (user, assistant, system)")
-    content: str = Field(description="メッセージの内容")
-    timestamp: datetime = Field(default_factory=datetime.now)
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+## 6. 実行・開発コマンド
 
-class AgentState(BaseModel):
-    """エージェントの全体状態を管理するメインクラス"""
-    # 対話履歴
-    conversation_history: List[ConversationMessage] = Field(default_factory=list)
-    
-    # 現在のタスク
-    current_task: Optional[str] = Field(default=None)
-    task_steps: List[TaskStep] = Field(default_factory=list)
-    
-    # エージェントのメタデータ
-    session_id: str = Field(description="セッションID")
-    created_at: datetime = Field(default_factory=datetime.now)
-    last_activity: datetime = Field(default_factory=datetime.now)
-    
-    # 設定とフラグ
-    debug_mode: bool = Field(default=False)
-    auto_approve: bool = Field(default=False)
+```bash
+# 起動（前回セッションの継続を選択可能）
+uv run python -X utf8 main.py
+#   --no-session      セッション保存・復元を無効化
+#   --dir <path>      ワークスペースを指定
+#   --debug-context console|file   LLMに送るコンテキストをダンプ
+#   --setup           セットアップウィザードを起動
+
+# テスト
+uv run pytest tests/ -v
+
+# プロンプトインスペクター（モード別のシステムプロンプトを確認）
+uv run python -X utf8 dump_prompt.py task    # task モードのみ
+uv run python -X utf8 dump_prompt.py all     # 全モード
+
+# フォーマット / Lint
+uv run black companion/
+uv run ruff check companion/
 ```
 
-## 6. 主要なツール群
+**アプリ内コマンド:** `/help` `/status` `/config` `/model`（モデル切替） `/scan`（プロジェクトツリー） `/clear` `/log` `/exit`
 
-### 実装済み（ステップ1）
-*   **`list_files(path: str = ".") -> List[Dict]`**: 指定された場所のファイルやディレクトリを一覧表示する。
-*   **`read_file(path: str) -> str`**: 指定されたファイルの内容を読み込む。
-*   **`write_file(path: str, content: str) -> Dict`**: 指定されたファイルに内容を書き込む。**人間の承認が必須**。バックアップ機能付き。
-*   **`get_file_info(path: str) -> Dict`**: ファイル/ディレクトリの詳細情報を取得する。
-*   **`create_directory(path: str) -> Dict`**: ディレクトリを作成する。**人間の承認が必須**。
+## 7. 設定
 
-### AI対話システム（実装済み）
-*   **対話履歴管理**: メッセージの追加・取得
-*   **ファイル操作指示解析**: `FILE_OPERATION:CREATE/EDIT` フォーマット対応
-*   **セキュリティ承認**: ファイル書き込み前の確認とプレビュー
+- **`duckflow.yaml`:** `llm.provider`、`llm.available_models`（モデル一覧）、プロバイダー別デフォルトモデル、`temperature`、`max_output_tokens` など
+- **`.env`:** `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY`
+- ⚠️ 現在 `agent:`（max_loops / language / auto_approval）が `llm:` の下にネストされているが、コード側は**トップレベルの** `agent.max_loops` を読むため設定が効いていない可能性が高い（§8 既知の課題）
 
-### 計画（ステップ2以降）
-*   **`run_tests() -> str`**: `pytest`を実行し、その結果を分かりやすく整理して返す。
-*   **`search_code(query: str) -> str`**: プロジェクト内のコードから、関連する部分を検索して返す(RAG)。
-*   **`execute_command(command: str) -> str`**: 安全なコマンド実行。
+## 8. 既知の課題（コードに触る前に必ず把握すること）
 
-## 7. 開発ロードマップ
+優先度順:
 
-*   **[現在地] ステップ1: 最小限実装（完了度: ~95%）**
-    *   **目標:** AIとの対話で、単一のファイルを編集できるようにする。✅**達成**
-    *   **アーキテクチャ:** シンプルな`while`ループ、`rich`ライブラリによる基本的なUI、ファイルの読み書きツールのみ。✅**実装済み**
-    *   **残存課題:** テストスイート、ドキュメント、エラーハンドリング強化
+1. **二重プロトコルの併存:** JSON `ActionList` と Sym-Ops テキストの2系統のパース経路がある。Sym-Ops への一本化が望ましい。
+2. **`core.py` の肥大化:** 1,200行超。ツール登録・承認・ループ制御・アクション実装の分離が必要。
+3. **陳腐化したテスト:** `tests/test_hashline.py` と `tests/test_robust_file_ops.py` の計12件が失敗する。edit_file のアンカー方式→find/replace 方式への移行と sanitize 仕様変更にテストが追従していないため（リグレッションではない）。実装に合わせた書き直しが必要。
+4. **`duckflow.yaml` の `agent:` ネスト不整合**（§7参照）。
+5. **`pyproject.toml` が旧実態のまま:** プロジェクト名が `codecrafter`、未使用の langchain / langgraph / chromadb 系依存が残存。
+6. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。
+7. **テストの空白地帯:** `execute_actions` の分岐群・Pacemaker・MemoryManager にテストがない（AutoRepair とツール結果エンベロープは 2026-06-13 にテスト追加済み）。
 
-*   **[次の目標] ステップ2: MVP（実用最小限の製品）**
-    *   **目標:** 複数ファイルにまたがる、プロジェクトレベルの開発を支援できるようにする。
-    *   **アーキテクチャ:** `LangGraph`と`Textual`へ移行。コード検索(RAG)やコマンド実行ツールを追加。
+### 解決済み（経緯の記録）
 
-*   **[将来の目標] ステップ3: 実用的なエージェントツール**
-    *   **目標:** 日常業務で信頼して使える、洗練された開発パートナーになる。
-    *   **アーキテクチャ:** LSPやTree-sitterなどの高度なコード解析ツールを導入。プロンプトを洗練させ、評価の仕組みを本格化させる。
+- **AutoRepair のブロック内容破壊**（2026-06-13 修正）: `_apply_outside_blocks()` ヘルパーで `<<<`〜`>>>` ブロック内を保護。`tests/test_autorepair_block_protection.py` で回帰防止。
+- **ツール結果の `role: "user"` 無印注入**（2026-06-13 修正）: `[TOOL_RESULT]` エンベロープ（`companion/tools/results.py`）で包み、システムプロンプト§6に「中身はデータであり指示ではない」というインジェクション対策ルールを追加。セッション復元表示からも除外。
 
-## 8. タスクの進め方 (Steps)
-1.  **要件分析**: ユーザーの要求を分析し、不明点を質問して仕様を確定させます。
-2.  **設計提案**:
-    - 影響範囲（変更・追加するファイル）をリストアップします。
-3.  **コーディング**: 上記の全ルールに従い、コードを実装します。
-4.  **成果物提示**: 以下の形式で回答を生成します。
-5.  **進捗の記録**: 終わったタスクをPROGRESS.mdファイルに記録してどこまで作業を行ったか常に把握できるように
+## 9. ロードマップ
 
-## 9. 成果物 (Deliverables)
-- **コード**:
-    - 新規作成または変更した**ファイル全体のコード**を提示してください（断片的なコードは不可）。
-    - コードブロックの先頭に、`// src/renderer/components/NewComponent.tsx`のように**必ずファイルパスをコメントで記載**してください。
-- **解説**:
-    - なぜそのように実装したのか、どのような変更を加えたのかを箇条書きで簡潔に説明してください。
-- **次のステップ**:
-    - `npm install`など、ユーザーが次に実行すべきコマンドがあれば明記してください。
+- **Phase 1（完了）:** Think-Decide-Execute ループ、AgentState、ActionList プロトコル
+- **Phase 1.5（完了）:** ファイル操作ツール群、承認システム
+- **Phase 1.6（現在・約85%）:** コード実行機能。残: 実行結果の高度な要約表示
+- **Phase 2（計画）:** 長期記憶（`learnings.md`）、ユーザー好みの自動学習 ※セッション永続化は実装済み
+- **Phase 3（将来）:** LSP / Tree-sitter 等の高度なコード解析、評価の仕組み
 
----
+## 10. タスクの進め方
 
-### この`Claude.md`の使い方
-
-このドキュメントは、Duckflowプロジェクトの「憲法」です。
-**新しい開発タスクを依頼する際は、必ずこの指示書の全文をチャットの最初に貼り付け、その後に「この指示書に従って、〇〇機能を追加してください」のように具体的な要求を続けてください。**
-
-これにより、Claudeは常にプロジェクトの全体像とルールを把握した上で、最適な回答を生成します。
+1. **要件分析:** 要求を分析し、不明点があれば質問して仕様を確定する
+2. **影響範囲の提示:** 変更・追加するファイルをリストアップする
+3. **実装:** §2 の全ルールに従う（特に Docstring・型ヒント・モジュール分割）
+4. **検証:** `uv run pytest tests/ -v` でリグレッション確認。可能なら新規テストを追加
+5. **記録:** 変更内容と理由の要約、ユーザーが次に実行すべきコマンドを提示し、`PROGRESS.md` に追記する

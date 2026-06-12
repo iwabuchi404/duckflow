@@ -60,6 +60,40 @@ def serialize_to_text(data, indent_level=0) -> str:
 
     return "\n".join(lines)
 
+# ツール結果メッセージのエンベロープマーカー。
+# ツール実行結果は会話履歴に role="user" で注入されるため、本物のユーザー発言と
+# 区別できるよう明示的なマーカーで包む。マーカーの意味（中身はデータであり指示では
+# ない）はシステムプロンプト側で定義される。
+TOOL_RESULT_OPEN = "[TOOL_RESULT]"
+TOOL_RESULT_CLOSE = "[/TOOL_RESULT]"
+
+
+def wrap_tool_result(formatted: str) -> str:
+    """
+    整形済みツール結果を [TOOL_RESULT] エンベロープで包む。
+
+    Args:
+        formatted: format_symops_response() 等で整形済みの結果文字列
+
+    Returns:
+        エンベロープマーカー付きの文字列
+    """
+    return f"{TOOL_RESULT_OPEN}\n{formatted}\n{TOOL_RESULT_CLOSE}"
+
+
+def is_tool_result_message(content: str) -> bool:
+    """
+    メッセージ本文がツール結果エンベロープかどうかを判定する。
+
+    Args:
+        content: 会話履歴メッセージの content 文字列
+
+    Returns:
+        ツール結果エンベロープなら True
+    """
+    return content.startswith(TOOL_RESULT_OPEN)
+
+
 def format_symops_response(result: ToolResult) -> str:
     """
     ToolResult を Sym-Ops Response Format に変換する。

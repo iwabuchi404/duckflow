@@ -42,6 +42,40 @@ class AutoRepair:
         text = self._fix_indentation(text)
         text = self._fix_unclosed_blocks(text)
         return text
+
+    @staticmethod
+    def _apply_outside_blocks(text: str, fix_line) -> str:
+        """
+        <<< ～ >>> コンテンツブロックの外側の行にのみ行単位の修復関数を適用する。
+
+        ブロック内はファイル内容やコマンド出力などの生データであり、
+        修復処理が内容を破壊してはならない（v3.3 ブロック保護）。
+
+        Args:
+            text: 処理対象の全文
+            fix_line: ブロック外の各行に適用する関数 (str) -> str
+
+        Returns:
+            修復適用後の全文
+        """
+        lines = text.split('\n')
+        out: List[str] = []
+        in_block = False
+
+        for line in lines:
+            if in_block:
+                # ブロック内は一切変更しない
+                out.append(line)
+                # v3.2: >>> は行頭（column 0）のみブロック終端
+                if line.rstrip() == '>>>':
+                    in_block = False
+            elif line.strip() == '<<<':
+                in_block = True
+                out.append(line)
+            else:
+                out.append(fix_line(line))
+
+        return '\n'.join(out)
     
     def _fix_unclosed_blocks(self, text: str) -> str:
         """Ensure all <<< blocks are closed with >>> at the end of text."""
@@ -54,60 +88,117 @@ class AutoRepair:
         return text
 
     def _fix_markdown_blocks(self, text: str) -> str:
-        """Convert Markdown code blocks to v2 format"""
-        # Improved regex to handle language identifier better
-        pattern = r'```[\w\-]*\n(.*?)(?:```|$)'
-        
-        def replace_block(match):
-            content = match.group(1).rstrip('\n')
-            return f'<<<\n{content}\n>>>'
-        
-        return re.sub(pattern, replace_block, text, flags=re.DOTALL | re.MULTILINE)
-    
-    def _fix_missing_symbols(self, text: str) -> str:
-        """Complement missing symbols from action lines v2.1 v2.1"""
+        """Convert Markdown code blocks to v2 format (block-aware).
+
+        既存の <<< ～ >>> ブロックの内側にある ``` フェンスは
+        ファイル内容（例: README のコードブロック）なので変換しない。
+        ブロック外の ``` フェンスのみを <<< / >>> に変換する。
+
+        Args:
+            text: 処理対象の全文
+
+        Returns:
+            フェンス変換後の全文
+        """
         lines = text.split('\n')
-        fixed_lines = []
-        
-        # Expanded action verbs with common variants
-        action_verbs = {
-            'create', 'edit', 'delete', 'remove', 'update', 'write', 'read',
-            'run', 'execute', 'test', 'check', 'verify', 'finish', 'response', 'report',
-            'propose_plan', 'duck_call', 'create_file', 'edit_file', 'delete_file',
-            'run_command', 'read_file', 'list_directory', 'get_project_tree',
-            'execute_batch', 'note', 'search_archives', 'recall'
-        }
-        
+        fixed: List[str] = []
+        in_symops_block = False  # 既存の <<< ～ >>> の内側
+        in_md_fence = False      # 変換中の ``` フェンスの内側
+
         for line in lines:
             stripped = line.strip()
-            
-            # Already has protocol prefix
-            if stripped.startswith('::') or stripped.startswith('>>') or stripped.startswith('<<<'):
-                fixed_lines.append(line)
+
+            if in_symops_block:
+                # 既存ブロック内は保護（フェンスもそのまま）
+                fixed.append(line)
+                if line.rstrip() == '>>>':
+                    in_symops_block = False
                 continue
-            
-            # Support $ as a prefix (common LLM mistake)
-            if stripped.startswith('$'):
-                indent = line[:len(line) - len(line.lstrip())]
-                line = indent + ':: ' + line.lstrip().replace('$', '', 1).strip()
-                fixed_lines.append(line)
-                continue
-            
-            # Look for "verb @ path" or "verb path"
-            # Support case-insensitive and leading whitespace
-            match = re.match(r'^(' + '|'.join(action_verbs) + r')\b\s*(?:@\s*)?([^\n]+)?', stripped, re.IGNORECASE)
-            
-            if match:
-                action, rest = match.groups()
-                indent = line[:len(line) - len(line.lstrip())]
-                if rest:
-                    line = f'{indent}:: {action.lower()} @ {rest.strip()}'
+
+            if in_md_fence:
+                if stripped.startswith('```'):
+                    # 閉じフェンス → ブロック終端に変換
+                    fixed.append('>>>')
+                    in_md_fence = False
                 else:
-                    line = f'{indent}:: {action.lower()}'
-            
-            fixed_lines.append(line)
-        
-        return '\n'.join(fixed_lines)
+                    # フェンス内のコードはそのまま保持
+                    fixed.append(line)
+                continue
+
+            if stripped == '<<<':
+                in_symops_block = True
+                fixed.append(line)
+                continue
+
+            if stripped.startswith('```'):
+                # 開きフェンス（言語タグは捨てる）→ ブロック開始に変換
+                fixed.append('<<<')
+                in_md_fence = True
+                continue
+
+            fixed.append(line)
+
+        # 閉じフェンスがないままEOFに達した場合は _fix_unclosed_blocks が補完する
+        return '\n'.join(fixed)
+    
+    # Expanded action verbs with common variants
+    ACTION_VERBS = {
+        'create', 'edit', 'delete', 'remove', 'update', 'write', 'read',
+        'run', 'execute', 'test', 'check', 'verify', 'finish', 'response', 'report',
+        'propose_plan', 'duck_call', 'create_file', 'write_file', 'edit_file', 'delete_file',
+        'run_command', 'read_file', 'list_directory', 'get_project_tree',
+        'execute_batch', 'note', 'search_archives', 'recall'
+    }
+
+    def _fix_missing_symbols(self, text: str) -> str:
+        """Complement missing symbols from action lines (block-aware v3.3).
+
+        プロトコル記号（::）を付け忘れたアクション行を補完する。
+        <<< ～ >>> ブロック内はファイル内容なので一切変更しない
+        （例: `update = 5` のようなコード行を `:: update @ = 5` に
+        壊してしまう事故を防ぐ）。
+
+        Args:
+            text: 処理対象の全文
+
+        Returns:
+            記号補完後の全文
+        """
+        return self._apply_outside_blocks(text, self._fix_missing_symbols_line)
+
+    def _fix_missing_symbols_line(self, line: str) -> str:
+        """
+        1行分の記号補完処理（ブロック外の行にのみ適用される）。
+
+        Args:
+            line: 処理対象の行
+
+        Returns:
+            補完後の行
+        """
+        stripped = line.strip()
+
+        # Already has protocol prefix
+        if stripped.startswith('::') or stripped.startswith('>>') or stripped.startswith('<<<'):
+            return line
+
+        # Support $ as a prefix (common LLM mistake)
+        if stripped.startswith('$'):
+            indent = line[:len(line) - len(line.lstrip())]
+            return indent + ':: ' + line.lstrip().replace('$', '', 1).strip()
+
+        # Look for "verb @ path" or "verb path"
+        # Support case-insensitive and leading whitespace
+        match = re.match(r'^(' + '|'.join(self.ACTION_VERBS) + r')\b\s*(?:@\s*)?([^\n]+)?', stripped, re.IGNORECASE)
+
+        if match:
+            action, rest = match.groups()
+            indent = line[:len(line) - len(line.lstrip())]
+            if rest:
+                return f'{indent}:: {action.lower()} @ {rest.strip()}'
+            return f'{indent}:: {action.lower()}'
+
+        return line
     
     def _fix_delimiters(self, text: str) -> str:
         """Normalize delimiters to v3.2 format.
@@ -147,11 +238,9 @@ class AutoRepair:
                 fixed.append('%%%')
                 continue
 
-            # バッククォートのコードブロックは <<< >>> に変換
-            if stripped.startswith('```'):
-                fixed.append('<<<')
-            else:
-                fixed.append(line)
+            # ブロック外の ``` フェンスは _fix_markdown_blocks が変換済み。
+            # この時点で残っている ``` はブロック内のファイル内容なので保護する。
+            fixed.append(line)
 
         return '\n'.join(fixed)
     
@@ -193,7 +282,30 @@ class AutoRepair:
         return '\n'.join(fixed_lines)
     
     def _fix_vitals_format(self, text: str) -> str:
-        """Normalize Duck Vitals format with tolerance for natural language and percentages."""
+        """Normalize Duck Vitals format (block-aware v3.3).
+
+        自然言語・パーセント表記のバイタルを `::c0.95` 形式に正規化する。
+        <<< ～ >>> ブロック内はファイル内容（例: ドキュメント中の
+        "confidence: 95%" という記述）なので変換しない。
+
+        Args:
+            text: 処理対象の全文
+
+        Returns:
+            バイタル正規化後の全文
+        """
+        return self._apply_outside_blocks(text, self._fix_vitals_line)
+
+    def _fix_vitals_line(self, line: str) -> str:
+        """
+        1行分のバイタル正規化処理（ブロック外の行にのみ適用される）。
+
+        Args:
+            line: 処理対象の行
+
+        Returns:
+            正規化後の行
+        """
         # 1. Natural language: "Confidence: 95%" -> "::c0.95"
         def norm_percent(match):
             key_map = {'confidence': 'c', 'safety': 's', 'memory': 'm', 'focus': 'f'}
@@ -201,8 +313,8 @@ class AutoRepair:
             val = float(match.group(2)) / 100.0
             return f'::{key_map[key]}{val:.2f}'
 
-        text = re.sub(r'\b(confidence|safety|memory|focus):\s*(\d+)%', norm_percent, text, flags=re.IGNORECASE)
-        
+        line = re.sub(r'\b(confidence|safety|memory|focus):\s*(\d+)%', norm_percent, line, flags=re.IGNORECASE)
+
         # 2. Natural language: "Confidence: 0.95" -> "::c0.95"
         def norm_plain(match):
             key_map = {'confidence': 'c', 'safety': 's', 'memory': 'm', 'focus': 'f'}
@@ -210,15 +322,15 @@ class AutoRepair:
             val = match.group(2)
             return f'::{key_map[key]}{val}'
 
-        text = re.sub(r'\b(confidence|safety|memory|focus):\s*([\d.]+)', norm_plain, text, flags=re.IGNORECASE)
+        line = re.sub(r'\b(confidence|safety|memory|focus):\s*([\d.]+)', norm_plain, line, flags=re.IGNORECASE)
 
         # 3. Handle #c0.9 style
-        text = re.sub(r'#([cmfs])\s*([\d.]+)', r'::\1\2', text)
-        
+        line = re.sub(r'#([cmfs])\s*([\d.]+)', r'::\1\2', line)
+
         # 4. Standardize spacing: "::c 0.9" -> "::c0.9"
-        text = re.sub(r'::([cmfs])\s+([\d.]+)', r'::\1\2', text)
-        
-        return text
+        line = re.sub(r'::([cmfs])\s+([\d.]+)', r'::\1\2', line)
+
+        return line
 
 class FuzzyParser:
     """Tolerant parser v2.1"""
