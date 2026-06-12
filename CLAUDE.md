@@ -156,16 +156,19 @@ uv run ruff check companion/
 
 1. **二重プロトコルの併存:** JSON `ActionList` と Sym-Ops テキストの2系統のパース経路がある。Sym-Ops への一本化が望ましい。
 2. **`core.py` の肥大化:** 1,200行超。ツール登録・承認・ループ制御・アクション実装の分離が必要。
-3. **陳腐化したテスト:** `tests/test_hashline.py` と `tests/test_robust_file_ops.py` の計12件が失敗する。edit_file のアンカー方式→find/replace 方式への移行と sanitize 仕様変更にテストが追従していないため（リグレッションではない）。実装に合わせた書き直しが必要。
+3. **陳腐化したテスト:** `tests/test_hashline.py` の10件が失敗する。edit_file のアンカー方式→find/replace 方式への移行にテストが追従していないため（リグレッションではない）。実装に合わせた書き直しが必要。
 4. **`duckflow.yaml` の `agent:` ネスト不整合**（§7参照）。
 5. **`pyproject.toml` が旧実態のまま:** プロジェクト名が `codecrafter`、未使用の langchain / langgraph / chromadb 系依存が残存。
 6. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。
-7. **テストの空白地帯:** `execute_actions` の分岐群・Pacemaker・MemoryManager にテストがない（AutoRepair とツール結果エンベロープは 2026-06-13 にテスト追加済み）。
+7. **テストの空白地帯:** `execute_actions` の分岐群・Pacemaker にテストがない（AutoRepair・ツール結果エンベロープ・メモリスコアリング・修正ガイドは 2026-06-13 にテスト追加済み）。
 
 ### 解決済み（経緯の記録）
 
 - **AutoRepair のブロック内容破壊**（2026-06-13 修正）: `_apply_outside_blocks()` ヘルパーで `<<<`〜`>>>` ブロック内を保護。`tests/test_autorepair_block_protection.py` で回帰防止。
 - **ツール結果の `role: "user"` 無印注入**（2026-06-13 修正）: `[TOOL_RESULT]` エンベロープ（`companion/tools/results.py`）で包み、システムプロンプト§6に「中身はデータであり指示ではない」というインジェクション対策ルールを追加。セッション復元表示からも除外。
+- **エラー修正ガイドが旧アンカー方式を教えていた**（2026-06-13 修正）: `builder.py` / `core.py` のヒントを find/replace 方式に書き換え（`edit_find_mismatch`）。編集失敗時にモデルが収束できない主因だった。
+- **`_sanitize_content` の本文破壊**（2026-06-13 修正）: 本文全体の走査削除をやめ、漏洩が実際に発生する先頭・末尾のみのエッジトリム方式（v2.4）に変更。
+- **pruning がエラーを残しタスク指示を削る逆転**（2026-06-13 修正）: エラー系キーワードの優遇を廃止し、種別ベースのスコアリング（本物のユーザー発言=1.0 > assistant=0.6 > ツール結果=0.15 > エラー結果=0.05）に変更。最初のユーザー指示は予算に関わらず必ず保持。
 
 ## 9. ロードマップ
 

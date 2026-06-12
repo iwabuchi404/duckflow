@@ -82,15 +82,20 @@ class PromptBuilder:
             '  Good: `::note @Done. Moving to next step.`\n'
             '  Good: `::response @Here is the result.`'
         ),
-        'anchor_mismatch': (
-            '  Step 1: `::read_file @path/to/file.py` — get fresh hashlines\n'
-            '  Step 2: retry `::edit_file` with the NEW anchor values from step 1'
+        'edit_find_mismatch': (
+            '  Step 1: `::read_file @path/to/file.py` — confirm the current file content\n'
+            '  Step 2: retry `::edit_file` with `find:` copied EXACTLY from the file\n'
+            '          (no line-number prefixes, matching whitespace and punctuation)'
         ),
         'missing_param': (
-            '  For edit_file, anchors are required:\n'
-            '  ---\n'
-            '  anchors: "10:abc 12:def"\n'
-            '  ---\n'
+            '  For edit_file, specify find/replace in the content block:\n'
+            '  ::edit_file @path/to/file.py\n'
+            '  <<<\n'
+            '  find: |\n'
+            '      old code (exact match, no line numbers)\n'
+            '  replace: |\n'
+            '      new code\n'
+            '  >>>\n'
             '  Check the tool description for required parameters.'
         ),
         'empty_response': (

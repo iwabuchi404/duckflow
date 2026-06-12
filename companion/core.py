@@ -801,15 +801,16 @@ class DuckAgent:
                         self.state.last_action_result = error_msg
                         ui.print_result(str(e), is_error=True)
 
-                        # edit_file / delete_lines の ValueError → アンカー関連エラー専用ヒント
+                        # edit_file / delete_lines の ValueError → find スニペット不一致の専用ヒント
                         if action.name in ('edit_file', 'delete_lines') and isinstance(e, ValueError):
                             self.state.last_syntax_errors.append(SyntaxErrorInfo(
-                                error_type='anchor_mismatch',
+                                error_type='edit_find_mismatch',
                                 raw_snippet=str(e)[:300],
                                 correction_hint=(
-                                    'Anchors are stale or invalid. '
+                                    'The find snippet did not match the file content. '
                                     'The file may have changed since read_file was called. '
-                                    'Re-run read_file to get fresh anchors, then retry with the NEW hash values.'
+                                    'Re-run read_file, copy the target lines EXACTLY as they appear '
+                                    '(without line-number prefixes) into find:, then retry edit_file.'
                                 ),
                             ))
                         # 引数不足などの TypeError を構文エラーとして記録

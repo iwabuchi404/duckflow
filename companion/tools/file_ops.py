@@ -475,17 +475,25 @@ class FileOps:
 
     def _sanitize_content(self, text: str) -> str:
         """
-        プロトコル記号が誤ってコード内に漏洩するのを防ぐガード機能(v2.3)。
+        プロトコル記号が誤ってコード内に漏洩するのを防ぐガード機能(v2.4)。
 
-        v2.2 からの変更:
-        - 以前は r'^\\s*::.*$' で全 :: 行を除去していたため、
-          Ruby の ::SomeClass 等の正規コードも削除してしまっていた。
-        - v2.3 では既知の Sym-Ops アクション動詞または Vitals 形式の
-          行のみを除去対象とし、誤削除を防ぐ。
+        v2.3 からの変更:
+        - 以前は本文全体を走査して該当行を削除していたため、doctestの
+          区切りや Sym-Ops 自体を解説するドキュメント等、正当なファイル
+          内容まで破壊していた。
+        - プロトコル漏洩はパーサーのブロック切り出しミスに起因するため、
+          コンテンツの「先頭」と「末尾」にのみ現れる。v2.4 では先頭・末尾の
+          連続するプロトコル行（と隣接する空行）のみを除去し、
+          本文中の行は一切変更しない。
+
+        Args:
+            text: 書き込み予定のファイル内容
+
+        Returns:
+            先頭・末尾の漏洩プロトコル行を除去した内容
         """
         import re as _re
         lines = text.splitlines()
-        clean_lines = []
 
         # 既知のプロトコルアクション行（::verb ...）
         action_re = _re.compile(
@@ -500,13 +508,32 @@ class FileOps:
             r'^\s*(?:>>>|<<<|%%%+)\s*$'
         )
 
-        for line in lines:
-            if action_re.match(line) or vitals_re.match(line) or block_re.match(line):
-                # 漏洩したプロトコル記号とみなし、この行をスキップ
-                continue
-            clean_lines.append(line)
+        def _is_protocol_line(line: str) -> bool:
+            """
+            行がプロトコル漏洩行（アクション/Vitals/ブロック区切り）か判定する。
 
-        return "\n".join(clean_lines)
+            Args:
+                line: 判定対象の行
+
+            Returns:
+                プロトコル行なら True
+            """
+            return bool(
+                action_re.match(line) or vitals_re.match(line) or block_re.match(line)
+            )
+
+        start = 0
+        end = len(lines)
+
+        # 先頭の連続するプロトコル行・空行をスキップ
+        while start < end and (not lines[start].strip() or _is_protocol_line(lines[start])):
+            start += 1
+
+        # 末尾の連続するプロトコル行・空行をスキップ
+        while end > start and (not lines[end - 1].strip() or _is_protocol_line(lines[end - 1])):
+            end -= 1
+
+        return "\n".join(lines[start:end])
 
     def _strip_hash_from_content(self, line: str) -> str:
         """
