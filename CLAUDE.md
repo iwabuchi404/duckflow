@@ -58,6 +58,8 @@ LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテン
 ### ファイル編集方式（find/replace コンテキストマッチ）
 `edit_file` は `find:`（既存コードの断片）と `replace:` を指定するコンテキストマッチ方式（`companion/tools/file_ops.py`）。マッチ失敗時は近似行の候補と差分ヒントを返してLLMの自己修正を促す。`companion/tools/hashline.py` の Hashline 形式（`行番号:ハッシュ|内容`）は read_file の表示補助として残っているが、編集のアンカーとしては現在使われていない（`tests/test_hashline.py` の失敗はこの移行にテストが追従していないため）。
 
+**移行予定:** 編集ペイロードを aider 型 `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE` マーカー形式へ移行する設計が合意済み（未実装）。根拠・git コンフリクト衝突への防御・実装計画は `docs/edit_format_search_replace_design.md` を参照。
+
 ### 多層防御（execute_actions 内）
 - 未知ツールのフィルタ＋近似候補の提示（difflib）
 - 1ターンあたりアクション数上限（6件）
@@ -69,6 +71,7 @@ LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテン
 ### Vitals & Pacemaker
 - **Vitals:** confidence / safety / memory / focus（LLMの自己申告＋システム側のdecay/回復）
 - **Pacemaker**（`companion/modules/pacemaker.py`）: max_loops をタスク量とバイタルから動的計算（3〜35）。異常検知時は、LLM自身に「何が起きたか・選択肢」を説明させるハイブリッド介入を行う。
+- **再設計予定:** 自己申告（UX表示専用・ルーブリック繋留・応答時のみ）と実測テレメトリ（制御専用・二重表示）に分離する設計が合意済み（未実装）。`docs/vitals_redesign_design.md` を参照。
 
 ### メモリ管理
 `MemoryManager`（`companion/modules/memory.py`）がモデルのコンテキスト長から履歴予算を動的設定（約60%を履歴に、8K〜200Kでクランプ）。使用率80%超で重要度スコアリングによる pruning を行い、削除分は ArchiveStorage に保存（`search_archives` / `recall` ツールで検索可能）。
@@ -113,7 +116,7 @@ duckflow/
 | カテゴリ | ツール | 備考 |
 |---|---|---|
 | 共通 | `note`, `response`, `exit`, `duck_call`, `search_archives`/`recall`, `get_project_tree` | 全モードで使用可 |
-| ファイル読取 | `read_file`, `list_directory`, `find_files`, `grep_files` | read_file は行番号付きで返す |
+| ファイル読取 | `read_file`, `list_directory`, `find_files`, `grep_files` | read_file は行番号付きで返す。検索の標準化・シンボル層・repo map 注入の設計が合意済み（`docs/code_navigation_context_design.md`、未実装） |
 | ファイル編集 | `write_file`, `edit_file`, `delete_lines`, `delete_file` | 承認必須。task モードのみ |
 | 計画 | `propose_plan`, `generate_tasks`, `mark_step_complete`, `mark_task_complete`, `execute_tasks` | Plan → Step → Task の階層管理 |
 | 実行 | `run_command`（承認必須）, `execute_batch` | execute_batch はパーサーが展開 |
@@ -159,7 +162,7 @@ uv run ruff check companion/
 3. **陳腐化したテスト:** `tests/test_hashline.py` の10件が失敗する。edit_file のアンカー方式→find/replace 方式への移行にテストが追従していないため（リグレッションではない）。実装に合わせた書き直しが必要。
 4. **`duckflow.yaml` の `agent:` ネスト不整合**（§7参照）。
 5. **`pyproject.toml` が旧実態のまま:** プロジェクト名が `codecrafter`、未使用の langchain / langgraph / chromadb 系依存が残存。
-6. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。
+6. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。→ **解決の設計合意済み**（`docs/vitals_redesign_design.md`: 申告はUX表示専用に分離、制御は実測テレメトリへ。未実装）。
 7. **テストの空白地帯:** `execute_actions` の分岐群・Pacemaker にテストがない（AutoRepair・ツール結果エンベロープ・メモリスコアリング・修正ガイドは 2026-06-13 にテスト追加済み）。
 
 ### 解決済み（経緯の記録）
