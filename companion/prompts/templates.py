@@ -75,23 +75,24 @@ not just the output.
 ### Edit Tools
 
 1. `edit_file`
-   - **Description**: Atomic editing using context match (find/replace). Search for a unique block of code and replace it. Whitespace differences are ignored.
-   - **Constraint**: The `find` block must be unique enough to identify a single location.
+   - **Description**: Atomic editing using context match (SEARCH/REPLACE). Copy a unique block of existing code into SEARCH and the new code into REPLACE. Whitespace differences are ignored during matching.
+   - **Constraint**: The SEARCH block must be unique enough to identify a single location. Copy it verbatim as it appears in read_file (no line-number prefixes).
     - **Structure**:
-      ```
       ::edit_file @path
       <<<
-      find: |
-          [Copy exact block from read_file]
-      replace: |
-          [New code]
+      <<<<<<< SEARCH
+      [Copy exact block from read_file]
+      =======
+      [New code]
+      >>>>>>> REPLACE
       >>>
-      ```
-    - **Note**: If a match fails, the tool returns a detailed `diff` showing exactly where your snippet differs from the file. Use this to self-correct.
-    - **Pro Tip**: Use a large enough `find` block to ensure uniqueness, but keep it precise.
+    - **Multi-edit**: Stack multiple SEARCH/REPLACE blocks in one content block.
+    - **Conflict files**: If the target file contains unresolved git conflict markers, do NOT use edit_file — use `write_file` to rewrite the region.
+    - **Note**: If a match fails, the tool returns a detailed `diff` showing exactly where your SEARCH block differs from the file. Use this to self-correct.
+    - **Pro Tip**: Use a large enough SEARCH block to ensure uniqueness, but keep it precise.
 
 2. `delete_lines`
-   - **Description**: Remove a specific code block using context match.
+   - **Description**: Remove a specific code block using context match (find/replace 形式).
    - **Structure**:
      ::delete_lines @path
      <<<

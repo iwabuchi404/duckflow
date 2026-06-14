@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 from typing import List, Optional
 from pathlib import Path
@@ -233,12 +234,141 @@ class FileOps:
             f.write(clean_content)
         return f"Successfully wrote to {path}"
 
+    # --- SEARCH/REPLACE マーカー形式（aider 型）のサポート ---
+    # 設計: docs/edit_format_search_replace_design.md
+    # アクション層 Sym-Ops の <<< >>> エンベロープの「内側」で使うため、
+    # マーカーは4文字以上の連続（git の7文字と互換、かつ厳密 <<<(3) と区別）。
+
+    # 開始: <<<<<<< [SEARCH]  / 区切り: =======  / 終了: >>>>>>> [REPLACE]
+    _SR_OPEN_RE = re.compile(r'^\s*<{4,}\s*(?:SEARCH)?\s*:?\s*$', re.IGNORECASE)
+    _SR_SEP_RE = re.compile(r'^\s*={4,}\s*$')
+    _SR_CLOSE_RE = re.compile(r'^\s*>{4,}\s*(?:REPLACE)?\s*:?\s*$', re.IGNORECASE)
+
+    # git コンフリクトマーカー（未解決コンフリクトの署名）。git は厳密に7文字。
+    _GIT_CONFLICT_OPEN_RE = re.compile(r'^<{7} ')
+    _GIT_CONFLICT_SEP_RE = re.compile(r'^={7}$')
+    _GIT_CONFLICT_CLOSE_RE = re.compile(r'^>{7} ')
+
+    @classmethod
+    def _content_uses_markers(cls, content: str) -> bool:
+        """
+        コンテンツが SEARCH/REPLACE マーカー形式を使っているか判定する。
+
+        Args:
+            content: edit_file のコンテンツブロック文字列
+
+        Returns:
+            開始マーカー行（<<<<<<< [SEARCH]）が1つでもあれば True
+        """
+        return any(cls._SR_OPEN_RE.match(line) for line in content.split('\n'))
+
+    @classmethod
+    def _has_git_conflict_markers(cls, text: str) -> bool:
+        """
+        テキストに未解決の git コンフリクトマーカーが含まれるか判定する。
+
+        マーカー形式編集は `=======` を帯域内で区別できないため、対象ファイルが
+        コンフリクト中の場合はマーカー形式パースを拒否し write_file へ誘導する
+        （docs/edit_format_search_replace_design.md §3.2 / §7）。
+
+        Args:
+            text: 検査対象のファイル内容
+
+        Returns:
+            開始(<<<<<<< )と区切り(=======)の両方が存在すれば True
+        """
+        lines = text.split('\n')
+        has_open = any(cls._GIT_CONFLICT_OPEN_RE.match(l) for l in lines)
+        has_sep = any(cls._GIT_CONFLICT_SEP_RE.match(l) for l in lines)
+        return has_open and has_sep
+
+    @classmethod
+    def _parse_search_replace_markers(cls, content: str) -> List[dict]:
+        """
+        SEARCH/REPLACE マーカー形式のコンテンツを find/replace ペアへ変換する。
+
+        寛容文法（docs/edit_format_search_replace_design.md §2.3）:
+        - 開始 `<{4,} [SEARCH]` / 区切り `={4,}` / 終了 `>{4,} [REPLACE]`
+        - マーカー行のラベル（SEARCH/REPLACE）・コロンは省略可、大文字小文字不問
+        - 終端マーカー欠落時は次の開始マーカーまたは EOF までを REPLACE とみなす
+
+        Args:
+            content: マーカー形式のコンテンツブロック文字列
+
+        Returns:
+            {'find': ..., 'replace': ..., 'occurrence': 1} のリスト。
+            区切り `=======` を欠くなど分離不能なブロックはスキップする。
+        """
+        lines = content.split('\n')
+        pairs: List[dict] = []
+        i = 0
+        n = len(lines)
+
+        while i < n:
+            if not cls._SR_OPEN_RE.match(lines[i]):
+                i += 1
+                continue
+
+            # SEARCH 本文を区切りまで収集
+            i += 1
+            search_lines: List[str] = []
+            found_sep = False
+            while i < n:
+                if cls._SR_SEP_RE.match(lines[i]):
+                    found_sep = True
+                    i += 1
+                    break
+                if cls._SR_OPEN_RE.match(lines[i]):
+                    # 区切りなしで次のブロックが始まった → このブロックは破棄
+                    break
+                search_lines.append(lines[i])
+                i += 1
+
+            if not found_sep:
+                # 区切り欠落（分離不能）。修復せずスキップ（呼び出し元がエラー提示）
+                continue
+
+            # REPLACE 本文を終端まで（終端欠落時は次の開始 or EOF まで）収集
+            replace_lines: List[str] = []
+            while i < n:
+                if cls._SR_CLOSE_RE.match(lines[i]):
+                    i += 1
+                    break
+                if cls._SR_OPEN_RE.match(lines[i]):
+                    # 終端欠落のまま次ブロック開始 → ここで打ち切る（i は進めない）
+                    break
+                replace_lines.append(lines[i])
+                i += 1
+
+            pairs.append({
+                'find': '\n'.join(search_lines).strip('\n'),
+                'replace': '\n'.join(replace_lines).strip('\n'),
+                'occurrence': 1,
+            })
+
+        return pairs
+
     async def edit_file(self, path: str, find: str = "", replace: str = "", occurrence: int = 1, content: str = "") -> str:
         '''
         Context Match (Fuzzy) based file editing with search-and-replace.
-         whitespace differences (tabs/spaces) are ignored during matching.
-        
-        Supports multi-edit via %%% segment separators.
+        Whitespace differences (tabs/spaces) are ignored during matching.
+
+        推奨形式: SEARCH/REPLACE マーカー（aider 型）。SEARCH には変更前のコードを
+        ファイルに見えるまま逐語で、REPLACE には変更後のコードを書く。
+        ::edit_file @utils.py
+        <<<
+        <<<<<<< SEARCH
+        def calc(x):
+            return x * 2
+        =======
+        def calc(x: int) -> int:
+            return x * 3
+        >>>>>>> REPLACE
+        >>>
+        複数編集は SEARCH/REPLACE ブロックを並べる。対象ファイルが git コンフリクト中の
+        場合はこの形式を使わず ::write_file で領域ごと書き換えること。
+
+        後方互換形式（find:/replace:）も引き続きサポートする。
 
         Sym-Ops format (single edit):
         ::edit_file @utils.py
@@ -283,17 +413,62 @@ class FileOps:
         if not full_path.is_file():
             return f"::status error\nReason: Path is a directory: {path}"
 
-        # セグメントの収集
         import re as _re
-        segments_raw = _re.split(r'\n%%%', content)
-        
+
         # 各セグメントからパース
         edits_params = []
-        
+
         # 1つ目のアクション（トップレベル引数）を最初に追加（もし存在すれば）
         if find:
             edits_params.append({'find': find, 'replace': replace, 'occurrence': int(occurrence)})
-            
+
+        # --- SEARCH/REPLACE マーカー形式の分岐（docs/edit_format_search_replace_design.md） ---
+        if content and self._content_uses_markers(content):
+            # ルーティング: 対象ファイルがコンフリクト中ならマーカー形式は危険 → write_file へ誘導
+            try:
+                _existing = full_path.read_text(encoding='utf-8')
+            except UnicodeDecodeError:
+                _existing = full_path.read_text(encoding='latin-1')
+            if self._has_git_conflict_markers(_existing):
+                return (
+                    f"::status error\n"
+                    f"Reason: conflict_markers_in_target\n"
+                    f"Message: {path} contains unresolved git conflict markers. "
+                    f"SEARCH/REPLACE marker editing is unsafe here because '=======' cannot be "
+                    f"disambiguated from the protocol separator.\n"
+                    f"Fix: Use ::write_file to rewrite the conflicted region as a whole."
+                )
+
+            marker_pairs = self._parse_search_replace_markers(content)
+            if not marker_pairs:
+                return (
+                    f"::status error\n"
+                    f"Reason: marker_parse_failed\n"
+                    f"Message: Found a SEARCH marker but could not extract a valid "
+                    f"SEARCH/REPLACE pair (missing '=======' separator?).\n"
+                    f"Fix: Use the exact form:\n"
+                    f"<<<<<<< SEARCH\n(old code)\n=======\n(new code)\n>>>>>>> REPLACE"
+                )
+
+            # 健全性チェック: REPLACE 側に git マーカーが残る → 誤パースの疑い。適用拒否
+            for mp in marker_pairs:
+                if self._has_git_conflict_markers(mp['replace']) or mp['replace'].lstrip().startswith(('<<<<<<<', '>>>>>>>')):
+                    return (
+                        f"::status error\n"
+                        f"Reason: marker_leak_in_replace\n"
+                        f"Message: The REPLACE content still contains conflict/marker lines, "
+                        f"which usually means the markers were mis-parsed.\n"
+                        f"Fix: Re-issue the edit, or use ::write_file for whole-region rewrites."
+                    )
+
+            edits_params.extend(marker_pairs)
+            # マーカー形式では従来の find:/replace: セグメント解析は行わない
+            return await self._apply_edits(path, full_path, edits_params, content)
+        # ----------------------------------------------------------------------------------
+
+        # セグメントの収集（従来の find:/replace: 形式）
+        segments_raw = _re.split(r'\n%%%', content)
+
         # コンテンツブロック内のセグメントをパース
         for seg in segments_raw:
             seg = seg.strip('\n')
@@ -332,6 +507,25 @@ class FileOps:
                     'occurrence': int(found_params.get('occurrence', 1))
                 })
 
+        return await self._apply_edits(path, full_path, edits_params, content)
+
+    async def _apply_edits(self, path: str, full_path: Path, edits_params: List[dict], content: str) -> str:
+        """
+        収集済みの find/replace ペアを対象ファイルに適用する共通処理。
+
+        マーカー形式・従来 find:/replace: 形式の両経路がここに合流する。
+        マッチには空白寛容な _find_context_match を用い、複数編集は下から順に
+        適用してインデックスズレを防ぐ。
+
+        Args:
+            path: 対象ファイルの相対パス（メッセージ表示用）
+            full_path: 解決済みの絶対パス
+            edits_params: {'find', 'replace', 'occurrence'} の辞書リスト
+            content: 元のコンテンツブロック（エラー時のスニペット表示用）
+
+        Returns:
+            変更成功メッセージ（更新コンテキスト付き）またはエラーメッセージ
+        """
         if not edits_params:
             snippet = content[:100] + "..." if len(content) > 100 else content
             return (
@@ -351,7 +545,7 @@ class FileOps:
             raw_content = full_path.read_text(encoding='utf-8')
         except UnicodeDecodeError:
             raw_content = full_path.read_text(encoding='latin-1')
-            
+
         file_lines = [l.rstrip('\n') for l in raw_content.split('\n')]
 
         # すべてのマッチ箇所を特定
@@ -360,12 +554,12 @@ class FileOps:
             f = p['find']
             r = p['replace']
             occ = p['occurrence']
-            
+
             match = self._find_context_match(file_lines, f, occ)
             if match is None:
                 first_line = f.splitlines()[0] if f.strip() else ""
                 candidates = self._find_similar_lines(file_lines, first_line)
-                
+
                 # 差分フィードバックの生成
                 diff_hint = ""
                 if candidates:
@@ -375,7 +569,7 @@ class FileOps:
                     diff_hint += self._generate_match_failure_diff(f.splitlines(), cand_lines)
 
                 cand_str = "\n".join([f"  - line {l}: \"{c}\"" for l, c in candidates])
-                
+
                 return (
                     f"::status error\n"
                     f"Reason: find_not_matched (Edit {i+1})\n"
@@ -388,7 +582,7 @@ class FileOps:
 
         # 下から順に適用（インデックスズレ回避）
         resolved.sort(key=lambda x: x[0], reverse=True)
-        
+
         # 逐次適用と結果収集
         for start_idx, end_idx, r_text in resolved:
             # 置換後のコードからもハッシュや行番号を除去
@@ -403,12 +597,12 @@ class FileOps:
         # デフ表示またはコンテキストを返す
         summary = f"Successfully edited {path} ({len(resolved)} match(es))."
         context = HashlineHelper.format_context_after_edit(
-            file_lines, 
-            resolved[-1][0], 
-            resolved[-1][0] + len(resolved[-1][2].split('\n')) - 1, 
+            file_lines,
+            resolved[-1][0],
+            resolved[-1][0] + len(resolved[-1][2].split('\n')) - 1,
             context_lines=5
         )
-        
+
         return (
             f"{summary}\n"
             f"--- Updated Context ---\n"

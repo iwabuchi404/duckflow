@@ -58,7 +58,7 @@ LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテン
 ### ファイル編集方式（find/replace コンテキストマッチ）
 `edit_file` は `find:`（既存コードの断片）と `replace:` を指定するコンテキストマッチ方式（`companion/tools/file_ops.py`）。マッチ失敗時は近似行の候補と差分ヒントを返してLLMの自己修正を促す。`companion/tools/hashline.py` の Hashline 形式（`行番号:ハッシュ|内容`）は read_file の表示補助として残っているが、編集のアンカーとしては現在使われていない（`tests/test_hashline.py` の失敗はこの移行にテストが追従していないため）。
 
-**移行予定:** 編集ペイロードを aider 型 `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE` マーカー形式へ移行する設計が合意済み（未実装）。根拠・git コンフリクト衝突への防御・実装計画は `docs/edit_format_search_replace_design.md` を参照。
+**マーカー形式（実装済み・推奨）:** `edit_file` は aider 型 `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE` 形式に対応（従来 find:/replace: も後方互換で維持）。寛容文法・git コンフリクト時の write_file ルーティング・健全性チェック付き。根拠と残課題（online A/B、tier別マッピング）は `docs/edit_format_search_replace_design.md`、ベンチは `benchmarks/`。
 
 ### 多層防御（execute_actions 内）
 - 未知ツールのフィルタ＋近似候補の提示（difflib）

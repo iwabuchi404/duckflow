@@ -78,12 +78,29 @@ class AutoRepair:
         return '\n'.join(out)
     
     def _fix_unclosed_blocks(self, text: str) -> str:
-        """Ensure all <<< blocks are closed with >>> at the end of text."""
-        open_count = text.count('<<<')
-        close_count = text.count('>>>')
-        
+        """末尾で閉じられていない <<< ブロックを >>> で閉じる（v3.3 行単位判定）。
+
+        v3.2 以前は ``text.count('<<<')`` による部分文字列カウントだったため、
+        ``<<<<<<< SEARCH``（7文字）のような SEARCH/REPLACE マーカーや、本文中に
+        出現する ``<<<`` を複数の区切りとして誤計上していた。ブロック区切りは
+        パーサー本体と同じく「単独行の ``<<<`` / 行頭の ``>>>``」のみを数える。
+
+        Args:
+            text: 処理対象の全文
+
+        Returns:
+            未閉鎖ブロックを末尾で閉じた全文
+        """
+        open_count = 0
+        close_count = 0
+        for line in text.split('\n'):
+            if line.strip() == '<<<':
+                open_count += 1
+            elif line.rstrip() == '>>>':
+                close_count += 1
+
         if open_count > close_count:
-            # Add missing closing delimiters
+            # 不足している終端区切りを追加
             text = text.rstrip() + '\n' + ('>>>\n' * (open_count - close_count))
         return text
 

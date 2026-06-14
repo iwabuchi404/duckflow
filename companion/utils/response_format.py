@@ -85,7 +85,7 @@ def calc(data: str) -> str:
 
 ## 5. Critical Rules (CRITICAL)
 1. **Self-Verification Checklist**: Before every `::action`, you MUST include a `>> [CHECK]` line in your thoughts to verify:
-    - `context match`: For `edit_file`, check if the `find` snippet exactly matches the `read_file` output.
+    - `context match`: For `edit_file`, check if the SEARCH block exactly matches the `read_file` output.
     - `syntax`: Are you using `<<<` and `>>>` correctly? No Markdown code fences (```) inside blocks.
     - `completeness`: No `...` or `TODO` left in the generated code.
 

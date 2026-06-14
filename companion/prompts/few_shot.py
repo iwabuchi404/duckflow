@@ -27,13 +27,14 @@ TASK_EXAMPLES = [
 ::c1.0 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @hello.py
 <<<
-find: |
-    def main():
-        print('Hi')
-replace: |
-    def main():
-        \"\"\"Entry point.\"\"\"
-        print('Hi')
+<<<<<<< SEARCH
+def main():
+    print('Hi')
+=======
+def main():
+    \"\"\"Entry point.\"\"\"
+    print('Hi')
+>>>>>>> REPLACE
 >>>"""}
 ]
 
@@ -53,10 +54,11 @@ CORRECTION_EXAMPLES = [
 ::c1.0 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @hello.py
 <<<
-find: |
+<<<<<<< SEARCH
     print('Old Message')
-replace: |
+=======
     print('New Message')
+>>>>>>> REPLACE
 >>>"""}
 ]
 
@@ -76,12 +78,13 @@ RECOVERY_EXAMPLES = [
 ::c1.0 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @utils.py
 <<<
-find: |
-    def fix_func(items: list) -> list:
-        return [x * 2 for x in items]
-replace: |
-    def fix_func(values: list) -> list:
-        return [x * 2 for x in values]
+<<<<<<< SEARCH
+def fix_func(items: list) -> list:
+    return [x * 2 for x in items]
+=======
+def fix_func(values: list) -> list:
+    return [x * 2 for x in values]
+>>>>>>> REPLACE
 >>>"""},
     {"role": "user", "content": """\
 ::result error
@@ -100,16 +103,17 @@ Detailed Diff with closest candidate (Line 1):
 1| def fix_func(items : list) -> list:
 2|     return [x * 2 for x in items]"""},
     {"role": "assistant", "content": """\
->> Extra space before colon. Adjusting find block to match exact content.
+>> Extra space before colon. Adjusting SEARCH block to match exact content.
 ::c0.95 ::s1.0 ::m0.2 ::f1.0
 ::edit_file @utils.py
 <<<
-find: |
-    def fix_func(items : list) -> list:
-        return [x * 2 for x in items]
-replace: |
-    def fix_func(values: list) -> list:
-        return [x * 2 for x in values]
+<<<<<<< SEARCH
+def fix_func(items : list) -> list:
+    return [x * 2 for x in items]
+=======
+def fix_func(values: list) -> list:
+    return [x * 2 for x in values]
+>>>>>>> REPLACE
 >>>"""},
 ]
 

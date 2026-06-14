@@ -84,17 +84,18 @@ class PromptBuilder:
         ),
         'edit_find_mismatch': (
             '  Step 1: `::read_file @path/to/file.py` — confirm the current file content\n'
-            '  Step 2: retry `::edit_file` with `find:` copied EXACTLY from the file\n'
+            '  Step 2: retry `::edit_file` with the SEARCH block copied EXACTLY from the file\n'
             '          (no line-number prefixes, matching whitespace and punctuation)'
         ),
         'missing_param': (
-            '  For edit_file, specify find/replace in the content block:\n'
+            '  For edit_file, use SEARCH/REPLACE markers in the content block:\n'
             '  ::edit_file @path/to/file.py\n'
             '  <<<\n'
-            '  find: |\n'
-            '      old code (exact match, no line numbers)\n'
-            '  replace: |\n'
-            '      new code\n'
+            '  <<<<<<< SEARCH\n'
+            '  old code (exact match, no line numbers)\n'
+            '  =======\n'
+            '  new code\n'
+            '  >>>>>>> REPLACE\n'
             '  >>>\n'
             '  Check the tool description for required parameters.'
         ),
