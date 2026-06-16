@@ -1,0 +1,3 @@
+  起動時 → sessions/をスキャン → 
+  未完了セッション検出 → 
+  [resume] [new] [delete] の選択提示
