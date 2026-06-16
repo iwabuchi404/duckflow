@@ -1,6 +1,7 @@
 import logging
 from typing import List, Dict, Any
 from companion.state.agent_state import AgentState, Task, TaskStatus
+from companion.ui.console import ui
 
 logger = logging.getLogger(__name__)
 
@@ -26,18 +27,32 @@ class TaskExecutor:
         Check if a task requires user confirmation before execution.
 
         Tasks requiring confirmation:
-        - write_file (file exists check)
-        - delete_file (file exists check)
-        - replace_in_file
+        - shell commands
+        - file write/edit/delete actions
+        - heuristic file-write operations
 
         Returns:
             True if confirmation required, False otherwise
         """
-        # Check task action type
-        action = task.action.name if hasattr(task, 'action') else None
+        if task.command:
+            return True
+
+        if task.file_path:
+            desc_lower = task.description.lower()
+            if any(word in desc_lower for word in ("create", "write", "edit", "delete", "replace")):
+                return True
+
+        action = task.action.name if task.action else None
 
         # Check if action type requires confirmation
-        confirmation_actions = ["write_file", "delete_file", "replace_in_file", "run_command"]
+        confirmation_actions = {
+            "write_file",
+            "delete_file",
+            "delete_lines",
+            "edit_file",
+            "replace_in_file",
+            "run_command",
+        }
 
         return action in confirmation_actions
 
@@ -71,7 +86,12 @@ class TaskExecutor:
                 # Check if task requires user confirmation
                 if self._requires_confirmation(task):
                     # Ask user for confirmation
-                    ui.print_action(task.action.name, task.parameters, task.thought)
+                    if task.action:
+                        ui.print_action(task.action.name, task.action.parameters, task.action.thought)
+                    elif task.command:
+                        ui.print_action("run_command", {"command": task.command}, task.description)
+                    else:
+                        ui.print_action("file_operation", {"path": task.file_path}, task.description)
 
                     prompt = f"📋 {task.title}\n\n{task.description}\n\nこのタスクを実行しますか？"
 

@@ -339,7 +339,14 @@ class LLMClient:
         )
         return DEFAULT_CONTEXT_LENGTH
 
-    async def chat(self, messages: List[Dict[str, str]], response_model: Optional[type] = None, temperature: Optional[float] = None, raw: bool = False) -> Union[Dict[str, Any], ActionList, str]:
+    async def chat(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Optional[type] = None,
+        temperature: Optional[float] = None,
+        raw: bool = False,
+        max_tokens: Optional[int] = None,
+    ) -> Union[Dict[str, Any], ActionList, str]:
         """
         Send messages to LLM and get a JSON response.
         If response_model is provided, validates and returns that Pydantic model.
@@ -378,7 +385,7 @@ class LLMClient:
             presence_penalty = config.get("llm.presence_penalty", 0.1)
             
             # Ensure max_tokens is pulled reliably, default to 8192 for long code generation
-            max_tokens = config.get("llm.max_output_tokens") or config.get("max_output_tokens", 8192)
+            max_tokens = max_tokens or config.get("llm.max_output_tokens") or config.get("max_output_tokens", 8192)
             
             content = None
             for attempt in range(1, MAX_EMPTY_RETRIES + 2):
@@ -575,6 +582,9 @@ class LLMClient:
 
         logger.info(f"📥 Raw LLM Response (FULL):\n{content}")
         logger.info(f"📏 Response length: {len(content)} chars")
+
+        if response_model is not None and response_model is not ActionList:
+            return self._parse_structured_response(content, response_model)
         
         processor = SymOpsProcessor()
         
@@ -707,6 +717,40 @@ class LLMClient:
                     )
                 ]
             )
+
+    def _parse_structured_response(self, content: str, response_model: type):
+        """
+        Parse a JSON response into a requested Pydantic response model.
+
+        Args:
+            content: Raw LLM response text.
+            response_model: Pydantic model class to validate against.
+
+        Returns:
+            An instance of response_model.
+        """
+        processed = default_preprocessor.process(content)
+        logger.debug(
+            "Parsing structured response with %s (processed length=%d)",
+            getattr(response_model, "__name__", str(response_model)),
+            len(processed),
+        )
+
+        try:
+            if hasattr(response_model, "model_validate_json"):
+                return response_model.model_validate_json(processed)
+
+            data = json.loads(processed)
+            if hasattr(response_model, "model_validate"):
+                return response_model.model_validate(data)
+            return data
+        except Exception as e:
+            logger.error(
+                "Failed to parse structured response as %s: %s",
+                getattr(response_model, "__name__", str(response_model)),
+                e,
+            )
+            raise
 
 # Global instance for convenience
 default_client = LLMClient()

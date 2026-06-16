@@ -46,7 +46,7 @@ class SubLLMTools:
         logger.info(f"Tool analyze_structure called for {path}")
         try:
             # Read entire file (for initial analysis)
-            res = await file_ops.read_file(path, max_lines=5000)
+            res = await file_ops.read_file(path, start=1, end=5000)
             if "error" in res:
                 return f"Error reading file: {res['error']}"
             
@@ -216,7 +216,7 @@ class SubLLMTools:
                     else:
                         start_line = int(line_range)
                         max_lines = 1
-                    res = await file_ops.read_file(f_path, start_line=start_line, max_lines=max_lines)
+                    res = await file_ops.read_file(f_path, start=start_line, end=max_lines)
                 else:
                     res = await file_ops.read_file(ref)
                 

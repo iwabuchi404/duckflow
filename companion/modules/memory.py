@@ -26,6 +26,12 @@ class ScoringConfig(BaseModel):
     short_content_penalty: float = 0.7
 
 
+class SummaryResponse(BaseModel):
+    """LLM-generated summary response."""
+
+    summary: str = Field(..., description="Condensed summary text")
+
+
 class MemoryManager:
     """
     会話履歴のコンテキスト管理を担当
@@ -363,11 +369,12 @@ class MemoryManager:
         try:
             response = await self.llm.chat(
                 [{"role": "user", "content": prompt}],
+                response_model=SummaryResponse,
                 max_tokens=150,
                 temperature=0.3
             )
             
-            summary_text = response.get("summary", "（要約失敗）")
+            summary_text = response.summary
             
             return {
                 "role": "assistant",
@@ -455,10 +462,11 @@ class MemoryManager:
         try:
             response = await self.llm.chat(
                 [{"role": "user", "content": prompt}],
+                response_model=SummaryResponse,
                 max_tokens=300,
                 temperature=0.3
             )
-            summary_text = response.get("summary", "（要約失敗）")
+            summary_text = response.summary
             return {
                 "role": "system",
                 "content": (
