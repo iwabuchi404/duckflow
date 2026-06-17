@@ -7,6 +7,7 @@ from rich.theme import Theme
 from rich.live import Live
 from rich.text import Text
 from rich.rule import Rule
+from rich.markup import escape
 import time
 import sys
 
@@ -118,7 +119,7 @@ class DuckUI:
     def add_log(self, message: str):
         """Add system log. In full mode, print them directly."""
         if self.show_full_logs:
-            self.console.print(f"  [log]LOG: {message}[/log]")
+            self.console.print(f"  [log]LOG: {escape(message)}[/log]")
         # Even if not shown, we could buffer it for later or just ignore
 
     def print_welcome(self):
@@ -133,43 +134,43 @@ class DuckUI:
         self.console.print(Rule(style="duck"))
 
     def print_system(self, message: str):
-        self.console.print(f"ℹ️ [info]{message}[/info]")
+        self.console.print(f"ℹ️ [info]{escape(message)}[/info]")
 
     def print_user(self, message: str):
-        self.console.print(f"\n[user]👤 You:[/user] {message}")
+        self.console.print(f"\n[user]👤 You:[/user] {escape(message)}")
 
     def print_thinking(self, thought: str):
         self.console.print(f"\n[duck]🦆 Thinking...[/duck]")
         if thought:
-            self.console.print(f"  [thought]{thought}[/thought]")
+            self.console.print(f"  [thought]{escape(thought)}[/thought]")
 
     def print_action(self, action_name: str, params: Dict[str, Any], thought: str):
         param_str = ", ".join([f"{k}={v}" for k, v in params.items()])
         # If not in full mode, truncate long params
         if not self.show_full_logs and len(param_str) > 100:
             param_str = param_str[:97] + "..."
-            
-        self.console.print(f"\n[action]⚡ Action:[/action] [tool]{action_name}[/tool] [dim]({param_str})[/dim]")
+
+        self.console.print(f"\n[action]⚡ Action:[/action] [tool]{escape(action_name)}[/tool] [dim]({escape(param_str)})[/dim]")
         if thought:
-            self.console.print(f"   [thought]Reason: {thought}[/thought]")
+            self.console.print(f"   [thought]Reason: {escape(thought)}[/thought]")
 
     def print_result(self, result: str, is_error: bool = False):
         style = "error" if is_error else "success"
         icon = "❌" if is_error else "✅"
         content = str(result)
-        
+
         self.console.print(f"   {icon} [bold]{style.upper()}[/bold]: ", end="")
         lines = content.splitlines()
-        
+
         # Increased threshold for non-verbose mode to avoid cutting off meaningful code
         line_threshold = 20 if not self.show_full_logs else 10000
-        
+
         if len(lines) > line_threshold and not self.show_full_logs:
             # Abbreviated mode
             self.console.print()
             for line in lines[:line_threshold]:
-                self.console.print(f"     [dim]{line}[/dim]")
-            
+                self.console.print(f"     [dim]{escape(line)}[/dim]")
+
             remaining = len(lines) - line_threshold
             self.console.print(f"     [bold yellow]... ({remaining} more lines hidden. Press 'v' to toggle full logs)[/bold yellow]")
         else:
@@ -177,9 +178,9 @@ class DuckUI:
             if len(lines) > 1:
                 self.console.print()
                 for line in lines:
-                    self.console.print(f"     [dim]{line}[/dim]")
+                    self.console.print(f"     [dim]{escape(line)}[/dim]")
             else:
-                self.console.print(f"[dim]{content}[/dim]")
+                self.console.print(f"[dim]{escape(content)}[/dim]")
 
     def print_vitals(self, vitals: Any, loop_count: int, max_loops: int):
         self.vitals_data = vitals
@@ -189,16 +190,16 @@ class DuckUI:
             self.live.update(self._make_status_line())
 
     def print_error(self, message: str):
-        self.console.print(f"[error]❌ Error: {message}[/error]")
+        self.console.print(f"[error]❌ Error: {escape(message)}[/error]")
 
     def print_info(self, message: str):
-        self.console.print(f"[info]ℹ️ {message}[/info]")
+        self.console.print(f"[info]ℹ️ {escape(message)}[/info]")
 
     def print_warning(self, message: str):
-        self.console.print(f"[warning]⚠️  {message}[/warning]")
+        self.console.print(f"[warning]⚠️  {escape(message)}[/warning]")
 
     def print_success(self, message: str):
-        self.console.print(f"[success]✅ {message}[/success]")
+        self.console.print(f"[success]✅ {escape(message)}[/success]")
 
     def print_token_usage(self, stats: Dict[str, Any]):
         total = stats.get("total_tokens", 0)
@@ -212,7 +213,7 @@ class DuckUI:
         was_live = self.live is not None
         if was_live: self.stop_live()
         from rich.prompt import Prompt
-        res = Prompt.ask(f"[warning]⚠️  {message} [y/n][/warning]", console=self.console)
+        res = Prompt.ask(f"[warning]⚠️  {escape(message)} [y/n][/warning]", console=self.console)
         if was_live: self.start_live()
         return res.lower().strip() in ["y", "yes"]
 
@@ -250,9 +251,9 @@ class DuckUI:
 
     def print_conversation_message(self, message: str, speaker: str = "user"):
         if speaker == "user":
-            self.console.print(f"\n[user]👤 User:[/user] {message}")
+            self.console.print(f"\n[user]👤 User:[/user] {escape(message)}")
         else:
-            self.console.print(f"\n[success]🦆 Assistant:[/success]\n{message}")
+            self.console.print(f"\n[success]🦆 Assistant:[/success]\n{escape(message)}")
 
     def print_separator(self):
         self.console.print(Rule(style="dim"))

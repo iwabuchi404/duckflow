@@ -148,7 +148,7 @@ class SubLLMTools:
             logger.info(f"Code generated successfully (length: {len(generated_code)} chars)")
 
             # 4. Preview and Confirm
-            ui.print_info(f"🛠️ Code generation for [bold]{path}[/bold]")
+            ui.print_info(f"🛠️ Code generation for {path}")
             ui.print_code(generated_code, language=self._guess_language(path))
 
             logger.info("Waiting for user confirmation...")

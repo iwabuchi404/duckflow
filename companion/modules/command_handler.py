@@ -4,6 +4,7 @@ import json
 from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.markup import escape
 
 from companion.config.config_loader import config
 from companion.ui import ui
@@ -351,9 +352,9 @@ class CommandHandler:
             
             info_text = f"""
             [bold]Current Model Configuration:[/bold]
-            Provider: [cyan]{current_provider}[/cyan]
-            Model: [cyan]{current_model}[/cyan]
-            Base URL: [cyan]{self.agent.llm.base_url or 'default'}[/cyan]
+            Provider: [cyan]{escape(str(current_provider))}[/cyan]
+            Model: [cyan]{escape(str(current_model))}[/cyan]
+            Base URL: [cyan]{escape(str(self.agent.llm.base_url or 'default'))}[/cyan]
             """
             
             if hasattr(ui, 'console'):

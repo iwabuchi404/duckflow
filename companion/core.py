@@ -229,6 +229,8 @@ class DuckAgent:
         "planning": {
             # ファイル読み取り
             "read_file", "list_directory", "find_files", "grep_files",
+            # ファイル編集（finish_investigation 後すぐに修正へ移れるよう開放）
+            "edit_file", "write_file", "delete_lines", "delete_file",
             # 分析
             "analyze_structure",
             # 実行
@@ -1022,7 +1024,7 @@ class DuckAgent:
         if self.state.investigation_state:
             inv = self.state.investigation_state
             status_lines.append("### Investigation Mode")
-            status_lines.append(f"  - Hypotheses: {inv.hypothesis_attempts}/2")
+            status_lines.append(f"  - Hypotheses: {inv.hypothesis_attempts}/5")
             status_lines.append(f"  - OODA Cycles: {inv.ooda_cycle}")
             status_lines.append(f"  - Observations: {len(inv.observations)}")
             if inv.hypothesis:
@@ -1062,7 +1064,7 @@ class DuckAgent:
         Returns:
             コマンドの stdout/stderr 出力、またはユーザー拒否時のエラーメッセージ
         """
-        ui.print_warning(f"⚠️  Permission requested to run: [bold]{command}[/bold]")
+        ui.print_warning(f"Permission requested to run: {command}")
         
         confirmed = ui.request_confirmation(f"Execute this command?")
         
@@ -1198,7 +1200,7 @@ class DuckAgent:
         Returns:
             仮説の登録確認と残り試行回数を含むメッセージ
         """
-        MAX_HYPOTHESIS_ATTEMPTS = 2
+        MAX_HYPOTHESIS_ATTEMPTS = 5
 
         if self.state.investigation_state is None:
             # Investigationモードでなければ自動的に遷移
@@ -1256,7 +1258,9 @@ class DuckAgent:
         return (
             f"Investigation complete after {obs_count} observations. "
             f"Conclusion: {conclusion}. "
-            "Now switched to Planning Mode. Use propose_plan to plan the fix."
+            "Now switched to Planning Mode. "
+            "You can now directly apply fixes with ::edit_file / ::write_file, "
+            "or create a structured plan with ::propose_plan if the fix requires multiple steps."
         )
 
     async def action_execute_batch(self, **kwargs) -> str:

@@ -8,6 +8,27 @@
 
 ## 📅 更新履歴
 
+### 2026-06-17: Rich markup によるクラッシュ修正（[TOOL_RESULT] エンベロープ誤判定）
+- 症状: 特定の指示でアプリが `rich.errors.MarkupError: closing tag '[/TOOL_RESULT]' at position N doesn't match any open tag` でクラッシュ。
+- 原因: `companion/ui/console.py` の `print_error`/`print_warning`/`print_info`/`print_system`/`print_user`/`print_thinking`/`print_action`/`print_result`/`add_log`/`request_confirmation` が、ツール結果やLLM応答など動的な文字列を `console.print(f"[style]{message}[/style]")` のように markup 有効のまま埋め込んでいた。`companion/tools/results.py` の `[TOOL_RESULT]`/`[/TOOL_RESULT]` エンベロープ文字列がエラーメッセージ等に含まれると、Rich がこれを「対応する開始タグの無い閉じタグ」として誤判定し例外を送出していた（内部識別タグがUI表示層で“判定”されてしまう問題）。
+- 修正: `rich.markup.escape()` を import し、上記メソッドの動的部分を全て `escape(...)` でラップ。スタイルタグ自体（`[info]` 等の静的部分）はそのまま維持し、ユーザー/ツール由来の可変文字列のみエスケープする方針。
+- 追加調査: `Panel(plain_str)` も同様に文字列を markup 解釈することを実機確認（`rich.errors.MarkupError` 再現）。同様のパターンを横断調査し、以下も修正:
+  - `companion/ui/console.py`: `print_conversation_message`（セッション復元時の会話表示、および実際のAI応答表示 `core.py:968` で使用。型ヒント表記 `Dict[str, Any]` 等、ツール結果に限らず任意の角括弧でクラッシュしうる経路だったため対応）。
+  - `companion/modules/command_handler.py`: `/model current` の `info_text`（`Panel(info_text, ...)` に平文字列を渡しており、provider/model/base_url の値に角括弧が含まれるとクラッシュしうる）。`escape()` 追加。
+  - `companion/core.py` (`action_run_command`) / `companion/tools/sub_llm_tools.py`: 呼び出し側で `[bold]...[/bold]` を独自に埋め込んでいた箇所は、`print_*` 側で全文エスケープされるようになり装飾が無効化（表示崩れ）するため、埋め込みタグを除去してクリーンな文字列に整理（クラッシュではなく見た目の整合性のため）。
+- テスト新規: `tests/test_console_markup_escape.py`（6件）。`[TOOL_RESULT]`/`[/TOOL_RESULT]` を含む文字列を各表示メソッドに渡しても例外が出ないことを検証。
+- 検証: `uv run pytest tests/ -v` で 113件パス（既存107+新規6） / 既知の `tests/test_hashline.py` 10件失敗のみ。新規リグレッションなし。
+
+### 2026-06-17: モード遷移修正の再適用（ドキュメント連動）
+- 経緯: 2026-06-16付「Duckflow自己修正差分の仕上げ」で、仮説上限5回化・planningモードでの編集ツール開放が「現行仕様に戻す」として元の挙動（仮説2回・編集はtaskモードのみ）にリバートされていた。原因は `CLAUDE.md` 側（§3 3モード制）の記述がコード変更時に未更新のままだったこと（仕様書を正として参照する自己修正により、コード側が仕様書に合わせて巻き戻された）と判断。ユーザー確認の上、コードとドキュメントを揃えて再修正。
+- `companion/core.py`:
+  - `MODE_TOOL_MAPPING["planning"]` に `edit_file` / `write_file` / `delete_lines` / `delete_file` を再度追加。
+  - `action_submit_hypothesis` の `MAX_HYPOTHESIS_ATTEMPTS` を 2 → 5 に再変更。ステータス表示（`Hypotheses: n/5`）も追従。
+  - `action_finish_investigation` の戻りメッセージを「`propose_plan` のみ示唆」から「`edit_file`/`write_file` で直接修正可、複数手順が必要なら `propose_plan`」に再変更。
+- `D:\work\duckflow\CLAUDE.md`（§3 3モード制）: 「仮説2回失敗」→「仮説5回失敗（2026-06-17改訂、旧仕様は2回）」に更新。Planningモードが編集系ツールを公開する旨を明記し、taskモードとの違い（タスク完了管理・execute_tasks等）を補足。**今後同様の自己修正リバートを防ぐため、コード変更時は本ドキュメントも必ず同時更新すること。**
+- `tests/test_core_mode_mapping.py`: `test_planning_mode_does_not_expose_edit_tools`（旧仕様固定用に追加されていたテスト）を `test_planning_mode_exposes_edit_tools` に書き換え、新仕様（planningモードが編集ツールのスーパーセットを含むこと）を検証するよう変更。
+- 検証: `uv run pytest tests/ -v` で 107件パス / 10件失敗（すべて既知の `tests/test_hashline.py`）。新規リグレッションなし。
+
 ### 2026-06-17: マルチターン文脈維持 Phase 1（推論・アクション履歴の保存）
 - 背景: `docs/plans/multi_turn_context_fix_plan.md` をレビュー（Phase2/3は前提が現状と食い違い・既に解消済みのため見送り、Phase5は対象箇所が計画記載の4件ではなく9件あることを確認、Phase4は範囲を過大記載と判定）。今回はユーザー承認のもと最優先の Phase 1 のみ実装。
 - `companion/core.py`: `execute_actions` の末尾（`return results` 直前）で、LLMの `reasoning` と実行したアクション一覧を `"assistant"` ロールとして会話履歴に追加するよう変更。新規メソッド `_build_action_summary(action_list: ActionList) -> str` を追加（`>> {reasoning}` と `:: {action.name} @{target}` 形式で整形）。
