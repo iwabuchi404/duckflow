@@ -46,7 +46,7 @@ llm:
     model: google/gemini-2.5-pro
     description: ''
   openrouter:
-    model: google/gemma-4-31b-it:free
+    model: z-ai/glm-5.2
   openai:
     model: gpt-4o-mini
   groq:

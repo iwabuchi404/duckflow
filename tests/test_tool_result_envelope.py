@@ -280,24 +280,35 @@ class TestDuckAgentExecuteActionsEnvelope:
             "execute_actions 後に会話履歴が増えていない"
         )
 
-        # 最後のメッセージを取得
-        last_msg = agent.state.conversation_history[-1]
+        # execute_actions は末尾に「推論+アクション概要」を assistant ロールで
+        # 追加する（multi_turn_context_fix_plan.md Phase 1）。
+        # そのためツール結果メッセージは最後から2番目になる。
+        tool_msg = agent.state.conversation_history[-2]
+        summary_msg = agent.state.conversation_history[-1]
 
-        # role が 'user' であること（ツール結果はユーザーロールで注入される）
-        assert last_msg["role"] == "user", (
-            f"最後のメッセージの role が 'user' ではない: {last_msg['role']}"
+        # ツール結果メッセージの role が 'user' であること（ツール結果はユーザーロールで注入される）
+        assert tool_msg["role"] == "user", (
+            f"ツール結果メッセージの role が 'user' ではない: {tool_msg['role']}"
         )
 
-        content = last_msg["content"]
+        content = tool_msg["content"]
 
         # エンベロープで包まれていること
         assert is_tool_result_message(content), (
-            f"最後のメッセージがエンベロープで包まれていない: {content[:100]}"
+            f"ツール結果メッセージがエンベロープで包まれていない: {content[:100]}"
         )
 
         # 'pong' が含まれていること
         assert "pong" in content, (
             f"ツール結果 'pong' が履歴に含まれていない: {content[:200]}"
+        )
+
+        # 末尾の行動要約メッセージが assistant ロールであること
+        assert summary_msg["role"] == "assistant", (
+            f"行動要約メッセージの role が 'assistant' ではない: {summary_msg['role']}"
+        )
+        assert "ping" in summary_msg["content"], (
+            f"行動要約に実行したアクション名 'ping' が含まれていない: {summary_msg['content'][:200]}"
         )
 
 

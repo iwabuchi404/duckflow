@@ -471,6 +471,14 @@ class DuckAgent:
                                     reasoning=f"Pacemaker intervention (fallback): {intervention.type}"
                                 )
                         else:
+                            # 自律ループ内でも LLM 呼び出し前に pruning を確認する
+                            # （ユーザー入力時のみの pruning では、長大な自律ループで
+                            #   コンテキストが溢れ劣化する問題への対処）
+                            if self.memory_manager.should_prune(self.state.conversation_history):
+                                self.state.conversation_history, _ = await self.memory_manager.prune_history(
+                                    self.state.conversation_history
+                                )
+
                             # Normal LLM call
                             with ui.create_spinner("Thinking..."):
                                 # Prepare messages
@@ -660,7 +668,7 @@ class DuckAgent:
                         "Allowed: read_file, grep_files, list_directory, run_command, "
                         "submit_hypothesis, finish_investigation. "
                         "Call ::finish_investigation @<conclusion> when root cause is confirmed, "
-                        "then apply edits in Planning/Task mode."
+                        "then re-enter Task mode to apply edits."
                     )
                     ui.print_warning(f"Investigation Mode中のファイル変更をブロック: {action.name}")
                     logger.warning(f"Blocked edit action in Investigation Mode: {action.name}")
@@ -674,6 +682,14 @@ class DuckAgent:
                             "then re-enter Task mode to apply edits."
                         ),
                     ))
+                    # ブロック結果を会話履歴に追加してLLMにフィードバックする
+                    blocked_res = ToolResult(
+                        status=ToolStatus.ERROR,
+                        tool_name=action.name,
+                        target=action.parameters.get("path", ""),
+                        content=_blocked_msg,
+                    )
+                    self.state.add_message("user", wrap_tool_result(format_symops_response(blocked_res)))
                     results.append(_blocked_msg)
                     continue
                 # ------------------------------------------------
@@ -874,13 +890,38 @@ class DuckAgent:
             ui.print_warning("Execution interrupted by user.")
             self.state.add_message("user", "[System: Execution was interrupted by the user (Ctrl+C). Please wait for new instructions.]")
             # results might be partial, but that's okay
-        
+
+        # 推論とアクション概要を会話履歴に保存する。
+        # ツール結果のみだと次ターンのLLMが「自分が前回何を考え何を決めたか」を
+        # 参照できず、複数ターンタスクで一貫性を失う問題への対処（multi_turn_context_fix_plan.md Phase 1）。
+        action_summary = self._build_action_summary(action_list)
+        if action_summary:
+            self.state.add_message("assistant", action_summary)
+
         # Update token usage display
         if ui:
             ui.print_token_usage(self.llm.usage_stats)
-            
+
         logger.info("Finished executing actions")
         return results
+
+    def _build_action_summary(self, action_list: ActionList) -> str:
+        """
+        LLMの推論とアクション概要を会話履歴用にフォーマットする。
+
+        Args:
+            action_list: 直前ターンでLLMが生成したActionList
+
+        Returns:
+            "assistant" ロールで履歴に追加する要約テキスト（内容が無ければ空文字）
+        """
+        lines = []
+        if action_list.reasoning:
+            lines.append(f">> {action_list.reasoning}")
+        for action in action_list.actions:
+            target = action.parameters.get("path", action.parameters.get("command", ""))
+            lines.append(f":: {action.name} @{target}" if target else f":: {action.name}")
+        return "\n".join(lines)
 
     # --- No-op (LLMのプロトコル的出力を吸収) ---
 
@@ -1157,6 +1198,8 @@ class DuckAgent:
         Returns:
             仮説の登録確認と残り試行回数を含むメッセージ
         """
+        MAX_HYPOTHESIS_ATTEMPTS = 2
+
         if self.state.investigation_state is None:
             # Investigationモードでなければ自動的に遷移
             self.state.enter_investigation_mode()
@@ -1167,10 +1210,23 @@ class DuckAgent:
         inv.ooda_cycle += 1
         inv.observations.append(f"[Hypothesis #{inv.hypothesis_attempts}] {hypothesis}")
 
+        remaining = max(0, MAX_HYPOTHESIS_ATTEMPTS - inv.hypothesis_attempts)
         ui.print_system(
-            f"🔍 仮説 #{inv.hypothesis_attempts}/2 を受け付けました: {hypothesis}"
+            f"🔍 仮説 #{inv.hypothesis_attempts}/{MAX_HYPOTHESIS_ATTEMPTS} を受け付けました: {hypothesis}"
         )
         logger.info(f"Hypothesis #{inv.hypothesis_attempts} submitted: {hypothesis}")
+
+        # 上限到達時は duck_call を強制する。Investigation Mode は維持し、
+        # read-only guard を解除しない。
+        if inv.hypothesis_attempts >= MAX_HYPOTHESIS_ATTEMPTS:
+            logger.warning(f"Hypothesis limit reached ({MAX_HYPOTHESIS_ATTEMPTS}), forcing duck_call")
+            return (
+                f"Hypothesis #{inv.hypothesis_attempts} registered: '{hypothesis}'.\n"
+                f"⚠️ HYPOTHESIS LIMIT REACHED ({MAX_HYPOTHESIS_ATTEMPTS}/{MAX_HYPOTHESIS_ATTEMPTS}). "
+                "You have exhausted the allowed hypothesis attempts without confirming a root cause. "
+                "You MUST call ::duck_call now to ask the user for guidance."
+            )
+
         return (
             f"Hypothesis #{inv.hypothesis_attempts} registered: '{hypothesis}'.\n"
             "━━━ NEXT ACTION REQUIRED ━━━\n"
@@ -1178,7 +1234,7 @@ class DuckAgent:
             "  [Not confirmed yet] Verify with: read_file / grep_files / run_command\n"
             "  [Confirmed]         Close with:  ::finish_investigation @<conclusion>\n"
             "Do NOT call ::edit_file, ::write_file, or ::response until investigation is closed.\n"
-            f"Remaining hypothesis attempts before duck_call: {max(0, 2 - inv.hypothesis_attempts)}"
+            f"Remaining hypothesis attempts before duck_call: {remaining}"
         )
 
     async def action_finish_investigation(self, conclusion: str = "") -> str:

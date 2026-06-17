@@ -66,7 +66,7 @@ class AutoRepair:
             if in_block:
                 # ブロック内は一切変更しない
                 out.append(line)
-                # v3.2: >>> は行頭（column 0）のみブロック終端
+                # v3.2: column 0 の >>> のみブロック終端（末尾空白は許容）
                 if line.rstrip() == '>>>':
                     in_block = False
             elif line.strip() == '<<<':
@@ -242,7 +242,7 @@ class AutoRepair:
                 fixed.append(line)
                 continue
 
-            # v3.2: >>> は行頭（column 0）のみブロック終端として認識する
+            # v3.2: column 0 の >>> のみブロック終端として認識する（末尾空白は許容）
             if line.rstrip() == '>>>':
                 if in_batch_block and in_block:
                     in_batch_block = False
@@ -280,7 +280,7 @@ class AutoRepair:
                 fixed_lines.append(line)
                 continue
 
-            # v3.2: >>> は行頭のみブロック終端として認識（doctest保護）
+            # v3.2: column 0 の >>> のみブロック終端として認識（doctest保護、末尾空白は許容）
             if line.rstrip() == '>>>':
                 in_block = False
                 fixed_lines.append(line)
