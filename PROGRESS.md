@@ -8,6 +8,17 @@
 
 ## 📅 更新履歴
 
+### 2026-06-17: emergency_mode 発生時のLLM通知を追加
+- 背景: 「`MAX_CONSECUTIVE_ERRORS`緩和」「emergency_mode発生時のLLM通知」の2案を比較検討し、前者は1ターン内（execute_actions一回分）のfail-fastで効果が読みにくく逆効果リスクもあるため見送り、後者のみユーザー承認のうえ実装。
+- `companion/modules/memory.py` の `prune_history` は、トークン予算を100%超過し要約を挟まず強制削減した場合 `stats["emergency_mode"] = True` を返すが、呼び出し側2箇所が握り潰していた:
+  - `companion/core.py`（自律ループ内pruning、L479-482）: 戻り値の stats を `_` で破棄。
+  - `companion/state/agent_state.py`（`add_message_with_pruning`、L191-198）: stats は受け取るが `pass` で何もしていなかった。
+  - → 文脈が要約なしで突然削られても、LLMには一切知らされず、Phase 1で追加した推論履歴自体が予告なく消えうる経路が残っていた。
+- 修正: 両呼び出し箇所で `stats.get("emergency_mode")` を確認し、True の場合は `[SYSTEM] 緊急メモリ整理を実行しました（要約なしで{removed_count}件の古いメッセージを削除）。直前までの文脈の一部が失われている可能性があります。タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。` を `"user"` ロールで会話履歴に追加するよう変更。
+- テスト新規: `tests/test_emergency_mode_notification.py`（2件）。`add_message_with_pruning` が emergency_mode 時に通知メッセージを追加すること／通常時は追加しないことを検証。
+- 検証: `uv run pytest tests/ -v` で 115件パス（既存113+新規2） / 既知の `tests/test_hashline.py` 10件失敗のみ。新規リグレッションなし。
+- 見送り: `MAX_CONSECUTIVE_ERRORS=2` の緩和（理由は上記）。
+
 ### 2026-06-17: Rich markup によるクラッシュ修正（[TOOL_RESULT] エンベロープ誤判定）
 - 症状: 特定の指示でアプリが `rich.errors.MarkupError: closing tag '[/TOOL_RESULT]' at position N doesn't match any open tag` でクラッシュ。
 - 原因: `companion/ui/console.py` の `print_error`/`print_warning`/`print_info`/`print_system`/`print_user`/`print_thinking`/`print_action`/`print_result`/`add_log`/`request_confirmation` が、ツール結果やLLM応答など動的な文字列を `console.print(f"[style]{message}[/style]")` のように markup 有効のまま埋め込んでいた。`companion/tools/results.py` の `[TOOL_RESULT]`/`[/TOOL_RESULT]` エンベロープ文字列がエラーメッセージ等に含まれると、Rich がこれを「対応する開始タグの無い閉じタグ」として誤判定し例外を送出していた（内部識別タグがUI表示層で“判定”されてしまう問題）。

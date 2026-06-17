@@ -477,9 +477,19 @@ class DuckAgent:
                             # （ユーザー入力時のみの pruning では、長大な自律ループで
                             #   コンテキストが溢れ劣化する問題への対処）
                             if self.memory_manager.should_prune(self.state.conversation_history):
-                                self.state.conversation_history, _ = await self.memory_manager.prune_history(
+                                self.state.conversation_history, prune_stats = await self.memory_manager.prune_history(
                                     self.state.conversation_history
                                 )
+                                if prune_stats.get("emergency_mode"):
+                                    # 緊急モードは要約を挟まず強制削減するため、LLMに
+                                    # 文脈欠落の可能性を明示しないと気づけずに進行してしまう
+                                    removed = prune_stats.get("removed_count", 0)
+                                    self.state.add_message(
+                                        "user",
+                                        f"[SYSTEM] 緊急メモリ整理を実行しました（要約なしで{removed}件の古いメッセージを削除）。"
+                                        "直前までの文脈の一部が失われている可能性があります。"
+                                        "タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。"
+                                    )
 
                             # Normal LLM call
                             with ui.create_spinner("Thinking..."):
