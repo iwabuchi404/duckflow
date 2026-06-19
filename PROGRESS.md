@@ -8,6 +8,28 @@
 
 ## 📅 更新履歴
 
+### 2026-06-20: test_hashline.py の陳腐化解消
+- `tests/test_hashline.py` を現行仕様に合わせて全面整理。`HashlineHelper` の低レベルな hash anchor 単体テストは維持しつつ、`FileOps` 統合テストは廃止済みの anchor edit 前提から、現在の `read_file` 行番号表示（`行番号|内容`）、`edit_file` SEARCH/REPLACE マーカー形式、`delete_lines` find スニペット指定へ更新。
+- 旧期待値（`Successfully edited` + anchor context / `Hash mismatch` / `anchors` エラー等）を、現行実装の `find_not_matched`、`No 'find' snippet`、`--- Updated Context ---` に合わせて修正。
+- 検証: `uv run pytest tests/test_hashline.py -v` で18件パス。`uv run pytest tests/ -v` で137件すべてパス。既知失敗なし。
+
+### 2026-06-18: grep_files の不安定さ（YAML誤判定・.pycノイズ）を修正
+- ユーザー報告: 「grepツールの不安定さ: パラメータエラーや.pycノイズで検証ループが止まらなくなった。`include="*.py"`」「検証ループの暴走: grep結果が期待と違う時に同じアクションを繰り返してしまった」。
+- 根本原因（パラメータエラー）: `companion/utils/sym_ops.py` の `_extract_yaml_frontmatter()` は、YAMLフロントマターを `yaml.safe_load()` でパースしている。`include: *.py` のように glob パターンを引用符なしで書くと、PyYAML が先頭の `*` を**エイリアス参照**（`&anchor` の再利用）構文と誤解釈し `yaml.YAMLError` を送出する。実機検証で確認:
+  ```
+  yaml.safe_load("pattern: \"TODO\"\ninclude: *.py\npath: \"companion\"")
+  → YAMLError: while scanning an alias ... expected alphabetic or numeric character, but found '.'
+  ```
+  さらに従来の例外処理は `except yaml.YAMLError: return {}, content` と**全パラメータを握りつぶす**実装だったため、`include` だけでなく `pattern`/`path` まで丸ごと消失し、`grep_files` がデフォルト引数（`include='*'`, `path='.'` 等）で実行されていた。
+- 根本原因（.pycノイズ）: 上記によりパラメータが消失すると `include` がデフォルトの `'*'` にフォールバックし全ファイルが対象になる。`find_files`/`grep_files`（`companion/tools/file_ops.py`）のディレクトリ走査は従来ドット始まり（`.git` 等）のみを除外しており、`__pycache__` や `node_modules` は除外対象外だったため、`.pyc` バイナリが `errors='ignore'` でテキストとして開かれ文字化けノイズがマッチ結果に混入していた。
+- 修正:
+  1. `_extract_yaml_frontmatter()` に `_quote_unquoted_glob_values()` を追加し、`yaml.safe_load()` に渡す前に `*` で始まる未クォート値を自動的にダブルクォートで囲んで事前修正（典型ミスの救済）。
+  2. それでも未知のYAML構文エラーが残る場合に備え、全損ではなく `_fallback_parse_key_value_lines()` による行単位の `key: value` 抽出フォールバックを追加（部分的にでもパラメータを救済）。
+  3. `companion/tools/file_ops.py` に `NOISE_DIR_NAMES`（`__pycache__`, `node_modules`, `dist`, `build`, `egg-info`）と `*.egg-info` の suffix 判定を追加し、`find_files`/`grep_files` 両方のディレクトリ走査で除外（`include` のパース結果に関わらない多層防御）。
+- 検証ループの暴走について: `companion/modules/pacemaker.py` の `DuckPacemaker._detect_stagnation()` に、直近4アクションの完全一致（アクション名＋パラメータ、または結果文字列）を検知して `STAGNATION` 介入（LLMに状況説明をさせ `::response` でユーザーに選択肢を提示）を行う仕組みが既に実装されており、`core.py` の自律ループからも正しく呼び出されている（`check_health()` を毎ループLLM呼び出し前に実行）。今回のYAMLバグにより `grep_files` 呼び出しのたびに実際に渡る `parameters` が「成功時はそのまま／失敗時はデフォルトにフォールバック」と**揺れていた**ため、`_detect_stagnation()` の厳密な完全一致判定が同一試行とみなせず、既存の暴走防止機構が機能していなかった可能性が高いと判断。新規のコード追加はせず、まずは根本原因（パラメータの不安定なパース）の修正で様子を見る方針（過剰実装回避）。再発する場合は別途相談。
+- テスト新規: `tests/test_yaml_frontmatter_glob.py`（5件: 未クォートglob救済、クォート済み回帰防止、別拡張子、フォールバック部分救済、フロントマターなし回帰防止）、`tests/test_file_ops_noise_dirs.py`（7件: `__pycache__`/`node_modules`/`*.egg-info` 除外、通常ファイルは引き続き検出される回帰防止）。
+- 検証: 関連39件パス。`uv run pytest tests/ -v` で127件パス / 既知の `tests/test_hashline.py` 10件失敗のみ。
+
 ### 2026-06-17: emergency_mode 発生時のLLM通知を追加
 - 背景: 「`MAX_CONSECUTIVE_ERRORS`緩和」「emergency_mode発生時のLLM通知」の2案を比較検討し、前者は1ターン内（execute_actions一回分）のfail-fastで効果が読みにくく逆効果リスクもあるため見送り、後者のみユーザー承認のうえ実装。
 - `companion/modules/memory.py` の `prune_history` は、トークン予算を100%超過し要約を挟まず強制削減した場合 `stats["emergency_mode"] = True` を返すが、呼び出し側2箇所が握り潰していた:

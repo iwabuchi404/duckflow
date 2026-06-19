@@ -6,6 +6,27 @@ from pathlib import Path
 import yaml
 from .hashline import HashlineHelper
 
+# find_files / grep_files のディレクトリ走査で除外するノイズディレクトリ。
+# ドット始まり（.git, .venv 等）以外にも、ビルド成果物やキャッシュ等
+# テキスト検索の対象として無意味、かつ .pyc のようなバイナリノイズの
+# 発生源になるディレクトリ名を明示的に除外する。
+NOISE_DIR_NAMES = frozenset({
+    '__pycache__', 'node_modules', 'dist', 'build', 'egg-info',
+})
+
+
+def _is_noise_dir_name(name: str) -> bool:
+    """Return whether a directory name should be skipped during file search.
+
+    Args:
+        name: Directory name to check.
+
+    Returns:
+        True when the directory is a known cache/build artifact directory.
+    """
+    return name in NOISE_DIR_NAMES or name.endswith('.egg-info')
+
+
 class FileOps:
     """
     File Operations with Duck Keeper Safety.
@@ -966,8 +987,8 @@ class FileOps:
 
             try:
                 for item in directory.iterdir():
-                    # Skip hidden files/dirs
-                    if item.name.startswith("."):
+                    # Skip hidden files/dirs and known noise directories
+                    if item.name.startswith(".") or _is_noise_dir_name(item.name):
                         continue
 
                     # Check if it's within workspace
@@ -1046,7 +1067,7 @@ class FileOps:
                     return
                 try:
                     for item in sorted(directory.iterdir(), key=lambda x: x.name):
-                        if item.name.startswith('.'):
+                        if item.name.startswith('.') or _is_noise_dir_name(item.name):
                             continue
                         if item.is_file() and fnmatch(item.name, include):
                             try:

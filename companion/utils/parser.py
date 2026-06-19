@@ -101,7 +101,7 @@ class DuckflowParser:
                     continue
                 
                 # Check for content end
-                if line.strip() == '>>>':
+                if line.rstrip() == '>>>':
                     if current_action_data:
                         content = '\n'.join(content_buffer)
                         # Extract YAML front matter if present

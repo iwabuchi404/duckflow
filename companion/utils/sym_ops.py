@@ -463,6 +463,12 @@ class FuzzyParser:
         yaml_text = '\n'.join(lines[start + 1:end])
         remaining = '\n'.join(lines[end + 1:]).lstrip('\n')
 
+        # よくあるミス: include: *.py のように glob パターンを引用符なしで書くと、
+        # YAML は先頭の '*' をエイリアス参照（&anchor の再利用）構文と誤解釈し、
+        # フロントマター全体のパースが失敗してしまう。値が '*' で始まる未クォート行を
+        # 事前にクォートしてから渡すことで、この典型ミスだけは救済する。
+        yaml_text = self._quote_unquoted_glob_values(yaml_text)
+
         try:
             parsed = yaml.safe_load(yaml_text)
             if not isinstance(parsed, dict):
@@ -471,8 +477,55 @@ class FuzzyParser:
             params = {k: str(v) if v is not None else '' for k, v in parsed.items()}
             return params, remaining
         except yaml.YAMLError:
-            # YAMLパースエラーはフロントマターなし扱いにしてエラーを出さない
+            # 上記の事前修正でも解決しない未知のYAML構文エラーの場合、従来は
+            # 全パラメータを握りつぶしていたが、それだと "include: *.py" のような
+            # 1行のミスでパス指定や検索パターンまで丸ごと失われてしまう。
+            # 行単位の "key: value" 抽出によるフォールバックで部分的にでも救済する。
+            fallback_params = self._fallback_parse_key_value_lines(yaml_text)
+            if fallback_params:
+                return fallback_params, remaining
             return {}, content
+
+    def _quote_unquoted_glob_values(self, yaml_text: str) -> str:
+        """
+        YAMLフロントマターの各行を調べ、値が '*' から始まり引用符で
+        囲まれていないものを自動的にダブルクォートで囲む。
+
+        Args:
+            yaml_text: フロントマターのYAML本文
+
+        Returns:
+            '*' 始まりの未クォート値をクォートしたYAML本文
+        """
+        pattern = re.compile(r'^(\s*[\w\-]+\s*:\s*)\*(\S.*)$')
+        fixed_lines = []
+        for line in yaml_text.split('\n'):
+            m = pattern.match(line)
+            fixed_lines.append(f'{m.group(1)}"*{m.group(2)}"' if m else line)
+        return '\n'.join(fixed_lines)
+
+    def _fallback_parse_key_value_lines(self, yaml_text: str) -> dict:
+        """
+        YAML全体としてのパースに失敗した場合の最終手段。
+        単純な "key: value" 形式の行のみを正規表現で抽出する。
+
+        Args:
+            yaml_text: フロントマターのYAML本文
+
+        Returns:
+            抽出できた key-value のみを含む辞書（不正な行は無視される）
+        """
+        params: Dict[str, str] = {}
+        line_pattern = re.compile(r'^\s*([\w\-]+)\s*:\s*(.+?)\s*$')
+        for line in yaml_text.split('\n'):
+            m = line_pattern.match(line)
+            if not m:
+                continue
+            key, value = m.groups()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+                value = value[1:-1]
+            params[key] = value
+        return params
 
     def _extract_line_params(self, raw_path: str) -> tuple[str, dict]:
         """
