@@ -9,7 +9,7 @@ from companion.base.llm_client import LLMClient
 from companion.execution.result_summarizer import ExecutionSummary
 from companion.execution.task_executor import TaskExecutor
 from companion.modules.memory import SummaryResponse
-from companion.state.agent_state import Action, AgentState, Task
+from companion.state.agent_state import Action, ActionList, AgentState, Task
 from companion.tools.sub_llm_tools import SubLLMTools
 from companion.tools.task_tool import TaskListProposal
 
@@ -40,6 +40,25 @@ def test_llm_client_respects_non_action_response_model() -> None:
     assert summary_result.summary == "done"
     assert isinstance(memory_result, SummaryResponse)
     assert memory_result.summary == "important context"
+
+
+def test_llm_client_treats_action_list_as_internal_symops_model() -> None:
+    """
+    response_model=ActionList should parse the main-agent Sym-Ops protocol,
+    not require a JSON ActionList payload.
+    """
+    client = LLMClient(api_key="dummy")
+
+    result = client._parse_response(
+        ">> read the file\n::read_file @README.md\n::c0.8 ::s1.0",
+        ActionList,
+    )
+
+    assert isinstance(result, ActionList)
+    assert result.reasoning == "read the file"
+    assert result.actions[0].name == "read_file"
+    assert result.actions[0].parameters["path"] == "README.md"
+    assert result.vitals["confidence"] == 0.8
 
 
 def test_task_executor_requires_confirmation_handles_no_action() -> None:

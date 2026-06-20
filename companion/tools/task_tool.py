@@ -46,13 +46,14 @@ class TaskTool:
         ui.print_thinking(f"Planning: Generating tasks for step '{current_step.title}'...")
 
         prompt = f"""
-        # Sym-Ops v3.2: Task Generation Context
+        # Structured Task Generation Context
         Current Goal: {self.state.current_plan.goal}
         Current Step: {current_step.title}
         Step Description: {current_step.description}
         
         Please break this step down into small, actionable tasks.
-        Use Sym-Ops v3.2 thinking: evaluate confidence (::c) and safety (::s) for each task.
+        Consider confidence and safety when choosing task boundaries, but do
+        not emit Sym-Ops actions in this response.
         
         Return a JSON object with a list of tasks.
         Each task MUST have a 'title' and 'description'.

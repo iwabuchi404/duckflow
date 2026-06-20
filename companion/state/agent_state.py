@@ -128,7 +128,7 @@ class Action(BaseModel):
     thought: str = Field(default="", description="このアクションを選んだ理由")
 
 class ActionList(BaseModel):
-    """LLMの出力全体"""
+    """Internal action container produced from parsed main-agent Sym-Ops output."""
     actions: List[Action]
     reasoning: str = Field(..., description="全体的な思考プロセス")
     vitals: Optional[Dict[str, float]] = Field(default=None, description="アヒルのバイタル情報")

@@ -8,6 +8,15 @@
 
 ## 📅 更新履歴
 
+### 2026-06-20: ActionList/Sym-Ops プロトコル境界の命名整理
+- `companion/base/llm_client.py`: `LLMClient` の docstring と `_parse_response()` 説明を更新。メインエージェント呼び出しは Sym-Ops テキストを外部プロトコルとして受け取り、内部実行モデル `ActionList` へ変換すること、`TaskListProposal` / `ExecutionSummary` / `SummaryResponse` など非 `ActionList` の `response_model` だけが JSON/Pydantic 構造化レスポンスであることを明記。
+- `companion/state/agent_state.py`: `ActionList` を「LLM JSON 出力」ではなく「Sym-Ops parse 後の内部アクションコンテナ」として説明を更新。
+- `companion/tools/task_tool.py`: `generate_tasks()` の補助LLMプロンプトから Sym-Ops 出力を連想させる文言を削り、JSON task proposal としての境界を明確化。
+- `AGENTS.md` / `CLAUDE.md`: 「JSON `ActionList` と Sym-Ops の二重プロトコル併存」という古い表現を、外部 Sym-Ops / 内部 `ActionList` / 補助 JSON の境界説明へ更新。旧資料に残る JSON `ActionList` 前提は実コード優先で確認する注意に差し替え。
+- 未収集だった `tests/verify_task_tool_symops.py` を `tests/test_task_tool_symops.py` に変換し、`TaskTool.generate_tasks()` が補助 JSON 経路を使い、戻り値を Sym-Ops tool result として整形できることを assertion ベースで検証。
+- `tests/test_priority_fixes.py`: `response_model=ActionList` が JSON ではなく Sym-Ops を parse する境界テストを追加。
+- 検証: `uv run pytest tests/test_priority_fixes.py tests/test_task_tool_symops.py -v` で6件パス。`uv run pytest tests/ -v` で144件パス / 1件スキップ。
+
 ### 2026-06-20: get_project_tree の workspace safety 修正
 - `companion/tools/get_project_tree.py`: `os.path.abspath(path)` で任意パスを探索できていた実装を、`workspace_root` 基準の `_resolve_within_workspace()` に変更。`..` や絶対パスで workspace 外へ出る指定は `Duck Keeper Alert` として拒否する。
 - symlink などの探索中エントリも `resolve()` 後に workspace 内か確認し、外部を指すものはスキップ。`__pycache__` / `node_modules` / `dist` / `build` / `*.egg-info` 等のノイズディレクトリも非表示に統一。

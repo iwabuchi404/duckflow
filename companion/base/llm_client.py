@@ -51,8 +51,11 @@ DEFAULT_CONTEXT_LENGTH = 128_000
 class LLMClient:
     """
     Simplified LLM Client for Duckflow v4.
-    Enforces JSON mode and structured output.
-    Settings are loaded from config/config.yaml.
+
+    Main-agent turns use Sym-Ops text as the external LLM protocol, then
+    convert parsed actions into the internal ActionList model. Non-ActionList
+    response models are reserved for auxiliary structured JSON calls such as
+    task proposals and summaries.
     """
     def __init__(self, 
                  api_key: Optional[str] = None, 
@@ -348,8 +351,14 @@ class LLMClient:
         max_tokens: Optional[int] = None,
     ) -> Union[Dict[str, Any], ActionList, str]:
         """
-        Send messages to LLM and get a JSON response.
-        If response_model is provided, validates and returns that Pydantic model.
+        Send messages to the LLM and parse the response.
+
+        Main-agent calls pass ActionList as the response model. That is an
+        internal action container, not a JSON output contract; the raw LLM text
+        is parsed as Sym-Ops and converted into ActionList. Other response
+        models are treated as structured JSON/Pydantic responses for auxiliary
+        calls.
+
         Supports prompt caching for OpenRouter and Anthropic.
         """
         if self.use_mock:
@@ -576,6 +585,19 @@ class LLMClient:
         params['replace'] = ''
 
     def _parse_response(self, content: str, response_model: Optional[type] = None):
+        """
+        Parse raw LLM text into either an internal action list or JSON model.
+
+        Args:
+            content: Raw LLM response text.
+            response_model: ActionList for main-agent Sym-Ops parsing, another
+                Pydantic model for auxiliary structured JSON parsing, or None
+                to use the main-agent Sym-Ops path.
+
+        Returns:
+            ActionList for the main-agent path, or an instance of response_model
+            for auxiliary structured calls.
+        """
         if not content:
             logger.error(f"Empty response from LLM. Content type: {type(content)}, Content value: {repr(content)}")
             raise ValueError("Empty response from LLM")

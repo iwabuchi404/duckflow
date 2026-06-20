@@ -45,12 +45,12 @@ Duckflowは、開発者のローカル環境で動作する対話型AIコーデ�
 ### Think-Decide-Execute ループ
 中心は `companion/core.py` の `DuckAgent`。
 
-1. **Think & Decide:** `PromptBuilder` が AgentState からプロンプトを構築（プロンプトキャッシュ最適化のため「静的プロトコル → モード別ツール説明 → Few-shot例 → 動的状態」の順に階層化）。LLMが `ActionList`（reasoning + actions + vitals）を返す。
+1. **Think & Decide:** `PromptBuilder` が AgentState からプロンプトを構築（プロンプトキャッシュ最適化のため「静的プロトコル → モード別ツール説明 → Few-shot例 → 動的状態」の順に階層化）。LLM は外部プロトコルとして Sym-Ops テキストを返し、`LLMClient` が内部実行モデル `ActionList`（reasoning + actions + vitals）へ変換する。
 2. **Execute:** `execute_actions()` がアクションを順次実行。`response`・`exit`・`duck_call` でユーザーに制御を返し、それ以外は自律ループを継続。
 3. ターン完了ごとに `SessionManager` がセッションを自動保存。
 
 ### Sym-Ops プロトコル（v3.2）
-LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテンツブロック、YAMLフロントマター引数、`::c/s/m/f` バイタル表記からなる。`companion/utils/sym_ops.py` の `SymOpsProcessor` が「前処理 → AutoRepair（典型ミスの自動修復）→ パース」のパイプラインで処理する。
+LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテンツブロック、YAMLフロントマター引数、`::c/s/m/f` バイタル表記からなる。`companion/utils/sym_ops.py` の `SymOpsProcessor` が「前処理 → AutoRepair（典型ミスの自動修復）→ パース」のパイプラインで処理する。`ActionList` は JSON 出力契約ではなく、Sym-Ops から変換された内部アクションコンテナである。
 
 ### 3モード制
 `AgentMode`（planning / investigation / task）ごとに公開ツールが異なる（`core.py` の `MODE_TOOL_MAPPING`）。**Investigation モードは read-only 強制**で、ファイル編集系アクションはブロックされる。仮説5回失敗で duck_call（ユーザー相談）を強制（2026-06-17改訂、旧仕様は2回）。Planning モードは `finish_investigation` 後すぐに修正へ移れるよう編集系ツール（`edit_file`/`write_file`/`delete_lines`/`delete_file`）を公開する（task モードと併存。task モードはタスク完了管理・execute_tasks 等が追加で使える点が異なる）。
@@ -77,7 +77,7 @@ LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテン
 `MemoryManager`（`companion/modules/memory.py`）がモデルのコンテキスト長から履歴予算を動的設定（約60%を履歴に、8K〜200Kでクランプ）。使用率80%超で重要度スコアリングによる pruning を行い、削除分は ArchiveStorage に保存（`search_archives` / `recall` ツールで検索可能）。
 
 ### LLMクライアント
-`companion/base/llm_client.py`。OpenAI SDK互換APIで openai / anthropic / google / groq / openrouter を統一的に扱う。コンテキスト長はAPI取得失敗時にフォールバックテーブルを参照。`/model` コマンドによる切替は `duckflow.yaml` に永続化される。
+`companion/base/llm_client.py`。OpenAI SDK互換APIで openai / anthropic / google / groq / openrouter を統一的に扱う。メインエージェント呼び出しは Sym-Ops を `ActionList` へ変換し、`TaskListProposal` / `ExecutionSummary` / `SummaryResponse` などの補助呼び出しのみ JSON/Pydantic 構造化レスポンスとして扱う。コンテキスト長はAPI取得失敗時にフォールバックテーブルを参照。`/model` コマンドによる切替は `duckflow.yaml` に永続化される。
 
 ## 4. ディレクトリ構成（実態）
 
@@ -157,7 +157,7 @@ uv run ruff check companion/
 
 優先度順:
 
-1. **二重プロトコルの併存:** JSON `ActionList` と Sym-Ops テキストの2系統のパース経路がある。Sym-Ops への一本化が望ましい。
+1. **プロトコル境界の混同リスク:** メインエージェントの外部プロトコルは Sym-Ops、内部実行モデルは `ActionList`、補助LLM呼び出しは JSON/Pydantic。境界は整理済みだが、旧資料やコメントには JSON `ActionList` 前提の記述が残る可能性があるため、変更時は実コードを優先して確認する。
 2. **`core.py` の肥大化:** 1,200行超。ツール登録・承認・ループ制御・アクション実装の分離が必要。
 3. **陳腐化したテスト:** `tests/test_hashline.py` の10件が失敗する。edit_file のアンカー方式→find/replace 方式への移行にテストが追従していないため（リグレッションではない）。実装に合わせた書き直しが必要。
 4. **`duckflow.yaml` の `agent:` ネスト不整合**（§7参照）。
@@ -172,10 +172,11 @@ uv run ruff check companion/
 - **エラー修正ガイドが旧アンカー方式を教えていた**（2026-06-13 修正）: `builder.py` / `core.py` のヒントを find/replace 方式に書き換え（`edit_find_mismatch`）。編集失敗時にモデルが収束できない主因だった。
 - **`_sanitize_content` の本文破壊**（2026-06-13 修正）: 本文全体の走査削除をやめ、漏洩が実際に発生する先頭・末尾のみのエッジトリム方式（v2.4）に変更。
 - **pruning がエラーを残しタスク指示を削る逆転**（2026-06-13 修正）: エラー系キーワードの優遇を廃止し、種別ベースのスコアリング（本物のユーザー発言=1.0 > assistant=0.6 > ツール結果=0.15 > エラー結果=0.05）に変更。最初のユーザー指示は予算に関わらず必ず保持。
+- **ActionList JSON と Sym-Ops の二重プロトコル誤解**（2026-06-20 整理）: メインエージェントは Sym-Ops テキストを外部プロトコルとして使い、`LLMClient` が内部モデル `ActionList` へ変換する。JSON/Pydantic は `TaskListProposal` など補助LLM呼び出し専用であり、`ActionList` は JSON 出力契約ではない。
 
 ## 9. ロードマップ
 
-- **Phase 1（完了）:** Think-Decide-Execute ループ、AgentState、ActionList プロトコル
+- **Phase 1（完了）:** Think-Decide-Execute ループ、AgentState、Sym-Ops 外部プロトコルと ActionList 内部モデル
 - **Phase 1.5（完了）:** ファイル操作ツール群、承認システム
 - **Phase 1.6（現在・約85%）:** コード実行機能。残: 実行結果の高度な要約表示
 - **Phase 2（計画）:** 長期記憶（`learnings.md`）、ユーザー好みの自動学習 ※セッション永続化は実装済み
