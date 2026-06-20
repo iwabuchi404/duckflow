@@ -1,9 +1,4 @@
-import os
-import sys
-
 import pytest
-
-sys.path.append(os.getcwd())
 
 from companion.base.llm_client import LLMClient
 from companion.execution.result_summarizer import ExecutionSummary

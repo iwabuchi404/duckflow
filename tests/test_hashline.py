@@ -8,12 +8,8 @@ behavior instead of the removed anchor-edit workflow.
 """
 
 from pathlib import Path
-import os
-import sys
 
 import pytest
-
-sys.path.append(os.getcwd())
 
 from companion.tools.file_ops import FileOps
 from companion.tools.hashline import HashlineHelper

@@ -1,10 +1,6 @@
-import os
-import sys
 from pathlib import Path
 
 import pytest
-
-sys.path.append(os.getcwd())
 
 from companion.tools.get_project_tree import get_project_tree
 

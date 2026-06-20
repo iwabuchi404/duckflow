@@ -13,10 +13,6 @@ AutoRepair ブロック保護機能のテスト (v3.3)。
 9. 統合テスト: ブロック外の ``` フェンスがアクションのコンテンツに変換される
 """
 
-import sys
-import os
-sys.path.append(os.getcwd())
-
 import pytest
 from companion.utils.sym_ops import AutoRepair, SymOpsProcessor
 
@@ -464,7 +460,3 @@ class TestSymOpsProcessorIntegration:
         # フェンスマーカー自体は content に含まれないこと
         assert "```python" not in action.content
         assert action.content.strip().startswith("def hello():")
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

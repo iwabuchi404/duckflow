@@ -8,10 +8,6 @@ YAML Frontmatter argument extraction のテスト。
 4. FuzzyParser 経由で edit_file が正しくパースされること（統合）
 """
 
-import sys
-import os
-sys.path.append(os.getcwd())
-
 import pytest
 from companion.utils.sym_ops import FuzzyParser
 
@@ -140,7 +136,3 @@ def calculate():
         assert a.params.get("anchors") == "2:bbb 4:ddd"
         assert "def calculate():" in a.content
         assert "anchors" not in a.content
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

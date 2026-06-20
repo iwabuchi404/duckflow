@@ -1,9 +1,4 @@
-import os
-import sys
-
 import pytest
-
-sys.path.append(os.getcwd())
 
 from companion.execution.runner import CodeRunner
 

@@ -5,11 +5,6 @@ find_files / grep_files が __pycache__ や node_modules のようなノイズ
 従来はドット始まり（.git 等）のみを除外していたため、これらは素通りしていた。
 """
 
-import os
-import sys
-
-sys.path.append(os.getcwd())
-
 import asyncio
 import pytest
 from companion.tools.file_ops import FileOps
@@ -84,7 +79,3 @@ class TestGrepFilesExcludesNoiseDirs:
         """*.egg-info 内のファイルがヒットしないことを確認する。"""
         result = await workspace.grep_files(pattern="TODO", path=".", include="*")
         assert ".egg-info" not in result
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

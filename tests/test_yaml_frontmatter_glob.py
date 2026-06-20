@@ -10,11 +10,6 @@ path まで含めて全パラメータが消失していた（ユーザー報告
 .pyc がノイズとして検索結果に混入していた（ユーザー報告の「.pycノイズ」）。
 """
 
-import os
-import sys
-
-sys.path.append(os.getcwd())
-
 from companion.utils.sym_ops import FuzzyParser
 
 
@@ -80,8 +75,3 @@ class TestFallbackKeyValueParsing:
         params, remaining = _extract(content)
         assert params == {}
         assert remaining == content
-
-
-if __name__ == "__main__":
-    import pytest
-    pytest.main([__file__, "-v"])

@@ -8,10 +8,6 @@
 4. (統合) DuckAgent.execute_actions がツール結果をエンベロープで履歴に注入すること
 """
 
-import sys
-import os
-sys.path.append(os.getcwd())
-
 import pytest
 from companion.tools.results import (
     TOOL_RESULT_OPEN,
@@ -310,7 +306,3 @@ class TestDuckAgentExecuteActionsEnvelope:
         assert "ping" in summary_msg["content"], (
             f"行動要約に実行したアクション名 'ping' が含まれていない: {summary_msg['content'][:200]}"
         )
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

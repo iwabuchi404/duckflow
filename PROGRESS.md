@@ -8,6 +8,13 @@
 
 ## 📅 更新履歴
 
+### 2026-06-20: pytest テスト配置と import 初期化の整理
+- `tests/test_generate_code.py` は pytest に収集されない一方、外部LLM接続を使う手動評価スクリプトだったため、`scripts/manual/generate_code_eval.py` へ移動。`tests/` 配下は自動テスト専用に近づけた。
+- `tests/conftest.py` を追加し、repo root の `sys.path` 初期化を一箇所へ集約。各テストファイルに散っていた `sys.path.append(os.getcwd())` と不要な `os` / `sys` import を削除。
+- `tests/test_response_format.py` から print ベースの手動実行表示と `if __name__ == "__main__"` ブロックを削除し、assertion ベースの通常 pytest テストに整理。
+- 複数テストファイルに残っていた `if __name__ == "__main__": pytest.main(...)` ブロックを削除し、pytest 実行前提に統一。
+- 検証: `uv run pytest tests/test_response_format.py tests/test_priority_fixes.py -v` で8件パス。`uv run pytest tests/ -v` で144件パス / 1件スキップ。
+
 ### 2026-06-20: ActionList/Sym-Ops プロトコル境界の命名整理
 - `companion/base/llm_client.py`: `LLMClient` の docstring と `_parse_response()` 説明を更新。メインエージェント呼び出しは Sym-Ops テキストを外部プロトコルとして受け取り、内部実行モデル `ActionList` へ変換すること、`TaskListProposal` / `ExecutionSummary` / `SummaryResponse` など非 `ActionList` の `response_model` だけが JSON/Pydantic 構造化レスポンスであることを明記。
 - `companion/state/agent_state.py`: `ActionList` を「LLM JSON 出力」ではなく「Sym-Ops parse 後の内部アクションコンテナ」として説明を更新。

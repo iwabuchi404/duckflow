@@ -15,8 +15,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add repository root to path for direct manual execution.
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from companion.base.llm_client import default_client, LLMClient
 from companion.modules.sub_llm_manager import SubLLMManager

@@ -11,11 +11,6 @@
 気づけなかった。
 """
 
-import os
-import sys
-
-sys.path.append(os.getcwd())
-
 import pytest
 from companion.modules.memory import MemoryManager, ScoringConfig
 from companion.state.agent_state import AgentState
@@ -106,7 +101,3 @@ class TestAddMessageWithPruningEmergencyNotification:
 
         for msg in state.conversation_history:
             assert "[SYSTEM]" not in msg["content"]
-
-
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])

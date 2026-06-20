@@ -9,11 +9,6 @@ DuckUI の表示メソッドが、内部識別タグ（[TOOL_RESULT] など）�
 rich.errors.MarkupError が送出されクラッシュしていた。
 """
 
-import os
-import sys
-
-sys.path.append(os.getcwd())
-
 from companion.ui.console import DuckUI
 
 
@@ -59,8 +54,3 @@ def test_print_action_does_not_raise_on_bracket_content() -> None:
     """print_action がパラメータ値に角括弧タグを含んでも例外を出さないことを確認する。"""
     ui = _make_ui()
     ui.print_action("edit_file", {"path": "[TOOL_RESULT]foo[/TOOL_RESULT]"}, "thought [x]")
-
-
-if __name__ == "__main__":
-    import pytest
-    pytest.main([__file__, "-v"])
