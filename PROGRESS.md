@@ -8,6 +8,21 @@
 
 ## 📅 更新履歴
 
+### 2026-06-20: パーサー/ツール層の最低限テストを追加
+- `tests/test_llm_action_mapping_minimal.py` を追加。Sym-Ops から `Action.parameters` への重要マッピング（`run_command.command`、`note`/`response`/`duck_call.message`、`propose_plan.goal`、`mark_task_complete.task_index`、`search_archives`/`recall.query`）を検証。
+- `tests/test_file_ops_path_safety.py` を追加。`read_file` / `write_file` / `edit_file` / `delete_file` が `..` による workspace 外アクセスを拒否し、通常の nested workspace path は書き込めることを検証。
+- `tests/test_delete_file_minimal.py` を追加。`delete_file` の通常削除、存在しないファイル、ディレクトリ削除拒否を検証。
+- `tests/test_plan_tool_minimal.py` を追加。`PlanTool.propose_plan()` の Markdown step parse、`mark_step_complete()` の step advance / plan complete / planなしエラーを検証。
+- 検証: 追加分 `uv run pytest tests/test_llm_action_mapping_minimal.py tests/test_file_ops_path_safety.py tests/test_delete_file_minimal.py tests/test_plan_tool_minimal.py -v` で17件パス。全体 `uv run pytest tests/ -v` で171件パス / 1件スキップ。
+
+### 2026-06-20: 最重要制御系の最低限テストを追加
+- 旧実装・手動評価用途だった `scripts/manual/generate_code_eval.py` を削除。実LLM接続と `.env` に依存する品質評価スクリプトであり、自動テスト基盤としては扱わない方針に整理。
+- `tests/test_core_execute_actions_minimal.py` を追加。`DuckAgent.execute_actions()` の最低限の安全制御として、未知ツールの事前フィルタ、Investigation mode の編集ブロック、連続2エラー時の fail-fast 中断を検証。
+- `tests/test_pacemaker_minimal.py` を追加。Pacemaker の停滞検知、3連続エラーによる error cascade、動的 max_loops が 3〜35 に収まることを検証。
+- `tests/test_session_manager_minimal.py` を追加。`SessionManager` の AgentState 保存/復元 roundtrip と、壊れたセッションファイルを読んでも `load()` が落ちず `None` を返すことを検証。
+- `tests/test_config_loader_minimal.py` を追加。既知課題である `agent.max_loops` のトップレベル読み取りと、`DUCKFLOW_AGENT_MAX_LOOPS` 環境変数 override を検証。
+- 検証: 追加分 `uv run pytest tests/test_config_loader_minimal.py tests/test_core_execute_actions_minimal.py tests/test_pacemaker_minimal.py tests/test_session_manager_minimal.py -v` で10件パス。全体 `uv run pytest tests/ -v` で154件パス / 1件スキップ。
+
 ### 2026-06-20: pytest テスト配置と import 初期化の整理
 - `tests/test_generate_code.py` は pytest に収集されない一方、外部LLM接続を使う手動評価スクリプトだったため、`scripts/manual/generate_code_eval.py` へ移動。`tests/` 配下は自動テスト専用に近づけた。
 - `tests/conftest.py` を追加し、repo root の `sys.path` 初期化を一箇所へ集約。各テストファイルに散っていた `sys.path.append(os.getcwd())` と不要な `os` / `sys` import を削除。
