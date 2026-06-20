@@ -8,6 +8,13 @@
 
 ## 📅 更新履歴
 
+### 2026-06-20: Rich 出力時の単独サロゲートによるクラッシュを修正
+- ユーザー報告: 動作確認中に Rich の `Console._write_buffer()` で `UnicodeEncodeError: 'utf-8' codec can't encode characters ... surrogates not allowed` が発生。`PYTHONIOENCODING=utf-8` だけでは解決せず、Duckflow 側が単独サロゲートを含む文字列を Rich に渡していたことが原因。
+- `companion/ui/console.py` に `_safe_text()` / `_safe_escape()` を追加。UI 表示直前に単独サロゲートを `\udcff` 形式の可視テキストへ変換し、Rich markup escaping と組み合わせて適用。
+- 通常ログ、エラー/警告/情報、ユーザー/会話表示、アクション表示、結果表示、Live ステータス、spinner、Markdown、Syntax 表示を同じ正規化経路に通すよう変更。
+- `tests/test_console_markup_escape.py` に単独サロゲートを含む出力の回帰テストを追加。Rich の markup タグ風文字列と invalid Unicode が同時に含まれても落ちないこと、status text が sanitize 済みになることを検証。
+- 検証: `uv run pytest tests/test_console_markup_escape.py -v` で9件パス。
+
 ### 2026-06-20: パーサー/ツール層の最低限テストを追加
 - `tests/test_llm_action_mapping_minimal.py` を追加。Sym-Ops から `Action.parameters` への重要マッピング（`run_command.command`、`note`/`response`/`duck_call.message`、`propose_plan.goal`、`mark_task_complete.task_index`、`search_archives`/`recall.query`）を検証。
 - `tests/test_file_ops_path_safety.py` を追加。`read_file` / `write_file` / `edit_file` / `delete_file` が `..` による workspace 外アクセスを拒否し、通常の nested workspace path は書き込めることを検証。
