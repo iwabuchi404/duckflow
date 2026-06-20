@@ -151,7 +151,9 @@ class TestHashlineHelper:
         with pytest.raises(ValueError, match="Hash mismatch"):
             HashlineHelper.extract_content_block(file_lines, "2:fff", "3:fff")
 
-    def test_format_context_after_edit_uses_line_numbers_without_hashes_by_default(self) -> None:
+    def test_format_context_after_edit_uses_line_numbers_without_hashes_by_default(
+        self,
+    ) -> None:
         """
         format_context_after_edit should return readable line-number context by default.
 
@@ -242,7 +244,10 @@ class TestFileOpsCurrentBehavior:
 
         assert result.startswith("Successfully edited test.py")
         assert "--- Updated Context ---" in result
-        assert target.read_text(encoding="utf-8") == "def foo():\n    # modified\ndef bar():"
+        assert (
+            target.read_text(encoding="utf-8")
+            == "def foo():\n    # modified\ndef bar():"
+        )
 
     @pytest.mark.asyncio
     async def test_edit_file_multiple_lines_marker_format(
@@ -323,7 +328,9 @@ class TestFileOpsCurrentBehavior:
             None.
         """
         target = tmp_path / "test.py"
-        target.write_text("def foo():\n    pass\n\ndef bar():\n    pass", encoding="utf-8")
+        target.write_text(
+            "def foo():\n    pass\n\ndef bar():\n    pass", encoding="utf-8"
+        )
 
         result1 = await file_ops.edit_file(
             "test.py",
@@ -379,7 +386,9 @@ class TestDeleteLinesCurrentBehavior:
         assert target.read_text(encoding="utf-8") == "line 1\nline 2\nline 4\nline 5"
 
     @pytest.mark.asyncio
-    async def test_delete_multiple_lines(self, file_ops: FileOps, tmp_path: Path) -> None:
+    async def test_delete_multiple_lines(
+        self, file_ops: FileOps, tmp_path: Path
+    ) -> None:
         """
         delete_lines should remove a multi-line matching snippet.
 
@@ -400,6 +409,71 @@ class TestDeleteLinesCurrentBehavior:
 
         assert "Successfully deleted 3 line(s)" in result
         assert target.read_text(encoding="utf-8") == "line 1\nline 5"
+
+    @pytest.mark.asyncio
+    async def test_delete_lines_accepts_search_replace_marker_format(
+        self, file_ops: FileOps, tmp_path: Path
+    ) -> None:
+        """
+        delete_lines should accept the same marker style as edit_file when
+        the REPLACE section is empty.
+
+        Args:
+            file_ops: FileOps fixture.
+            tmp_path: Temporary workspace path.
+
+        Returns:
+            None.
+        """
+        target = tmp_path / "test.py"
+        target.write_text("keep 1\ndelete 1\ndelete 2\nkeep 2", encoding="utf-8")
+
+        result = await file_ops.delete_lines(
+            "test.py",
+            content=(
+                "<<<<<<< SEARCH\n"
+                "delete 1\n"
+                "delete 2\n"
+                "=======\n"
+                ">>>>>>> REPLACE"
+            ),
+        )
+
+        assert "Successfully deleted 2 line(s)" in result
+        assert target.read_text(encoding="utf-8") == "keep 1\nkeep 2"
+
+    @pytest.mark.asyncio
+    async def test_delete_lines_rejects_non_empty_replace_marker(
+        self, file_ops: FileOps, tmp_path: Path
+    ) -> None:
+        """
+        delete_lines should reject SEARCH/REPLACE markers that attempt a
+        replacement rather than a deletion.
+
+        Args:
+            file_ops: FileOps fixture.
+            tmp_path: Temporary workspace path.
+
+        Returns:
+            None.
+        """
+        target = tmp_path / "test.py"
+        target.write_text("keep 1\ndelete me\nkeep 2", encoding="utf-8")
+
+        result = await file_ops.delete_lines(
+            "test.py",
+            content=(
+                "<<<<<<< SEARCH\n"
+                "delete me\n"
+                "=======\n"
+                "replace me\n"
+                ">>>>>>> REPLACE"
+            ),
+        )
+
+        assert "::status error" in result
+        assert "delete_lines_replace_not_empty" in result
+        assert target.read_text(encoding="utf-8") == "keep 1\ndelete me\nkeep 2"
 
     @pytest.mark.asyncio
     async def test_delete_lines_stale_or_incorrect_find_reports_error(

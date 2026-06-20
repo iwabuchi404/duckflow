@@ -92,13 +92,17 @@ not just the output.
     - **Pro Tip**: Use a large enough SEARCH block to ensure uniqueness, but keep it precise.
 
 2. `delete_lines`
-   - **Description**: Remove a specific code block using context match (find/replace 形式).
+   - **Description**: Remove a specific code block using the same SEARCH/REPLACE marker style as `edit_file`.
+   - **Constraint**: The REPLACE section must be empty. Use `edit_file` if you want to replace text instead of deleting it.
    - **Structure**:
      ::delete_lines @path
      <<<
-     find: |
-         [Code to Delete]
+     <<<<<<< SEARCH
+     [Code to Delete]
+     =======
+     >>>>>>> REPLACE
      >>>
+   - **Legacy**: `find: |` content is still accepted for backward compatibility.
 
 
 3. `write_file`

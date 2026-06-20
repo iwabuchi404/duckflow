@@ -1182,7 +1182,18 @@ class FileOps:
         Context Match (Fuzzy) based line deletion.
         指定したスニペットにマッチする行範囲をファイルから削除する。
 
-        Sym-Ops format:
+        推奨形式: edit_file と同じ SEARCH/REPLACE マーカー形式を使い、
+        REPLACE 側を空にする。
+        ::delete_lines @path/to/file.py
+        <<<
+        <<<<<<< SEARCH
+        def legacy_function():
+            pass
+        =======
+        >>>>>>> REPLACE
+        >>>
+
+        後方互換形式:
         ::delete_lines @path/to/file.py
         <<<
         find: |
@@ -1208,6 +1219,40 @@ class FileOps:
         # 引数またはコンテンツ内から find を取得
         f_text = find
         occ = occurrence
+
+        if content and self._content_uses_markers(content):
+            marker_pairs = self._parse_search_replace_markers(content)
+            if not marker_pairs:
+                return (
+                    f"::status error\n"
+                    f"Reason: marker_parse_failed\n"
+                    f"Message: Found a SEARCH marker but could not extract a valid "
+                    f"SEARCH/REPLACE deletion pair (missing '=======' separator?).\n"
+                    f"Fix: Use an empty REPLACE section:\n"
+                    f"<<<<<<< SEARCH\n(code to delete)\n=======\n>>>>>>> REPLACE"
+                )
+
+            if len(marker_pairs) != 1:
+                return (
+                    f"::status error\n"
+                    f"Reason: multiple_delete_markers_not_supported\n"
+                    f"Message: delete_lines accepts one SEARCH/REPLACE block per action.\n"
+                    f"Fix: Use one delete_lines action per deleted region, or use edit_file "
+                    f"for coordinated multi-region changes."
+                )
+
+            marker_pair = marker_pairs[0]
+            if marker_pair.get("replace", "").strip():
+                return (
+                    f"::status error\n"
+                    f"Reason: delete_lines_replace_not_empty\n"
+                    f"Message: delete_lines only deletes the SEARCH block; the REPLACE "
+                    f"section must be empty.\n"
+                    f"Fix: Use edit_file when you want to replace text instead of deleting it."
+                )
+
+            f_text = marker_pair.get("find", "")
+            occ = int(marker_pair.get("occurrence", 1))
 
         if not f_text:
             try:

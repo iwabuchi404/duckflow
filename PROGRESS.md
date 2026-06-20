@@ -8,6 +8,13 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: delete_lines を SEARCH/REPLACE マーカー形式に対応
+- `companion/tools/file_ops.py`: `delete_lines` が `edit_file` と同じ SEARCH/REPLACE マーカー形式を受け付けるように変更。削除専用のため、`REPLACE` 側は空であることを要求し、内容がある場合は `delete_lines_replace_not_empty` エラーで `edit_file` 利用へ誘導する。
+- 既存の `find:` 形式は後方互換として維持。複数削除ブロックは今回サポートせず、複数箇所は複数 `delete_lines` アクションまたは `edit_file` に寄せる方針。
+- `companion/prompts/templates.py`: `delete_lines` の説明を `find:` DSL から SEARCH/REPLACE マーカー形式推奨へ更新し、旧 `find: |` は後方互換として記載。
+- `tests/test_hashline.py`: マーカー形式で削除できること、非空 REPLACE を拒否することの回帰テストを追加。
+- 検証: `uv run pytest tests/test_hashline.py tests/test_edit_marker_format.py -v` を実行しようとしたが、環境側の使用上限エラーでブロックされたため未完了。
+
 ### 2026-06-21: planning モード境界と旧アクション残骸を整理
 - `companion/core.py`: `note` の実装メソッド名を `action_note_` から `action_note` に統一。未登録のまま残っていた旧 `action_report` / `action_finish` / `action_status` を削除し、terminal action 判定から未登録の `finish` を除外。`::status` / `::result` は引き続きツール結果マーカー用 no-op として維持。
 - `companion/base/llm_client.py`: Sym-Ops → `Action.parameters` の特殊マッピングから廃止済み `report` / `finish` を削除。`::report` / `::finish` が出ても `response` 相当として扱わず、未知ツールフィードバックへ流れるよう整理。
