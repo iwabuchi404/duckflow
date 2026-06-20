@@ -8,6 +8,13 @@
 
 ## 📅 更新履歴
 
+### 2026-06-20: get_project_tree の workspace safety 修正
+- `companion/tools/get_project_tree.py`: `os.path.abspath(path)` で任意パスを探索できていた実装を、`workspace_root` 基準の `_resolve_within_workspace()` に変更。`..` や絶対パスで workspace 外へ出る指定は `Duck Keeper Alert` として拒否する。
+- symlink などの探索中エントリも `resolve()` 後に workspace 内か確認し、外部を指すものはスキップ。`__pycache__` / `node_modules` / `dist` / `build` / `*.egg-info` 等のノイズディレクトリも非表示に統一。
+- `respect_gitignore` が文字列で渡された場合に `"false"` が truthy になる問題を `_coerce_bool()` で修正。
+- テスト新規: `tests/test_get_project_tree_safety.py`（通常ツリー取得、`..` escape、絶対パス escape、外部 symlink、ノイズディレクトリ除外、`respect_gitignore="false"`）。
+- 検証: `uv run pytest tests/test_get_project_tree_safety.py tests/test_file_ops_noise_dirs.py -v` で12件パス / 1件スキップ（Windows symlink availability）。`uv run pytest tests/ -v` で142件パス / 1件スキップ。
+
 ### 2026-06-20: test_hashline.py の陳腐化解消
 - `tests/test_hashline.py` を現行仕様に合わせて全面整理。`HashlineHelper` の低レベルな hash anchor 単体テストは維持しつつ、`FileOps` 統合テストは廃止済みの anchor edit 前提から、現在の `read_file` 行番号表示（`行番号|内容`）、`edit_file` SEARCH/REPLACE マーカー形式、`delete_lines` find スニペット指定へ更新。
 - 旧期待値（`Successfully edited` + anchor context / `Hash mismatch` / `anchors` エラー等）を、現行実装の `find_not_matched`、`No 'find' snippet`、`--- Updated Context ---` に合わせて修正。
