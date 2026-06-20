@@ -3,7 +3,15 @@ import logging
 import json
 from typing import Dict, Any, Callable, List
 
-from companion.state.agent_state import AgentState, ActionList, Action, AgentPhase, TaskStatus, AgentMode, SyntaxErrorInfo
+from companion.state.agent_state import (
+    AgentState,
+    ActionList,
+    Action,
+    AgentPhase,
+    TaskStatus,
+    AgentMode,
+    SyntaxErrorInfo,
+)
 from companion.base.llm_client import default_client, LLMClient
 from companion.prompts.builder import PromptBuilder
 from companion.tools.file_ops import file_ops
@@ -34,17 +42,19 @@ from companion.tools.results import (
 from companion.tools.sub_llm_tools import SubLLMTools
 from companion.modules.sub_llm_manager import SubLLMManager
 
+
 class DuckAgent:
     """
     Duckflow v4 Main Agent.
     Manages the Think-Decide-Execute loop.
     """
+
     def __init__(
         self,
         llm_client: LLMClient = default_client,
         debug_context_mode: str = None,
-        session_manager: 'SessionManager' = None,
-        resume_state: 'AgentState' = None,
+        session_manager: "SessionManager" = None,
+        resume_state: "AgentState" = None,
     ):
         """
         Args:
@@ -60,35 +70,30 @@ class DuckAgent:
         self.running = False
         self.debug_context_mode = debug_context_mode
         self.command_handler = CommandHandler(self)
-        
+
         # Initialize Tools
         self.plan_tool = PlanTool(self.state)
         self.task_tool = TaskTool(self.state, self.llm)
         self.approval_tool = ApprovalTool(self.state)
         self.task_executor = TaskExecutor(self.state, self.tools)
         self.result_summarizer = ResultSummarizer(self.llm)
-        
+
         # Initialize Sub-LLMs
         self.sub_llm_manager = SubLLMManager(self.llm)
         self.sub_llm_tools = SubLLMTools(self.sub_llm_manager)
-        
+
         # Initialize Pacemaker
         self.pacemaker = DuckPacemaker(self.state)
-        
+
         # Initialize Memory Manager
-        self.memory_manager = MemoryManager(
-            llm_client=self.llm,
-            max_tokens=8000
-        )
-        
+        self.memory_manager = MemoryManager(llm_client=self.llm, max_tokens=8000)
+
         # Register basic actions
-        self.register_tool("note", self.action_note_)
+        self.register_tool("note", self.action_note)
         self.register_tool("response", self.action_response)
-        # self.register_tool("report", self.action_report)
-        # self.register_tool("finish", self.action_finish)
         self.register_tool("exit", self.action_exit)
         self.register_tool("duck_call", self.approval_tool.duck_call)
-        
+
         # Register File Ops
         self.register_tool("read_file", file_ops.read_file)
         self.register_tool("write_file", file_ops.write_file)
@@ -97,7 +102,9 @@ class DuckAgent:
         # self.register_tool("mkdir", file_ops.mkdir)
         # self.register_tool("replace_in_file", file_ops.replace_in_file)
         # self.register_tool("edit_lines", file_ops.edit_lines)
-        self.register_tool("edit_file", file_ops.edit_file)  # Alias - Changed to write_file (overwrite) as agent uses it for full content
+        self.register_tool(
+            "edit_file", file_ops.edit_file
+        )  # Alias - Changed to write_file (overwrite) as agent uses it for full content
         self.register_tool("find_files", file_ops.find_files)
         self.register_tool("grep_files", file_ops.grep_files)
         self.register_tool("delete_lines", file_ops.delete_lines)
@@ -108,7 +115,7 @@ class DuckAgent:
         self.register_tool("mark_step_complete", self.plan_tool.mark_step_complete)
         self.register_tool("generate_tasks", self.task_tool.generate_tasks)
         self.register_tool("mark_task_complete", self.task_tool.mark_task_complete)
-        
+
         # Register Task Execution
         self.register_tool("execute_tasks", self.action_execute_tasks)
         self.register_tool("run_command", self.action_run_command)
@@ -157,80 +164,93 @@ class DuckAgent:
             "  ::response @<short message>     — deliver result to user\n"
             "Do NOT call ::status or ::result as actions."
         )
-    
+
     async def switch_model(self, provider: str, model: str) -> bool:
         """
         Switch to a different LLM model and persist the change.
-        
+
         Args:
             provider: Provider name (e.g., 'openai', 'groq', 'openrouter')
             model: Model name (e.g., 'gpt-4o', 'llama-3.3-70b-versatile')
-            
+
         Returns:
             True if switch was successful, False otherwise
         """
         from companion.config.config_loader import config
-        
+
         try:
             logger.info(f"🔄 Attempting to switch model to {provider}/{model}")
-            
+
             # Test if the new model configuration is valid by reinitializing
             success = self.llm.reinitialize(provider=provider, model=model)
-            
+
             if not success:
                 logger.error("Failed to reinitialize LLM client")
                 return False
-            
+
             # Test the connection
             connection_ok = await self.llm.test_connection()
             if not connection_ok:
                 logger.error("Connection test failed for new model")
                 return False
-            
+
             # Update components that depend on LLM
             logger.info("Updating dependent components...")
-            
+
             # Update TaskTool
             self.task_tool.llm = self.llm
-            
+
             # Update ResultSummarizer
             self.result_summarizer.llm = self.llm
-            
+
             # Update MemoryManager（LLMクライアント + コンテキスト長を再計算）
             self.memory_manager.llm_client = self.llm
             try:
                 ctx_len = await self.llm.get_context_length()
                 self.memory_manager.configure_from_context_length(ctx_len)
             except Exception as e:
-                logger.warning(f"Failed to update memory budget after model switch: {e}")
+                logger.warning(
+                    f"Failed to update memory budget after model switch: {e}"
+                )
 
             # Persist to config file
             logger.info("Persisting configuration to duckflow.yaml...")
             config.update_config("llm.provider", provider)
             config.update_config(f"llm.{provider}.model", model)
-            
+
             logger.info(f"✅ Successfully switched to {provider}/{model}")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Error switching model: {e}")
             return False
 
     # モード別ツールマッピング
     # カテゴリ別にツールを分類し、各モードで公開するツールを定義
-    
+
     # 全モード共通の基本ツール
     UNIVERSAL_TOOLS = {
-        "note", "response", "exit", "duck_call",
-        "search_archives", "recall", "get_project_tree"
+        "note",
+        "response",
+        "exit",
+        "duck_call",
+        "search_archives",
+        "recall",
+        "get_project_tree",
     }
 
     MODE_TOOL_MAPPING = {
         "planning": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files", "grep_files",
+            "read_file",
+            "list_directory",
+            "find_files",
+            "grep_files",
             # ファイル編集（finish_investigation 後すぐに修正へ移れるよう開放）
-            "edit_file", "write_file", "delete_lines", "delete_file",
+            "edit_file",
+            "write_file",
+            "delete_lines",
+            "delete_file",
             # 分析
             "analyze_structure",
             # 実行
@@ -238,32 +258,49 @@ class DuckAgent:
             # Sub-LLM
             "generate_code",
             # 調査
-            "investigate", "submit_hypothesis", "finish_investigation",
+            "investigate",
+            "submit_hypothesis",
+            "finish_investigation",
         },
         "investigation": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files", "grep_files",
+            "read_file",
+            "list_directory",
+            "find_files",
+            "grep_files",
             # 分析
             "analyze_structure",
             # 計画
-            "propose_plan", "generate_tasks",
+            "propose_plan",
+            "generate_tasks",
             # 調査
-            "investigate", "submit_hypothesis", "finish_investigation",
+            "investigate",
+            "submit_hypothesis",
+            "finish_investigation",
         },
         "task": {
             # ファイル読み取り
-            "read_file", "list_directory", "find_files", "grep_files",
+            "read_file",
+            "list_directory",
+            "find_files",
+            "grep_files",
             # ファイル編集
-            "edit_file", "write_file", "delete_lines", "delete_file",
+            "edit_file",
+            "write_file",
+            "delete_lines",
+            "delete_file",
             # 分析
             "analyze_structure",
             # 完了管理
-            "mark_step_complete", "mark_task_complete",
+            "mark_step_complete",
+            "mark_task_complete",
             # 実行
-            "run_command", "execute_tasks", "execute_batch",
+            "run_command",
+            "execute_tasks",
+            "execute_batch",
         },
     }
-# ⚠️ 後方互換：task_execution は deprecated。task を使用してください。
+    # ⚠️ 後方互換：task_execution は deprecated。task を使用してください。
 
     def get_tool_descriptions(self, mode: str = None) -> str:
         """
@@ -295,7 +332,7 @@ class DuckAgent:
 
             # Extract Docstring
             full_doc = inspect.getdoc(func) or "No description."
-            summary = full_doc.split('\n\n')[0].replace('\n', ' ')
+            summary = full_doc.split("\n\n")[0].replace("\n", " ")
 
             # Build Sym-Ops example signature
             try:
@@ -307,10 +344,24 @@ class DuckAgent:
                 for p_name, p in sig.parameters.items():
                     # Heuristics for Sym-Ops mapping:
                     # 1. 'path', 'command', 'reason', 'hypothesis', 'message', 'result' -> @target
-                    if p_name in ['path', 'command', 'reason', 'hypothesis', 'message', 'result'] and not target_param:
+                    if (
+                        p_name
+                        in [
+                            "path",
+                            "command",
+                            "reason",
+                            "hypothesis",
+                            "message",
+                            "result",
+                        ]
+                        and not target_param
+                    ):
                         target_param = p_name
                     # 2. 'content', 'body', 'code', 'plan_data' -> <<< block >>>
-                    elif p_name in ['content', 'body', 'code', 'plan_data'] and not content_param:
+                    elif (
+                        p_name in ["content", "body", "code", "plan_data"]
+                        and not content_param
+                    ):
                         content_param = p_name
                     # 3. others -> inline params
                     else:
@@ -320,7 +371,7 @@ class DuckAgent:
                 target_str = f" @<{target_param}>" if target_param else ""
                 params_str = f" {' '.join(params_list)}" if params_list else ""
                 content_str = "\n  <<< <content> >>>" if content_param else ""
-                
+
                 line = f"- ::{name}{target_str}{params_str}{content_str}: {summary}"
                 descriptions.append(line)
 
@@ -336,8 +387,12 @@ class DuckAgent:
         # モデルのコンテキスト長を取得して MemoryManager の max_tokens を動的設定
         try:
             context_length = await self.llm.get_context_length()
-            configured = self.memory_manager.configure_from_context_length(context_length)
-            logger.info(f"Dynamic memory budget: {configured:,} tokens (model context: {context_length:,})")
+            configured = self.memory_manager.configure_from_context_length(
+                context_length
+            )
+            logger.info(
+                f"Dynamic memory budget: {configured:,} tokens (model context: {context_length:,})"
+            )
         except Exception as e:
             logger.warning(f"Failed to configure dynamic memory budget: {e}")
 
@@ -348,18 +403,22 @@ class DuckAgent:
             and self.memory_manager.should_prune(self.state.conversation_history)
         ):
             logger.info("Session restore: applying restore_with_summary...")
-            self.state.conversation_history = await self.memory_manager.restore_with_summary(
-                self.state.conversation_history
+            self.state.conversation_history = (
+                await self.memory_manager.restore_with_summary(
+                    self.state.conversation_history
+                )
             )
             logger.info(
                 f"Session restore complete: {len(self.state.conversation_history)} messages retained"
             )
 
         ui.print_welcome()
-        
+
         # セッション復元時に過去の会話を表示（最新5回分）
         if self.state.conversation_history:
-            history_to_show = self.state.conversation_history[-10:]  # 5ターン = User/AI ペアで10件程度
+            history_to_show = self.state.conversation_history[
+                -10:
+            ]  # 5ターン = User/AI ペアで10件程度
             if history_to_show:
                 ui.print_info("\n📜 過去の会話履歴を復元します:")
                 for msg in history_to_show:
@@ -374,46 +433,44 @@ class DuckAgent:
                         continue
                     ui.print_conversation_message(content, speaker=role)
                 ui.print_separator()
-        
+
         while self.running:
             try:
                 # 1. Input Phase
                 if self.state.phase == AgentPhase.AWAITING_USER:
                     # Resume from user input (handled by tools usually, but here for safety)
                     pass
-                
+
                 user_input = await ui.get_user_input()
                 if not user_input.strip():
                     continue
-                
+
                 # Check for internal commands
                 if self.command_handler.is_command(user_input):
                     await self.command_handler.execute(user_input)
                     continue
-                    
+
                 if user_input.lower() in ["exit", "quit"]:
                     await self.action_exit()
                     break
-                
+
                 ui.print_user(user_input)
                 # Add user input to state with memory pruning
                 await self.state.add_message_with_pruning(
-                    "user", 
-                    user_input,
-                    memory_manager=self.memory_manager
+                    "user", user_input, memory_manager=self.memory_manager
                 )
                 self.state.phase = AgentPhase.THINKING
-                
+
                 # Calculate max loops for this session
                 self.pacemaker.max_loops = self.pacemaker.calculate_max_loops()
                 self.pacemaker.loop_count = 0
-                
+
                 ui.print_vitals(
-                    self.state.vitals, 
-                    self.pacemaker.loop_count, 
-                    self.pacemaker.max_loops
+                    self.state.vitals,
+                    self.pacemaker.loop_count,
+                    self.pacemaker.max_loops,
                 )
-                
+
                 # --- Autonomous Execution Loop ---
                 # Continue thinking and executing until we produce a response to the user
                 ui.start_live()
@@ -421,21 +478,25 @@ class DuckAgent:
                     while True:
                         # Increment loop counter
                         self.pacemaker.loop_count += 1
-                        logger.debug(f"Autonomous loop iteration: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}")
-                        
+                        logger.debug(
+                            f"Autonomous loop iteration: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}"
+                        )
+
                         # Display vitals at the start of each loop iteration
                         ui.print_vitals(
                             self.state.vitals,
                             self.pacemaker.loop_count,
-                            self.pacemaker.max_loops
+                            self.pacemaker.max_loops,
                         )
-                        
+
                         # 2. Think & Decide Phase
                         self.state.phase = AgentPhase.THINKING
 
                         # system_promptを介入・通常両方で使うため先に生成
                         prompt_builder = PromptBuilder(self.state)
-                        base_messages = prompt_builder.build_messages(self.get_tool_descriptions(self.state.current_mode.value))
+                        base_messages = prompt_builder.build_messages(
+                            self.get_tool_descriptions(self.state.current_mode.value)
+                        )
                         # エラーフィードバックはプロンプトに注入済み。1ターン限りなのでクリア
                         self.state.last_syntax_errors = []
 
@@ -443,7 +504,9 @@ class DuckAgent:
                         intervention = self.pacemaker.check_health()
                         if intervention:
                             # ハイブリッド介入: 履歴サマリー + LLMによる状況説明
-                            ui.print_warning(f"🦆 Pacemaker介入: {intervention.message}")
+                            ui.print_warning(
+                                f"🦆 Pacemaker介入: {intervention.message}"
+                            )
                             summary = self.pacemaker.build_intervention_summary()
 
                             try:
@@ -460,25 +523,39 @@ class DuckAgent:
                                     "3. 続行/中止/方針変更の選択肢を提示\n"
                                     "::response で返答してください。"
                                 )
-                                messages = base_messages + self.state.conversation_history + [
-                                    {"role": "user", "content": intervention_prompt}
-                                ]
+                                messages = (
+                                    base_messages
+                                    + self.state.conversation_history
+                                    + [{"role": "user", "content": intervention_prompt}]
+                                )
                                 with ui.create_spinner("Analyzing intervention..."):
-                                    action_list = await self.llm.chat(messages, response_model=ActionList)
+                                    action_list = await self.llm.chat(
+                                        messages, response_model=ActionList
+                                    )
                             except Exception as e:
                                 # フォールバック: LLM失敗時は履歴サマリー付きduck_call
-                                logger.warning(f"Intervention LLM call failed: {e}, using fallback")
+                                logger.warning(
+                                    f"Intervention LLM call failed: {e}, using fallback"
+                                )
                                 action_list = ActionList(
-                                    actions=[self.pacemaker.intervene(intervention, summary=summary)],
-                                    reasoning=f"Pacemaker intervention (fallback): {intervention.type}"
+                                    actions=[
+                                        self.pacemaker.intervene(
+                                            intervention, summary=summary
+                                        )
+                                    ],
+                                    reasoning=f"Pacemaker intervention (fallback): {intervention.type}",
                                 )
                         else:
                             # 自律ループ内でも LLM 呼び出し前に pruning を確認する
                             # （ユーザー入力時のみの pruning では、長大な自律ループで
                             #   コンテキストが溢れ劣化する問題への対処）
-                            if self.memory_manager.should_prune(self.state.conversation_history):
-                                self.state.conversation_history, prune_stats = await self.memory_manager.prune_history(
-                                    self.state.conversation_history
+                            if self.memory_manager.should_prune(
+                                self.state.conversation_history
+                            ):
+                                self.state.conversation_history, prune_stats = (
+                                    await self.memory_manager.prune_history(
+                                        self.state.conversation_history
+                                    )
                                 )
                                 if prune_stats.get("emergency_mode"):
                                     # 緊急モードは要約を挟まず強制削減するため、LLMに
@@ -488,54 +565,71 @@ class DuckAgent:
                                         "user",
                                         f"[SYSTEM] 緊急メモリ整理を実行しました（要約なしで{removed}件の古いメッセージを削除）。"
                                         "直前までの文脈の一部が失われている可能性があります。"
-                                        "タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。"
+                                        "タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。",
                                     )
 
                             # Normal LLM call
                             with ui.create_spinner("Thinking..."):
                                 # Prepare messages
-                                messages = base_messages + self.state.conversation_history
+                                messages = (
+                                    base_messages + self.state.conversation_history
+                                )
 
                                 # Debug output
                                 if self.debug_context_mode:
-                                    ui.print_debug_context(messages, mode=self.debug_context_mode)
+                                    ui.print_debug_context(
+                                        messages, mode=self.debug_context_mode
+                                    )
 
                                 # Call LLM
-                                action_list = await self.llm.chat(messages, response_model=ActionList)
-                            
-                            logger.info(f"Agent proposed actions: {[a.name for a in action_list.actions]}")
-                            
+                                action_list = await self.llm.chat(
+                                    messages, response_model=ActionList
+                                )
+
+                            logger.info(
+                                f"Agent proposed actions: {[a.name for a in action_list.actions]}"
+                            )
+
                             # Sym-Ops v3.1: バイタルを更新 (c=confidence, s=safety, m=memory, f=focus)
                             if action_list.vitals:
-                                logger.info(f"Updating vitals from response: {action_list.vitals}")
+                                logger.info(
+                                    f"Updating vitals from response: {action_list.vitals}"
+                                )
                                 if "confidence" in action_list.vitals:
-                                    self.state.vitals.confidence = action_list.vitals["confidence"]
+                                    self.state.vitals.confidence = action_list.vitals[
+                                        "confidence"
+                                    ]
                                 if "safety" in action_list.vitals:
-                                    self.state.vitals.safety = action_list.vitals["safety"]
+                                    self.state.vitals.safety = action_list.vitals[
+                                        "safety"
+                                    ]
                                 if "memory" in action_list.vitals:
-                                    self.state.vitals.memory = action_list.vitals["memory"]
+                                    self.state.vitals.memory = action_list.vitals[
+                                        "memory"
+                                    ]
                                 if "focus" in action_list.vitals:
-                                    self.state.vitals.focus = action_list.vitals["focus"]
-                            
+                                    self.state.vitals.focus = action_list.vitals[
+                                        "focus"
+                                    ]
+
                             # Display reasoning
                             ui.print_thinking(action_list.reasoning)
-                        
+
                         # 3. Execute Actions
                         self.state.phase = AgentPhase.EXECUTING
                         if action_list.actions:
                             await self.execute_actions(action_list)
 
-
                             # Decide next action: Continue loop OR return to user
                             # LLM should decide based on what happened (results, current state, task progress)
 
                             # Check if we should return to user
-                            # If 'response', 'report', 'exit', 'duck_call', or 'finish' action was executed, break the inner loop
+                            # If 'response', 'exit', or 'duck_call' action was executed, break the inner loop
                             # 'note' does NOT end the loop - it's for progress notifications while continuing execution
                             # Exception: empty ::response (message="") is treated as a no-op (loop continues + syntax error recorded)
                             should_return_to_user = False
                             for action in action_list.actions:
-                                if action.name in ["exit", "duck_call", "finish"]:
+                                if action.name in ["exit", "duck_call"]:
                                     should_return_to_user = True
                                     break
                                 if action.name == "response":
@@ -545,19 +639,25 @@ class DuckAgent:
                                         break
                                     else:
                                         # 空の ::response → ループ継続 + エラーフィードバック
-                                        logger.warning("Empty ::response detected — continuing loop.")
-                                        self.state.last_syntax_errors.append(SyntaxErrorInfo(
-                                            error_type='empty_response',
-                                            raw_snippet='::response (empty)',
-                                            correction_hint=(
-                                                '::response was called with no message. '
-                                                'If investigation is in progress, continue observing. '
-                                                'Use ::response only when you have a result to deliver.'
-                                            ),
-                                        ))
+                                        logger.warning(
+                                            "Empty ::response detected — continuing loop."
+                                        )
+                                        self.state.last_syntax_errors.append(
+                                            SyntaxErrorInfo(
+                                                error_type="empty_response",
+                                                raw_snippet="::response (empty)",
+                                                correction_hint=(
+                                                    "::response was called with no message. "
+                                                    "If investigation is in progress, continue observing. "
+                                                    "Use ::response only when you have a result to deliver."
+                                                ),
+                                            )
+                                        )
 
                             if should_return_to_user:
-                                logger.info("Autonomous loop ending: response/exit/duck_call action executed")
+                                logger.info(
+                                    "Autonomous loop ending: response/exit/duck_call action executed"
+                                )
                                 # Reset pacemaker for next session
                                 self.pacemaker.reset()
                                 break
@@ -567,7 +667,9 @@ class DuckAgent:
                             self.pacemaker.reset()
                             break
                 except KeyboardInterrupt:
-                    ui.print_warning("\n⚠️  Interrupted by user. Returning to manual input.")
+                    ui.print_warning(
+                        "\n⚠️  Interrupted by user. Returning to manual input."
+                    )
                     self.pacemaker.reset()
                     self.state.phase = AgentPhase.AWAITING_USER
                 finally:
@@ -581,7 +683,7 @@ class DuckAgent:
 
                 # Display Token Usage
                 ui.print_token_usage(self.llm.usage_stats)
-                
+
             except KeyboardInterrupt:
                 await self.action_exit()
                 break
@@ -598,6 +700,7 @@ class DuckAgent:
         # LLMがハルシネーションで存在しないツールを呼ぶことがあるため、
         # 実行前にフィルタリングする（会話履歴を汚染しない）
         import difflib as _difflib
+
         known_actions = []
         for action in action_list.actions:
             if action.name in self.tools:
@@ -607,25 +710,33 @@ class DuckAgent:
                 ui.print_warning(f"Unknown tool '{action.name}' was ignored.")
 
                 # 現在モードで有効なツール名のみをヒントに（全ツールリストは長すぎる）
-                mode_val = self.state.current_mode.value if self.state.current_mode else None
+                mode_val = (
+                    self.state.current_mode.value if self.state.current_mode else None
+                )
                 if mode_val and mode_val in self.MODE_TOOL_MAPPING:
-                    mode_tools = sorted(self.UNIVERSAL_TOOLS | self.MODE_TOOL_MAPPING[mode_val])
+                    mode_tools = sorted(
+                        self.UNIVERSAL_TOOLS | self.MODE_TOOL_MAPPING[mode_val]
+                    )
                 else:
                     mode_tools = sorted(self.UNIVERSAL_TOOLS)
 
                 # 近似ツール候補を提示（スペルミス・類似名の誘導）
-                close = _difflib.get_close_matches(action.name, self.tools.keys(), n=2, cutoff=0.5)
+                close = _difflib.get_close_matches(
+                    action.name, self.tools.keys(), n=2, cutoff=0.5
+                )
                 if close:
                     hint = f"'{action.name}' is not a valid tool. Did you mean: {', '.join(close)}?"
                 else:
                     hint = f"'{action.name}' is not a valid tool."
                 hint += f" Valid tools in this mode: {', '.join(mode_tools)}"
 
-                self.state.last_syntax_errors.append(SyntaxErrorInfo(
-                    error_type='unknown_tool',
-                    raw_snippet=action.name,
-                    correction_hint=hint,
-                ))
+                self.state.last_syntax_errors.append(
+                    SyntaxErrorInfo(
+                        error_type="unknown_tool",
+                        raw_snippet=action.name,
+                        correction_hint=hint,
+                    )
+                )
         action_list.actions = known_actions
 
         # --- Action Count Limiter ---
@@ -633,8 +744,12 @@ class DuckAgent:
         MAX_ACTIONS_PER_TURN = 6
         if len(action_list.actions) > MAX_ACTIONS_PER_TURN:
             dropped = len(action_list.actions) - MAX_ACTIONS_PER_TURN
-            logger.warning(f"Action limit exceeded: {len(action_list.actions)} actions, dropping last {dropped}")
-            ui.print_warning(f"アクション数が上限({MAX_ACTIONS_PER_TURN})を超えたため、末尾{dropped}件を切り捨てました。")
+            logger.warning(
+                f"Action limit exceeded: {len(action_list.actions)} actions, dropping last {dropped}"
+            )
+            ui.print_warning(
+                f"アクション数が上限({MAX_ACTIONS_PER_TURN})を超えたため、末尾{dropped}件を切り捨てました。"
+            )
             action_list.actions = action_list.actions[:MAX_ACTIONS_PER_TURN]
 
         # --- Safety Score Interceptor (Sym-Ops v3.1) ---
@@ -659,10 +774,12 @@ class DuckAgent:
         consecutive_errors = 0
 
         # ターミナルアクション（ループを終了するアクション）を末尾に並べ替え
-        # 例: [report, replace_in_file] → [replace_in_file, report]
+        # 例: [response, replace_in_file] → [replace_in_file, response]
         # これにより実行系アクションが先に処理され、最後にユーザーへ報告される
-        TERMINAL_ACTIONS = {"response", "exit", "duck_call", "finish"}
-        non_terminal = [a for a in action_list.actions if a.name not in TERMINAL_ACTIONS]
+        TERMINAL_ACTIONS = {"response", "exit", "duck_call"}
+        non_terminal = [
+            a for a in action_list.actions if a.name not in TERMINAL_ACTIONS
+        ]
         terminal = [a for a in action_list.actions if a.name in TERMINAL_ACTIONS]
         action_list.actions = non_terminal + terminal
 
@@ -672,8 +789,16 @@ class DuckAgent:
 
                 # --- Investigation Mode Guard ---
                 # Investigation モード中はファイル変更系アクションをブロック（read-only）
-                _EDIT_ACTIONS = {"edit_file", "write_file", "delete_file", "delete_lines"}
-                if action.name in _EDIT_ACTIONS and self.state.get_context_mode() == "investigation":
+                _EDIT_ACTIONS = {
+                    "edit_file",
+                    "write_file",
+                    "delete_file",
+                    "delete_lines",
+                }
+                if (
+                    action.name in _EDIT_ACTIONS
+                    and self.state.get_context_mode() == "investigation"
+                ):
                     _blocked_msg = (
                         f"[BLOCKED] '{action.name}' is not allowed during Investigation Mode. "
                         "Investigation is read-only. "
@@ -682,18 +807,24 @@ class DuckAgent:
                         "Call ::finish_investigation @<conclusion> when root cause is confirmed, "
                         "then re-enter Task mode to apply edits."
                     )
-                    ui.print_warning(f"Investigation Mode中のファイル変更をブロック: {action.name}")
-                    logger.warning(f"Blocked edit action in Investigation Mode: {action.name}")
+                    ui.print_warning(
+                        f"Investigation Mode中のファイル変更をブロック: {action.name}"
+                    )
+                    logger.warning(
+                        f"Blocked edit action in Investigation Mode: {action.name}"
+                    )
                     self.state.last_action_result = _blocked_msg
-                    self.state.last_syntax_errors.append(SyntaxErrorInfo(
-                        error_type='investigation_edit_blocked',
-                        raw_snippet=f'::{action.name}',
-                        correction_hint=(
-                            f"'{action.name}' cannot be called during Investigation Mode. "
-                            "Close investigation first: ::finish_investigation @<conclusion>, "
-                            "then re-enter Task mode to apply edits."
-                        ),
-                    ))
+                    self.state.last_syntax_errors.append(
+                        SyntaxErrorInfo(
+                            error_type="investigation_edit_blocked",
+                            raw_snippet=f"::{action.name}",
+                            correction_hint=(
+                                f"'{action.name}' cannot be called during Investigation Mode. "
+                                "Close investigation first: ::finish_investigation @<conclusion>, "
+                                "then re-enter Task mode to apply edits."
+                            ),
+                        )
+                    )
                     # ブロック結果を会話履歴に追加してLLMにフィードバックする
                     blocked_res = ToolResult(
                         status=ToolStatus.ERROR,
@@ -701,7 +832,9 @@ class DuckAgent:
                         target=action.parameters.get("path", ""),
                         content=_blocked_msg,
                     )
-                    self.state.add_message("user", wrap_tool_result(format_symops_response(blocked_res)))
+                    self.state.add_message(
+                        "user", wrap_tool_result(format_symops_response(blocked_res))
+                    )
                     results.append(_blocked_msg)
                     continue
                 # ------------------------------------------------
@@ -714,19 +847,19 @@ class DuckAgent:
                 if action.name in ["delete_file", "delete_lines", "edit_file"]:
                     requires_approval = True
                     warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
-                
+
                 elif action.name == "write_file":
                     path = action.parameters.get("path")
                     if path and file_ops.file_exists(path):
                         requires_approval = True
                         warning_msg = f"File '{path}' already exists. Overwrite?"
-                
+
                 if requires_approval:
                     if not ui.request_confirmation(warning_msg):
                         msg = f"Action '{action.name}' denied by user."
                         ui.print_result(msg, is_error=True)
                         self.state.last_action_result = msg
-                        
+
                         # Add denial to conversation history so LLM knows what happened
                         denial_context = (
                             f"[User denied approval for action '{action.name}'] "
@@ -736,10 +869,10 @@ class DuckAgent:
                             f"2) Try a different approach, or 3) Explain the situation."
                         )
                         self.state.add_message("user", denial_context)
-                        
+
                         # Update Pacemaker vitals (denial is treated as an error)
                         self.pacemaker.update_vitals(action, msg, is_error=True)
-                        
+
                         results.append(msg)
                         continue
                     else:
@@ -747,7 +880,7 @@ class DuckAgent:
                         was_approved = True
                         logger.info(f"User approved action: {action.name}")
                 # ----------------------
-                
+
                 if action.name in self.tools:
                     try:
                         # Execute tool
@@ -757,6 +890,7 @@ class DuckAgent:
                         # --- シグネチャフィルタ ---
                         # 関数が受け付けないkwargs（例: content）を除去してTypeErrorを防ぐ
                         import inspect as _inspect
+
                         _sig = _inspect.signature(func)
                         _has_var_kw = any(
                             p.kind == _inspect.Parameter.VAR_KEYWORD
@@ -772,7 +906,11 @@ class DuckAgent:
                                 logger.warning(
                                     f"Tool '{action.name}': dropping unexpected params: {_dropped}"
                                 )
-                            call_params = {k: v for k, v in action.parameters.items() if k in _valid}
+                            call_params = {
+                                k: v
+                                for k, v in action.parameters.items()
+                                if k in _valid
+                            }
                         # -----------------------
 
                         # Check if function is async
@@ -780,27 +918,35 @@ class DuckAgent:
                             result = await func(**call_params)
                         else:
                             result = func(**call_params)
-                        
-                        logger.info(f"Tool {action.name} returned. Result length: {len(str(result))}")
-                        
+
+                        logger.info(
+                            f"Tool {action.name} returned. Result length: {len(str(result))}"
+                        )
+
                         # Record result
-                        self.state.last_action_result = f"Action '{action.name}' succeeded: {result}"
-                        
+                        self.state.last_action_result = (
+                            f"Action '{action.name}' succeeded: {result}"
+                        )
+
                         # Add result to conversation history (for LLM context in next cycle)
                         if action.name not in ("response",):
                             # Prepare tool result for conversion
                             tool_status = ToolStatus.OK
                             # We could implement truncation check here if needed later
-                            
+
                             tool_res = ToolResult(
                                 status=tool_status,
                                 tool_name=action.name,
-                                target=action.parameters.get("path", action.parameters.get("command", "task")),
-                                content=result
+                                target=action.parameters.get(
+                                    "path", action.parameters.get("command", "task")
+                                ),
+                                content=result,
                             )
                             # ツール結果はエンベロープで包み、ユーザー発言と区別できる形で
                             # 履歴に注入する（中身はデータであり指示ではない）
-                            formatted_res = wrap_tool_result(format_symops_response(tool_res))
+                            formatted_res = wrap_tool_result(
+                                format_symops_response(tool_res)
+                            )
 
                             # If this action required approval, add explicit completion message
                             if was_approved:
@@ -811,12 +957,12 @@ class DuckAgent:
                                 self.state.add_message("user", completion_msg)
                             else:
                                 self.state.add_message("user", formatted_res)
-                            
+
                             if isinstance(result, str):
                                 ui.print_result(result)
                             else:
                                 ui.print_result(serialize_to_text(result))
-                        
+
                         results.append(result)
 
                         # Update Pacemaker vitals (success)
@@ -830,36 +976,46 @@ class DuckAgent:
                         ui.print_result(str(e), is_error=True)
 
                         # edit_file / delete_lines の ValueError → find スニペット不一致の専用ヒント
-                        if action.name in ('edit_file', 'delete_lines') and isinstance(e, ValueError):
-                            self.state.last_syntax_errors.append(SyntaxErrorInfo(
-                                error_type='edit_find_mismatch',
-                                raw_snippet=str(e)[:300],
-                                correction_hint=(
-                                    'The find snippet did not match the file content. '
-                                    'The file may have changed since read_file was called. '
-                                    'Re-run read_file, copy the target lines EXACTLY as they appear '
-                                    '(without line-number prefixes) into find:, then retry edit_file.'
-                                ),
-                            ))
+                        if action.name in ("edit_file", "delete_lines") and isinstance(
+                            e, ValueError
+                        ):
+                            self.state.last_syntax_errors.append(
+                                SyntaxErrorInfo(
+                                    error_type="edit_find_mismatch",
+                                    raw_snippet=str(e)[:300],
+                                    correction_hint=(
+                                        "The find snippet did not match the file content. "
+                                        "The file may have changed since read_file was called. "
+                                        "Re-run read_file, copy the target lines EXACTLY as they appear "
+                                        "(without line-number prefixes) into find:, then retry edit_file."
+                                    ),
+                                )
+                            )
                         # 引数不足などの TypeError を構文エラーとして記録
                         elif isinstance(e, TypeError):
-                            self.state.last_syntax_errors.append(SyntaxErrorInfo(
-                                error_type='missing_param',
-                                raw_snippet=str(e)[:300],
-                                correction_hint=(
-                                    f"Wrong or missing parameter for '{action.name}'. "
-                                    'Check the tool description for correct parameter names and format.'
-                                ),
-                            ))
+                            self.state.last_syntax_errors.append(
+                                SyntaxErrorInfo(
+                                    error_type="missing_param",
+                                    raw_snippet=str(e)[:300],
+                                    correction_hint=(
+                                        f"Wrong or missing parameter for '{action.name}'. "
+                                        "Check the tool description for correct parameter names and format."
+                                    ),
+                                )
+                            )
 
                         # Add error to conversation history in Sym-Ops format
                         err_res = ToolResult(
                             status=ToolStatus.ERROR,
                             tool_name=action.name,
-                            target=action.parameters.get("path", action.parameters.get("command", "task")),
-                            content=e
+                            target=action.parameters.get(
+                                "path", action.parameters.get("command", "task")
+                            ),
+                            content=e,
                         )
-                        self.state.add_message("user", wrap_tool_result(format_symops_response(err_res)))
+                        self.state.add_message(
+                            "user", wrap_tool_result(format_symops_response(err_res))
+                        )
 
                         results.append(error_msg)
 
@@ -869,14 +1025,22 @@ class DuckAgent:
                         # --- Fail-fast: 連続エラーで残りのアクションを中断 ---
                         consecutive_errors += 1
                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                            remaining = len(action_list.actions) - action_list.actions.index(action) - 1
+                            remaining = (
+                                len(action_list.actions)
+                                - action_list.actions.index(action)
+                                - 1
+                            )
                             if remaining > 0:
-                                logger.warning(f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions")
-                                ui.print_warning(f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。")
+                                logger.warning(
+                                    f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions"
+                                )
+                                ui.print_warning(
+                                    f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。"
+                                )
                                 self.state.add_message(
                                     "user",
                                     f"[SYSTEM] 連続{consecutive_errors}回のエラーにより残り{remaining}件のアクションを中断しました。"
-                                    "原因を確認してから再試行してください。"
+                                    "原因を確認してから再試行してください。",
                                 )
                             break
                 else:
@@ -884,23 +1048,26 @@ class DuckAgent:
                     logger.warning(msg)
                     self.state.last_action_result = msg
                     ui.print_result(msg, is_error=True)
-                    
+
                     # Add unknown tool error to conversation history
                     available_tools = ", ".join(self.tools.keys())
                     self.state.add_message(
-                        "user", 
+                        "user",
                         f"[Error] Tool '{action.name}' does not exist. "
                         f"Available tools: {available_tools}. "
-                        f"Please use one of the available tools."
+                        f"Please use one of the available tools.",
                     )
-                    
+
                     results.append(msg)
-                    
+
                     # Update Pacemaker vitals (error - unknown tool)
                     self.pacemaker.update_vitals(action, msg, is_error=True)
         except KeyboardInterrupt:
             ui.print_warning("Execution interrupted by user.")
-            self.state.add_message("user", "[System: Execution was interrupted by the user (Ctrl+C). Please wait for new instructions.]")
+            self.state.add_message(
+                "user",
+                "[System: Execution was interrupted by the user (Ctrl+C). Please wait for new instructions.]",
+            )
             # results might be partial, but that's okay
 
         # 推論とアクション概要を会話履歴に保存する。
@@ -932,7 +1099,9 @@ class DuckAgent:
             lines.append(f">> {action_list.reasoning}")
         for action in action_list.actions:
             target = action.parameters.get("path", action.parameters.get("command", ""))
-            lines.append(f":: {action.name} @{target}" if target else f":: {action.name}")
+            lines.append(
+                f":: {action.name} @{target}" if target else f":: {action.name}"
+            )
         return "\n".join(lines)
 
     # --- No-op (LLMのプロトコル的出力を吸収) ---
@@ -943,7 +1112,7 @@ class DuckAgent:
 
     # --- Basic Actions ---
 
-    async def action_note_(self, message: str = "") -> str:
+    async def action_note(self, message: str = "") -> str:
         """
         ユーザーに短文を通知するが、ループは継続する。
         進捗状況などを伝えるのに使用する。
@@ -978,90 +1147,6 @@ class DuckAgent:
         ui.print_conversation_message(message, speaker="assistant")
         return "Responded to user."
 
-    async def action_report(self, message: str = "") -> str:
-        """
-        Structured report for investigation results, code analysis, or task completion.
-        You MUST include these Markdown headers: ## 要約, ## 詳細, ## 結論.
-        Do NOT use for simple questions — use 'response' instead.
-
-        Args:
-            message: レポート本文（Markdown形式、## 要約 / ## 詳細 / ## 結論 を含むこと）
-
-        Returns:
-            実行確認文字列 "Report delivered to user."
-        """
-        self.state.add_message("assistant", f"[REPORT]\n{message}")
-
-        ui.print_system("Generating report...")
-        ui.print_markdown(message)
-        return "Report delivered to user."
-
-    async def action_status(self) -> str:
-        """
-        User Display the current agent status including vitals, 
-        """
-        # Build status report
-        status_lines = [
-            "## 🦆 Duckflow Status Report",
-            "",
-            f"**Phase:** {self.state.phase.value}",
-            f"**Mode:** {self.state.current_mode.value}",
-            "",
-            "### Vitals",
-            f"  - Confidence: {self.state.vitals.confidence:.2f}",
-            f"  - Safety: {self.state.vitals.safety:.2f}",
-            f"  - Memory: {self.state.vitals.memory:.2f}",
-            f"  - Focus: {self.state.vitals.focus:.2f}",
-            "",
-        ]
-
-        # Add plan status if exists
-        if self.state.current_plan:
-            status_lines.append("### Current Plan")
-            current_step = self.state.current_plan.get_current_step()
-            if current_step:
-                status_lines.append(f"  - Step: {current_step.title} ({current_step.status.value})")
-                status_lines.append(f"  - Tasks: {len(current_step.tasks)} total")
-                completed = sum(1 for t in current_step.tasks if t.status == TaskStatus.COMPLETED)
-                pending = sum(1 for t in current_step.tasks if t.status == TaskStatus.PENDING)
-                status_lines.append(f"    - Completed: {completed}")
-                status_lines.append(f"    - Pending: {pending}")
-            else:
-                status_lines.append("  - No active step")
-            status_lines.append("")
-
-        # Add investigation status if active
-        if self.state.investigation_state:
-            inv = self.state.investigation_state
-            status_lines.append("### Investigation Mode")
-            status_lines.append(f"  - Hypotheses: {inv.hypothesis_attempts}/5")
-            status_lines.append(f"  - OODA Cycles: {inv.ooda_cycle}")
-            status_lines.append(f"  - Observations: {len(inv.observations)}")
-            if inv.hypothesis:
-                status_lines.append(f"  - Current Hypothesis: {inv.hypothesis}")
-            status_lines.append("")
-
-        # Add loop information
-        status_lines.append(f"### Execution Loop")
-        status_lines.append(f"  - Current Loop: {self.pacemaker.loop_count}/{self.pacemaker.max_loops}")
-        status_lines.append(f"  - Session Created: {self.state.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
-
-        status_report = "\n".join(status_lines)
-
-        # Add to history and display
-        self.state.add_message("assistant", f"[STATUS REPORT]\n{status_report}")
-
-        from rich.panel import Panel
-        from rich.markdown import Markdown
-        ui.console.print(Panel(
-            Markdown(status_report),
-            title="[duck]🦆 Agent Status[/duck]",
-            border_style="duck",
-            expand=False
-        ))
-
-        return "Status report generated."
-
     async def action_run_command(self, command: str) -> str:
         """
         Execute a shell command with mandatory user approval.
@@ -1075,9 +1160,9 @@ class DuckAgent:
             コマンドの stdout/stderr 出力、またはユーザー拒否時のエラーメッセージ
         """
         ui.print_warning(f"Permission requested to run: {command}")
-        
+
         confirmed = ui.request_confirmation(f"Execute this command?")
-        
+
         if confirmed:
             return await ShellTool.run_command(command)
         else:
@@ -1087,31 +1172,6 @@ class DuckAgent:
                 f"The user refused to run the command: '{command}'. "
                 f"Do not retry the same command without modification or explanation."
             )
-
-    async def action_finish(self, result: str = "") -> str:
-        """
-        Mark the entire objective as accomplished.
-        Provide a concise summary of the work done in the 'result' parameter.
-
-        Args:
-            result: 完了した作業の要約メッセージ
-
-        Returns:
-            実行確認文字列 "Task finished. Result reported to user."
-        """
-        # Add to history
-        self.state.add_message("assistant", f"[FINISHED] {result}")
-        
-        # Print nicely
-        from rich.panel import Panel
-        from rich.markdown import Markdown
-        ui.console.print(Panel(
-            Markdown(result),
-            title="[duck]🦆 Task Completed[/duck]",
-            border_style="green",
-            expand=False
-        ))
-        return "Task finished. Result reported to user."
 
     async def action_exit(self) -> str:
         """
@@ -1137,19 +1197,21 @@ class DuckAgent:
         """
         if not self.state.current_plan:
             return "No active plan. Create a plan first with 'propose_plan'."
-        
+
         current_step = self.state.current_plan.get_current_step()
         if not current_step:
             return "No active step in the plan."
-        
+
         if not current_step.tasks:
             return f"No tasks found for step '{current_step.title}'. Generate tasks first with 'generate_tasks'."
-        
-        ui.print_system(f"Executing {len(current_step.tasks)} tasks for step: '{current_step.title}'")
-        
+
+        ui.print_system(
+            f"Executing {len(current_step.tasks)} tasks for step: '{current_step.title}'"
+        )
+
         # Execute tasks using TaskExecutor
         summary = await self.task_executor.execute_task_list(current_step.tasks)
-        
+
         final_summary = ""
         # Generate AI-powered summary
         try:
@@ -1162,7 +1224,7 @@ class DuckAgent:
             summary_text = self.task_executor.get_summary_text(summary)
             ui.print_result(summary_text)
             final_summary = summary_text
-        
+
         # Update step status if all tasks completed
         if summary["failed"] == 0:
             current_step.status = TaskStatus.COMPLETED
@@ -1231,7 +1293,9 @@ class DuckAgent:
         # 上限到達時は duck_call を強制する。Investigation Mode は維持し、
         # read-only guard を解除しない。
         if inv.hypothesis_attempts >= MAX_HYPOTHESIS_ATTEMPTS:
-            logger.warning(f"Hypothesis limit reached ({MAX_HYPOTHESIS_ATTEMPTS}), forcing duck_call")
+            logger.warning(
+                f"Hypothesis limit reached ({MAX_HYPOTHESIS_ATTEMPTS}), forcing duck_call"
+            )
             return (
                 f"Hypothesis #{inv.hypothesis_attempts} registered: '{hypothesis}'.\n"
                 f"⚠️ HYPOTHESIS LIMIT REACHED ({MAX_HYPOTHESIS_ATTEMPTS}/{MAX_HYPOTHESIS_ATTEMPTS}). "
@@ -1263,7 +1327,9 @@ class DuckAgent:
         obs_count = len(inv_state.observations) if inv_state else 0
 
         self.state.enter_planning_mode()
-        ui.print_system(f"✅ Investigation 完了。Planning Mode に切り替えました。結論: {conclusion}")
+        ui.print_system(
+            f"✅ Investigation 完了。Planning Mode に切り替えました。結論: {conclusion}"
+        )
         logger.info(f"Finishing Investigation Mode. Conclusion: {conclusion}")
         return (
             f"Investigation complete after {obs_count} observations. "

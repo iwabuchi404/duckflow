@@ -10,9 +10,15 @@ from .hashline import HashlineHelper
 # ドット始まり（.git, .venv 等）以外にも、ビルド成果物やキャッシュ等
 # テキスト検索の対象として無意味、かつ .pyc のようなバイナリノイズの
 # 発生源になるディレクトリ名を明示的に除外する。
-NOISE_DIR_NAMES = frozenset({
-    '__pycache__', 'node_modules', 'dist', 'build', 'egg-info',
-})
+NOISE_DIR_NAMES = frozenset(
+    {
+        "__pycache__",
+        "node_modules",
+        "dist",
+        "build",
+        "egg-info",
+    }
+)
 
 
 def _is_noise_dir_name(name: str) -> bool:
@@ -24,13 +30,14 @@ def _is_noise_dir_name(name: str) -> bool:
     Returns:
         True when the directory is a known cache/build artifact directory.
     """
-    return name in NOISE_DIR_NAMES or name.endswith('.egg-info')
+    return name in NOISE_DIR_NAMES or name.endswith(".egg-info")
 
 
 class FileOps:
     """
     File Operations with Duck Keeper Safety.
     """
+
     def __init__(self, workspace_root: str = "."):
         self.workspace_root = Path(workspace_root).resolve()
 
@@ -41,18 +48,23 @@ class FileOps:
             self.workspace_root.mkdir(parents=True, exist_ok=True)
         print(f"📂 Workspace set to: {self.workspace_root}")
 
-    def _is_safe_path(self, path: str) -> bool: 
-        """Duck Keeper: Ensure path is within workspace.""" 
+    def _is_safe_path(self, path: str) -> bool:
+        """Duck Keeper: Ensure path is within workspace."""
         try:
             target_path = (self.workspace_root / path).resolve()
-            return ( self.workspace_root in target_path.parents or target_path == self.workspace_root or target_path.parent == self.workspace_root  ) 
+            return (
+                self.workspace_root in target_path.parents
+                or target_path == self.workspace_root
+                or target_path.parent == self.workspace_root
+            )
         except Exception:
             return False
 
-
     def _get_full_path(self, path: str) -> Path:
         if not self._is_safe_path(path):
-            raise PermissionError(f"Duck Keeper Alert: Access denied to {path} (Outside workspace)")
+            raise PermissionError(
+                f"Duck Keeper Alert: Access denied to {path} (Outside workspace)"
+            )
         return (self.workspace_root / path).resolve()
 
     def file_exists(self, path: str) -> bool:
@@ -104,8 +116,10 @@ class FileOps:
                 # 1-indexed to 0-indexed slice
                 # islice(iterable, start, stop)
                 # To read lines from start_line, we skip start_line - 1 lines.
-                lines_it = itertools.islice(f, start_line - 1, start_line - 1 + max_lines)
-                content_lines = [line.rstrip('\n') for line in lines_it]
+                lines_it = itertools.islice(
+                    f, start_line - 1, start_line - 1 + max_lines
+                )
+                content_lines = [line.rstrip("\n") for line in lines_it]
 
                 # Check if there is more content (has_more)
                 try:
@@ -116,7 +130,9 @@ class FileOps:
 
             # 行番号付き形式に変換（ハッシュは除外して読みやすくする）
             if content_lines:
-                content = HashlineHelper.format_with_hashlines('\n'.join(content_lines), start_line=start_line, include_hash=False)
+                content = HashlineHelper.format_with_hashlines(
+                    "\n".join(content_lines), start_line=start_line, include_hash=False
+                )
             else:
                 content = "(Empty file)"
 
@@ -125,11 +141,13 @@ class FileOps:
                 "size_bytes": size_bytes,
                 "showing_lines": f"{start_line}-{start_line + len(content_lines) - 1}",
                 "content": content,
-                "has_more": has_more
+                "has_more": has_more,
             }
 
         except UnicodeDecodeError:
-            return {"error": f"File {path} is not a valid UTF-8 text file (encoding error)."}
+            return {
+                "error": f"File {path} is not a valid UTF-8 text file (encoding error)."
+            }
 
     def _normalize_line(self, line: str) -> str:
         """
@@ -139,9 +157,10 @@ class FileOps:
         3. 連続空白を1つに縮退してトリム。
         """
         import re as _re
-        line = _re.sub(r'^\s*\d+(?::[0-9a-fA-F]+)?\|\s*', '', line)
-        line = _re.sub(r'\t', '    ', line)
-        line = _re.sub(r' +', ' ', line).strip()
+
+        line = _re.sub(r"^\s*\d+(?::[0-9a-fA-F]+)?\|\s*", "", line)
+        line = _re.sub(r"\t", "    ", line)
+        line = _re.sub(r" +", " ", line).strip()
         return line
 
     def _normalize_block(self, lines: list[str]) -> list[str]:
@@ -164,12 +183,12 @@ class FileOps:
         # Step 1: ハッシュ接頭辞除去 & タブ変換
         processed = []
         for line in lines:
-            line = _re.sub(r'^\s*\d+(?::[0-9a-fA-F]+)?\|\s*', '', line)
-            line = line.replace('\t', '    ')
+            line = _re.sub(r"^\s*\d+(?::[0-9a-fA-F]+)?\|\s*", "", line)
+            line = line.replace("\t", "    ")
             processed.append(line)
 
         # Step 2: 非空行の最小インデントを計算
-        indents = [len(l) - len(l.lstrip(' ')) for l in processed if l.strip()]
+        indents = [len(l) - len(l.lstrip(" ")) for l in processed if l.strip()]
         min_indent = min(indents) if indents else 0
 
         # Step 3: 最小インデント除去 + 末尾トリム
@@ -178,11 +197,13 @@ class FileOps:
             if line.strip():
                 normalized.append(line[min_indent:].rstrip())
             else:
-                normalized.append('')
+                normalized.append("")
 
         return normalized
 
-    def _find_context_match(self, file_lines: list[str], find_text: str, occurrence: int = 1) -> tuple[int, int] | None:
+    def _find_context_match(
+        self, file_lines: list[str], find_text: str, occurrence: int = 1
+    ) -> tuple[int, int] | None:
         """
         findテキストにマッチする行範囲を返す。
 
@@ -190,7 +211,7 @@ class FileOps:
         タブ/スペースの差、絶対インデントの差は吸収するが、
         ブロック内の相対的なインデント構造は保持して比較する。
         """
-        find_lines = [l.rstrip('\n') for l in find_text.splitlines()]
+        find_lines = [l.rstrip("\n") for l in find_text.splitlines()]
         find_len = len(find_lines)
         if find_len == 0:
             return None
@@ -199,7 +220,7 @@ class FileOps:
 
         match_count = 0
         for i in range(len(file_lines) - find_len + 1):
-            window = file_lines[i:i + find_len]
+            window = file_lines[i : i + find_len]
             norm_window = self._normalize_block(window)
 
             if norm_window == norm_find:
@@ -209,15 +230,18 @@ class FileOps:
 
         return None
 
-    def _find_similar_lines(self, file_lines: list[str], find_first_line: str, diff_threshold: float = 0.5) -> list[tuple[int, str]]:
+    def _find_similar_lines(
+        self, file_lines: list[str], find_first_line: str, diff_threshold: float = 0.5
+    ) -> list[tuple[int, str]]:
         """
         マッチ失敗時に候補を提示するため、findの1行目に似た行を探す。
         """
         import difflib as _difflib
+
         norm_find = self._normalize_line(find_first_line)
         if not norm_find:
             return []
-            
+
         candidates = []
         for i, line in enumerate(file_lines):
             norm_line = self._normalize_line(line)
@@ -226,19 +250,28 @@ class FileOps:
             ratio = _difflib.SequenceMatcher(None, norm_find, norm_line).ratio()
             if ratio >= diff_threshold:
                 candidates.append((i + 1, line))
-        return sorted(candidates, key=lambda x: _difflib.SequenceMatcher(None, norm_find, self._normalize_line(x[1])).ratio(), reverse=True)[:5]
+        return sorted(
+            candidates,
+            key=lambda x: _difflib.SequenceMatcher(
+                None, norm_find, self._normalize_line(x[1])
+            ).ratio(),
+            reverse=True,
+        )[:5]
 
-    def _generate_match_failure_diff(self, find_lines: list[str], candidate_lines: list[str]) -> str:
+    def _generate_match_failure_diff(
+        self, find_lines: list[str], candidate_lines: list[str]
+    ) -> str:
         """
         期待値(find)と実際(candidate)の間の差異を可視化する。
         """
         import difflib as _difflib
+
         # 各行を正規化して比較しやすくする
         f_norm = [self._normalize_line(l) for l in find_lines]
         c_norm = [self._normalize_line(l) for l in candidate_lines]
-        
+
         diff = _difflib.ndiff(f_norm, c_norm)
-        return "\n".join([line for line in diff if line.startswith(('-', '+', '?'))])
+        return "\n".join([line for line in diff if line.startswith(("-", "+", "?"))])
 
     async def write_file(self, path: str, content: str) -> str:
         """
@@ -248,7 +281,7 @@ class FileOps:
         """
         # Sanitize content before writing
         clean_content = self._sanitize_content(content)
-        
+
         full_path = self._get_full_path(path)
         full_path.parent.mkdir(parents=True, exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
@@ -261,14 +294,14 @@ class FileOps:
     # マーカーは4文字以上の連続（git の7文字と互換、かつ厳密 <<<(3) と区別）。
 
     # 開始: <<<<<<< [SEARCH]  / 区切り: =======  / 終了: >>>>>>> [REPLACE]
-    _SR_OPEN_RE = re.compile(r'^\s*<{4,}\s*(?:SEARCH)?\s*:?\s*$', re.IGNORECASE)
-    _SR_SEP_RE = re.compile(r'^\s*={4,}\s*$')
-    _SR_CLOSE_RE = re.compile(r'^\s*>{4,}\s*(?:REPLACE)?\s*:?\s*$', re.IGNORECASE)
+    _SR_OPEN_RE = re.compile(r"^\s*<{4,}\s*(?:SEARCH)?\s*:?\s*$", re.IGNORECASE)
+    _SR_SEP_RE = re.compile(r"^\s*={4,}\s*$")
+    _SR_CLOSE_RE = re.compile(r"^\s*>{4,}\s*(?:REPLACE)?\s*:?\s*$", re.IGNORECASE)
 
     # git コンフリクトマーカー（未解決コンフリクトの署名）。git は厳密に7文字。
-    _GIT_CONFLICT_OPEN_RE = re.compile(r'^<{7} ')
-    _GIT_CONFLICT_SEP_RE = re.compile(r'^={7}$')
-    _GIT_CONFLICT_CLOSE_RE = re.compile(r'^>{7} ')
+    _GIT_CONFLICT_OPEN_RE = re.compile(r"^<{7} ")
+    _GIT_CONFLICT_SEP_RE = re.compile(r"^={7}$")
+    _GIT_CONFLICT_CLOSE_RE = re.compile(r"^>{7} ")
 
     @classmethod
     def _content_uses_markers(cls, content: str) -> bool:
@@ -281,7 +314,7 @@ class FileOps:
         Returns:
             開始マーカー行（<<<<<<< [SEARCH]）が1つでもあれば True
         """
-        return any(cls._SR_OPEN_RE.match(line) for line in content.split('\n'))
+        return any(cls._SR_OPEN_RE.match(line) for line in content.split("\n"))
 
     @classmethod
     def _has_git_conflict_markers(cls, text: str) -> bool:
@@ -298,7 +331,7 @@ class FileOps:
         Returns:
             開始(<<<<<<< )と区切り(=======)の両方が存在すれば True
         """
-        lines = text.split('\n')
+        lines = text.split("\n")
         has_open = any(cls._GIT_CONFLICT_OPEN_RE.match(l) for l in lines)
         has_sep = any(cls._GIT_CONFLICT_SEP_RE.match(l) for l in lines)
         return has_open and has_sep
@@ -320,7 +353,7 @@ class FileOps:
             {'find': ..., 'replace': ..., 'occurrence': 1} のリスト。
             区切り `=======` を欠くなど分離不能なブロックはスキップする。
         """
-        lines = content.split('\n')
+        lines = content.split("\n")
         pairs: List[dict] = []
         i = 0
         n = len(lines)
@@ -361,15 +394,24 @@ class FileOps:
                 replace_lines.append(lines[i])
                 i += 1
 
-            pairs.append({
-                'find': '\n'.join(search_lines).strip('\n'),
-                'replace': '\n'.join(replace_lines).strip('\n'),
-                'occurrence': 1,
-            })
+            pairs.append(
+                {
+                    "find": "\n".join(search_lines).strip("\n"),
+                    "replace": "\n".join(replace_lines).strip("\n"),
+                    "occurrence": 1,
+                }
+            )
 
         return pairs
 
-    async def edit_file(self, path: str, find: str = "", replace: str = "", occurrence: int = 1, content: str = "") -> str:
+    async def edit_file(
+        self,
+        path: str,
+        find: str = "",
+        replace: str = "",
+        occurrence: int = 1,
+        content: str = "",
+    ) -> str:
         '''
         Context Match (Fuzzy) based file editing with search-and-replace.
         Whitespace differences (tabs/spaces) are ignored during matching.
@@ -441,15 +483,17 @@ class FileOps:
 
         # 1つ目のアクション（トップレベル引数）を最初に追加（もし存在すれば）
         if find:
-            edits_params.append({'find': find, 'replace': replace, 'occurrence': int(occurrence)})
+            edits_params.append(
+                {"find": find, "replace": replace, "occurrence": int(occurrence)}
+            )
 
         # --- SEARCH/REPLACE マーカー形式の分岐（docs/edit_format_search_replace_design.md） ---
         if content and self._content_uses_markers(content):
             # ルーティング: 対象ファイルがコンフリクト中ならマーカー形式は危険 → write_file へ誘導
             try:
-                _existing = full_path.read_text(encoding='utf-8')
+                _existing = full_path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
-                _existing = full_path.read_text(encoding='latin-1')
+                _existing = full_path.read_text(encoding="latin-1")
             if self._has_git_conflict_markers(_existing):
                 return (
                     f"::status error\n"
@@ -473,7 +517,9 @@ class FileOps:
 
             # 健全性チェック: REPLACE 側に git マーカーが残る → 誤パースの疑い。適用拒否
             for mp in marker_pairs:
-                if self._has_git_conflict_markers(mp['replace']) or mp['replace'].lstrip().startswith(('<<<<<<<', '>>>>>>>')):
+                if self._has_git_conflict_markers(mp["replace"]) or mp[
+                    "replace"
+                ].lstrip().startswith(("<<<<<<<", ">>>>>>>")):
                     return (
                         f"::status error\n"
                         f"Reason: marker_leak_in_replace\n"
@@ -488,17 +534,17 @@ class FileOps:
         # ----------------------------------------------------------------------------------
 
         # セグメントの収集（従来の find:/replace: 形式）
-        segments_raw = _re.split(r'\n%%%', content)
+        segments_raw = _re.split(r"\n%%%", content)
 
         # コンテンツブロック内のセグメントをパース
         for seg in segments_raw:
-            seg = seg.strip('\n')
+            seg = seg.strip("\n")
             if not seg.strip():
                 continue
-            
+
             # YAMLフロントマター、またはブロックそのものがYAMLの場合を考慮
             found_params = {}
-            fm_match = _re.match(r'^---\n(.*?)\n---\n?(.*)', seg, _re.DOTALL)
+            fm_match = _re.match(r"^---\n(.*?)\n---\n?(.*)", seg, _re.DOTALL)
             if fm_match:
                 try:
                     p = yaml.safe_load(fm_match.group(1))
@@ -510,27 +556,31 @@ class FileOps:
                 # ブロックそのものをYAMLとしてパースを試みる
                 try:
                     p = yaml.safe_load(seg)
-                    if isinstance(p, dict) and ('find' in p or 'replace' in p):
+                    if isinstance(p, dict) and ("find" in p or "replace" in p):
                         found_params = p
                 except Exception:
                     pass
 
             # フォールバック：正規表現による find/replace 抽出 (Hybrid Parsing)
-            if not found_params.get('find'):
+            if not found_params.get("find"):
                 fallback = self._extract_find_replace_fallback(seg)
                 if fallback:
                     found_params.update(fallback)
-            
-            if 'find' in found_params:
-                edits_params.append({
-                    'find': found_params.get('find', ''),
-                    'replace': found_params.get('replace', ''),
-                    'occurrence': int(found_params.get('occurrence', 1))
-                })
+
+            if "find" in found_params:
+                edits_params.append(
+                    {
+                        "find": found_params.get("find", ""),
+                        "replace": found_params.get("replace", ""),
+                        "occurrence": int(found_params.get("occurrence", 1)),
+                    }
+                )
 
         return await self._apply_edits(path, full_path, edits_params, content)
 
-    async def _apply_edits(self, path: str, full_path: Path, edits_params: List[dict], content: str) -> str:
+    async def _apply_edits(
+        self, path: str, full_path: Path, edits_params: List[dict], content: str
+    ) -> str:
         """
         収集済みの find/replace ペアを対象ファイルに適用する共通処理。
 
@@ -563,18 +613,18 @@ class FileOps:
 
         # ファイルを読み込み
         try:
-            raw_content = full_path.read_text(encoding='utf-8')
+            raw_content = full_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            raw_content = full_path.read_text(encoding='latin-1')
+            raw_content = full_path.read_text(encoding="latin-1")
 
-        file_lines = [l.rstrip('\n') for l in raw_content.split('\n')]
+        file_lines = [l.rstrip("\n") for l in raw_content.split("\n")]
 
         # すべてのマッチ箇所を特定
         resolved = []
         for i, p in enumerate(edits_params):
-            f = p['find']
-            r = p['replace']
-            occ = p['occurrence']
+            f = p["find"]
+            r = p["replace"]
+            occ = p["occurrence"]
 
             match = self._find_context_match(file_lines, f, occ)
             if match is None:
@@ -585,11 +635,15 @@ class FileOps:
                 diff_hint = ""
                 if candidates:
                     best_cand_idx = candidates[0][0] - 1
-                    cand_lines = file_lines[best_cand_idx : best_cand_idx + len(f.splitlines())]
+                    cand_lines = file_lines[
+                        best_cand_idx : best_cand_idx + len(f.splitlines())
+                    ]
                     diff_hint = f"\nDetailed Diff with closest candidate (Line {candidates[0][0]}):\n"
-                    diff_hint += self._generate_match_failure_diff(f.splitlines(), cand_lines)
+                    diff_hint += self._generate_match_failure_diff(
+                        f.splitlines(), cand_lines
+                    )
 
-                cand_str = "\n".join([f"  - line {l}: \"{c}\"" for l, c in candidates])
+                cand_str = "\n".join([f'  - line {l}: "{c}"' for l, c in candidates])
 
                 return (
                     f"::status error\n"
@@ -608,20 +662,20 @@ class FileOps:
         for start_idx, end_idx, r_text in resolved:
             # 置換後のコードからもハッシュや行番号を除去
             r_lines = [self._strip_hash_from_content(l) for l in r_text.splitlines()]
-            file_lines[start_idx:end_idx + 1] = r_lines
+            file_lines[start_idx : end_idx + 1] = r_lines
 
         # 書き込み
-        final_text = '\n'.join(file_lines)
+        final_text = "\n".join(file_lines)
         clean_text = self._sanitize_content(final_text)
-        full_path.write_text(clean_text, encoding='utf-8')
+        full_path.write_text(clean_text, encoding="utf-8")
 
         # デフ表示またはコンテキストを返す
         summary = f"Successfully edited {path} ({len(resolved)} match(es))."
         context = HashlineHelper.format_context_after_edit(
             file_lines,
             resolved[-1][0],
-            resolved[-1][0] + len(resolved[-1][2].split('\n')) - 1,
-            context_lines=5
+            resolved[-1][0] + len(resolved[-1][2].split("\n")) - 1,
+            context_lines=5,
         )
 
         return (
@@ -638,8 +692,9 @@ class FileOps:
         1行形式 (find: old_text) にも対応 (v2.2)。
         """
         import re as _re
+
         res = {}
-        
+
         def clean_block(block_text: str) -> str:
             if not block_text:
                 return ""
@@ -649,43 +704,49 @@ class FileOps:
             if not indents:
                 return block_text.strip()
             min_indent = min(indents)
-            return "\n".join([l[min_indent:] if l.strip() else "" for l in lines]).rstrip()
+            return "\n".join(
+                [l[min_indent:] if l.strip() else "" for l in lines]
+            ).rstrip()
 
         # 1. Multi-line search (find: | または find: > に続くテキスト)
-        find_match = _re.search(r'find:\s*[|>]?\n(.*?)(?:\n\s*\w+:|$)', text, _re.DOTALL)
+        find_match = _re.search(
+            r"find:\s*[|>]?\n(.*?)(?:\n\s*\w+:|$)", text, _re.DOTALL
+        )
         if find_match:
-            res['find'] = clean_block(find_match.group(1))
+            res["find"] = clean_block(find_match.group(1))
         else:
             # 2. Single-line fallback (find: value)
-            find_match_sl = _re.search(r'find:\s*(.*?)(?:\n|$)', text)
+            find_match_sl = _re.search(r"find:\s*(.*?)(?:\n|$)", text)
             if find_match_sl:
-                res['find'] = find_match_sl.group(1).strip()
-            
+                res["find"] = find_match_sl.group(1).strip()
+
         # 3. Multi-line replace (replace: | または replace: > に続くテキスト)
-        replace_match = _re.search(r'replace:\s*[|>]?\n(.*?)(?:\n\s*\w+:|$)', text, _re.DOTALL)
+        replace_match = _re.search(
+            r"replace:\s*[|>]?\n(.*?)(?:\n\s*\w+:|$)", text, _re.DOTALL
+        )
         if replace_match:
-            res['replace'] = clean_block(replace_match.group(1))
+            res["replace"] = clean_block(replace_match.group(1))
         else:
             # 4. Single-line fallback (replace: value)
-            replace_match_sl = _re.search(r'replace:\s*(.*?)(?:\n|$)', text)
+            replace_match_sl = _re.search(r"replace:\s*(.*?)(?:\n|$)", text)
             if replace_match_sl:
-                res['replace'] = replace_match_sl.group(1).strip()
-            
+                res["replace"] = replace_match_sl.group(1).strip()
+
         # occurrence
-        occ_match = _re.search(r'occurrence:\s*(\d+)', text)
+        occ_match = _re.search(r"occurrence:\s*(\d+)", text)
         if occ_match:
-            res['occurrence'] = int(occ_match.group(1))
-            
-        return res if res.get('find') else None
+            res["occurrence"] = int(occ_match.group(1))
+
+        return res if res.get("find") else None
 
     # Sym-Ops の既知アクション動詞（コード中に現れても除去対象とするもの）
     _PROTOCOL_VERB_PATTERN = (
-        r'(?:response|edit_file|write_file|read_file|delete_file|delete_lines|'
-        r'edit_lines|replace_in_file|run_command|duck_call|note|finish|'
-        r'investigate|execute_batch|propose_plan|list_directory|find_files|'
-        r'grep_files|generate_code|analyze_structure|submit_hypothesis|'
-        r'finish_investigation|generate_tasks|search_archives|recall|'
-        r'result|status)'
+        r"(?:response|edit_file|write_file|read_file|delete_file|delete_lines|"
+        r"edit_lines|replace_in_file|run_command|duck_call|note|"
+        r"investigate|execute_batch|propose_plan|list_directory|find_files|"
+        r"grep_files|generate_code|analyze_structure|submit_hypothesis|"
+        r"finish_investigation|generate_tasks|search_archives|recall|"
+        r"result|status)"
     )
 
     def _sanitize_content(self, text: str) -> str:
@@ -708,20 +769,15 @@ class FileOps:
             先頭・末尾の漏洩プロトコル行を除去した内容
         """
         import re as _re
+
         lines = text.splitlines()
 
         # 既知のプロトコルアクション行（::verb ...）
-        action_re = _re.compile(
-            rf'^\s*::\s*{self._PROTOCOL_VERB_PATTERN}\b.*$'
-        )
+        action_re = _re.compile(rf"^\s*::\s*{self._PROTOCOL_VERB_PATTERN}\b.*$")
         # Vitals 行（::c0.9 ::s1.0 形式）
-        vitals_re = _re.compile(
-            r'^\s*(?:::[cmfs][\d.]+\s*)+$'
-        )
+        vitals_re = _re.compile(r"^\s*(?:::[cmfs][\d.]+\s*)+$")
         # ブロック区切り（単独行のみ）
-        block_re = _re.compile(
-            r'^\s*(?:>>>|<<<|%%%+)\s*$'
-        )
+        block_re = _re.compile(r"^\s*(?:>>>|<<<|%%%+)\s*$")
 
         def _is_protocol_line(line: str) -> bool:
             """
@@ -741,11 +797,15 @@ class FileOps:
         end = len(lines)
 
         # 先頭の連続するプロトコル行・空行をスキップ
-        while start < end and (not lines[start].strip() or _is_protocol_line(lines[start])):
+        while start < end and (
+            not lines[start].strip() or _is_protocol_line(lines[start])
+        ):
             start += 1
 
         # 末尾の連続するプロトコル行・空行をスキップ
-        while end > start and (not lines[end - 1].strip() or _is_protocol_line(lines[end - 1])):
+        while end > start and (
+            not lines[end - 1].strip() or _is_protocol_line(lines[end - 1])
+        ):
             end -= 1
 
         return "\n".join(lines[start:end])
@@ -756,8 +816,8 @@ class FileOps:
         normalizeとは異なり、こちらは書き出しの際にも使われる。
         """
         import re as _re
-        return _re.sub(r'^\s*\d+(?::[0-9a-fA-F]+)?\|\s*', '', line)
 
+        return _re.sub(r"^\s*\d+(?::[0-9a-fA-F]+)?\|\s*", "", line)
 
     async def list_files(self, path: str = ".") -> List[str]:
         """
@@ -817,30 +877,32 @@ class FileOps:
             raise FileNotFoundError(f"File not found: {path}")
         if not full_path.is_file():
             raise IsADirectoryError(f"Path is a directory: {path}")
-        
+
         # Read current content
         with open(full_path, "r", encoding="utf-8") as f:
             content = f.read()
-        
+
         # Count occurrences
         count = content.count(search)
         if count == 0:
             return f"No occurrences of '{search}' found in {path}"
-        
+
         # Replace
         new_content = content.replace(search, replace)
-        
+
         # Sanitize before writing
         clean_new_content = self._sanitize_content(new_content)
-        
+
         # Write back
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(clean_new_content)
-        
+
         return f"Replaced {count} occurrence(s) of '{search}' in {path}"
 
-    async def edit_lines(self, path: str, start: int, end: int, content: str, dry_run: bool = True) -> str:
-        """ 
+    async def edit_lines(
+        self, path: str, start: int, end: int, content: str, dry_run: bool = True
+    ) -> str:
+        """
         行番号ベースのファイル編集（事前・事後検証プレビュー付き）。
 
         Sym-Ops format:
@@ -865,37 +927,37 @@ class FileOps:
         Returns:
             dry_run=True: 事前プレビュー（変更予定内容）
             dry_run=False: 編集結果と事後プレビュー
-        """ 
-        full_path = self._get_full_path(path) 
-        if not full_path.exists(): 
+        """
+        full_path = self._get_full_path(path)
+        if not full_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
-        dry_run = str(dry_run).lower() == 'true'
+        dry_run = str(dry_run).lower() == "true"
 
         start, end = int(start), int(end)
-        if start < 1 or end < start: 
+        if start < 1 or end < start:
             return f"Error: Invalid range {start}-{end}"
-        
-        with open(full_path, 'r', encoding='utf-8') as f:
+
+        with open(full_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        
+
         if start > len(lines):
             return f"Error: start ({start}) exceeds file length ({len(lines)})"
-        
+
         # Prepare new content
-        new_content_lines = [line + '\n' for line in content.split('\n')]
+        new_content_lines = [line + "\n" for line in content.split("\n")]
         old_count = min(end, len(lines)) - start + 1
-        
+
         # --- 事前プレビュー（Pre-edit Preview） ---
         preview_start = max(1, start - 3)
         preview_end = min(len(lines), end + 3)
-        
+
         preview_lines = []
         for i in range(preview_start, preview_end + 1):
             prefix = "!!>" if start <= i <= end else "   "
-            line_content = lines[i-1].rstrip('\n')
+            line_content = lines[i - 1].rstrip("\n")
             preview_lines.append(f"{prefix} {i:4d}| {line_content}")
-        
+
         pre_edit_preview = "\n".join(preview_lines)
         warning_header = (
             "編集後のプレビュー (Post-edit Preview) ---\n"
@@ -916,29 +978,28 @@ class FileOps:
                 f"--- End of Dry Run ---\n"
                 f"To execute: edit_lines(path='{path}', start={start}, end={end}, content='...', dry_run=False)"
             )
-        
+
         # Execute the edit
-        lines[start - 1:end] = new_content_lines
-        
+        lines[start - 1 : end] = new_content_lines
+
         # Sanitize before writing
         clean_final_content = self._sanitize_content("".join(lines))
-        
-        with open(full_path, 'w', encoding='utf-8') as f:
+
+        with open(full_path, "w", encoding="utf-8") as f:
             f.write(clean_final_content)
-        
+
         # --- 事後検証プレビュー（Post-edit Preview） ---
         post_preview_start = max(1, start - 5)
         post_preview_end = min(len(lines), start + len(new_content_lines) + 5)
-        
+
         post_preview_lines = []
         for i in range(post_preview_start, post_preview_end + 1):
             prefix = ">>>" if start <= i < start + len(new_content_lines) else "   "
-            line_content = lines[i-1].rstrip('\n')
+            line_content = lines[i - 1].rstrip("\n")
             post_preview_lines.append(f"{prefix} {i:4d}| {line_content}")
-        
+
         post_preview_text = "\n".join(post_preview_lines)
-       
-        
+
         return (
             f"Successfully edited {path}. Replaced {old_count} lines with {len(new_content_lines)} lines.\n"
             f"--- Post-edit Preview ({post_preview_start}-{post_preview_end}) ---\n"
@@ -947,8 +1008,9 @@ class FileOps:
             f"--- End of Preview ---"
         )
 
-
-    async def find_files(self, pattern: str = "*", recursive: bool = True, path: str = ".") -> List[str]:
+    async def find_files(
+        self, pattern: str = "*", recursive: bool = True, path: str = "."
+    ) -> List[str]:
         """
         Find files matching a pattern.
         Supports wildcards like *.py, test_*.md, etc.
@@ -1013,8 +1075,8 @@ class FileOps:
     async def grep_files(
         self,
         pattern: str,
-        path: str = '.',
-        include: str = '*',
+        path: str = ".",
+        include: str = "*",
         recursive: bool = True,
         max_results: int = 50,
     ) -> str:
@@ -1067,7 +1129,7 @@ class FileOps:
                     return
                 try:
                     for item in sorted(directory.iterdir(), key=lambda x: x.name):
-                        if item.name.startswith('.') or _is_noise_dir_name(item.name):
+                        if item.name.startswith(".") or _is_noise_dir_name(item.name):
                             continue
                         if item.is_file() and fnmatch(item.name, include):
                             try:
@@ -1090,7 +1152,7 @@ class FileOps:
             if total_matches >= max_results:
                 break
             try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     for line_num, line in enumerate(f, 1):
                         if regex.search(line):
                             rel_path = file_path.relative_to(self.workspace_root)
@@ -1111,9 +1173,11 @@ class FileOps:
             )
 
         results.append(f"\n{total_matches} match(es) found.")
-        return '\n'.join(results)
+        return "\n".join(results)
 
-    async def delete_lines(self, path: str, find: str = "", occurrence: int = 1, content: str = "") -> str:
+    async def delete_lines(
+        self, path: str, find: str = "", occurrence: int = 1, content: str = ""
+    ) -> str:
         """
         Context Match (Fuzzy) based line deletion.
         指定したスニペットにマッチする行範囲をファイルから削除する。
@@ -1144,13 +1208,13 @@ class FileOps:
         # 引数またはコンテンツ内から find を取得
         f_text = find
         occ = occurrence
-        
+
         if not f_text:
             try:
                 p = yaml.safe_load(content)
                 if isinstance(p, dict):
-                    f_text = p.get('find', '')
-                    occ = int(p.get('occurrence', 1))
+                    f_text = p.get("find", "")
+                    occ = int(p.get("occurrence", 1))
             except Exception:
                 pass
 
@@ -1163,18 +1227,18 @@ class FileOps:
 
         # ファイル読み込み
         try:
-            raw_content = full_path.read_text(encoding='utf-8')
+            raw_content = full_path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
-            raw_content = full_path.read_text(encoding='latin-1')
+            raw_content = full_path.read_text(encoding="latin-1")
 
-        file_lines = [l.rstrip('\n') for l in raw_content.split('\n')]
+        file_lines = [l.rstrip("\n") for l in raw_content.split("\n")]
 
         # マッチング
         match = self._find_context_match(file_lines, f_text, occ)
         if match is None:
             first_line = f_text.splitlines()[0] if f_text.strip() else ""
             candidates = self._find_similar_lines(file_lines, first_line)
-            cand_str = "\n".join([f"  - line {l}: \"{c}\"" for l, c in candidates])
+            cand_str = "\n".join([f'  - line {l}: "{c}"' for l, c in candidates])
             return (
                 f"::status error\n"
                 f"Reason: find_not_matched\n"
@@ -1183,20 +1247,20 @@ class FileOps:
 
         start_idx, end_idx = match
         deleted_count = end_idx - start_idx + 1
-        
-        del file_lines[start_idx:end_idx + 1]
+
+        del file_lines[start_idx : end_idx + 1]
 
         # 書き込み
-        final_text = '\n'.join(file_lines)
+        final_text = "\n".join(file_lines)
         clean_text = self._sanitize_content(final_text)
-        full_path.write_text(clean_text, encoding='utf-8')
+        full_path.write_text(clean_text, encoding="utf-8")
 
         # コンテキスト
         context = HashlineHelper.format_context_after_edit(
             file_lines,
             edit_start_idx=start_idx,
             edit_end_idx=max(start_idx - 1, 0),
-            context_lines=3
+            context_lines=3,
         )
 
         return (
@@ -1205,7 +1269,6 @@ class FileOps:
             f"{context}\n"
             f"--- End of Context ---"
         )
-
 
     async def delete_file(self, path: str) -> str:
         """
@@ -1222,13 +1285,16 @@ class FileOps:
         full_path = self._get_full_path(path)
         if not full_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
-        
+
         if full_path.is_dir():
-            raise IsADirectoryError(f"Path is a directory. Use delete_directory instead: {path}")
-        
+            raise IsADirectoryError(
+                f"Path is a directory. Use delete_directory instead: {path}"
+            )
+
         # Delete the file
         full_path.unlink()
         return f"Deleted file: {path}"
+
 
 # Global instance
 file_ops = FileOps()

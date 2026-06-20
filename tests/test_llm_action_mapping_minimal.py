@@ -10,11 +10,7 @@ def _parse_actions(text: str) -> ActionList:
 def test_run_command_content_maps_to_command_parameter() -> None:
     """run_command should map the content block to the command parameter."""
     result = _parse_actions(
-        ">> run a command\n"
-        "::run_command\n"
-        "<<<\n"
-        "echo hello\n"
-        ">>>"
+        ">> run a command\n" "::run_command\n" "<<<\n" "echo hello\n" ">>>"
     )
 
     action = result.actions[0]
@@ -74,3 +70,16 @@ def test_archive_search_target_maps_to_query_parameter() -> None:
 
     assert result.actions[0].parameters == {"query": "parser failure"}
     assert result.actions[1].parameters == {"query": "last decision"}
+
+
+def test_retired_report_and_finish_actions_have_no_special_parameter_mapping() -> None:
+    """
+    Retired report/finish actions should not be treated like response-style
+    callable tools by the Sym-Ops to ActionList conversion layer.
+    """
+    result = _parse_actions(">> retired actions\n::report @summary\n::finish @done")
+
+    assert result.actions[0].name == "report"
+    assert result.actions[0].parameters == {"path": "summary"}
+    assert result.actions[1].name == "finish"
+    assert result.actions[1].parameters == {"path": "done"}

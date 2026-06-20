@@ -89,6 +89,19 @@ class TestFixMissingSymbolsBlockProtection:
         result = self.repair._fix_missing_symbols(text)
         assert result.startswith(":: write_file")
 
+    def test_retired_report_finish_not_in_action_verbs(self) -> None:
+        """
+        report/finish は廃止済みアクションなので AutoRepair が補完しないことを確認する。
+
+        Args: なし
+        Returns: なし
+        """
+        assert "report" not in AutoRepair.ACTION_VERBS
+        assert "finish" not in AutoRepair.ACTION_VERBS
+
+        assert self.repair._fix_missing_symbols("report summary") == "report summary"
+        assert self.repair._fix_missing_symbols("finish done") == "finish done"
+
     def test_write_file_outside_block_no_colon_repaired(self) -> None:
         """
         :: なしの 'write_file @ foo.py' がブロック外で :: write_file @ foo.py に補完される。

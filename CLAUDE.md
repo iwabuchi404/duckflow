@@ -53,7 +53,7 @@ Duckflowは、開発者のローカル環境で動作する対話型AIコーデ�
 LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテンツブロック、YAMLフロントマター引数、`::c/s/m/f` バイタル表記からなる。`companion/utils/sym_ops.py` の `SymOpsProcessor` が「前処理 → AutoRepair（典型ミスの自動修復）→ パース」のパイプラインで処理する。`ActionList` は JSON 出力契約ではなく、Sym-Ops から変換された内部アクションコンテナである。
 
 ### 3モード制
-`AgentMode`（planning / investigation / task）ごとに公開ツールが異なる（`core.py` の `MODE_TOOL_MAPPING`）。**Investigation モードは read-only 強制**で、ファイル編集系アクションはブロックされる。仮説5回失敗で duck_call（ユーザー相談）を強制（2026-06-17改訂、旧仕様は2回）。Planning モードは `finish_investigation` 後すぐに修正へ移れるよう編集系ツール（`edit_file`/`write_file`/`delete_lines`/`delete_file`）を公開する（task モードと併存。task モードはタスク完了管理・execute_tasks 等が追加で使える点が異なる）。
+`AgentMode`（planning / investigation / task）ごとに公開ツールが異なる（`core.py` の `MODE_TOOL_MAPPING`）。**Investigation モードは read-only 強制**で、ファイル編集系アクションはブロックされる。仮説5回失敗で duck_call（ユーザー相談）を強制（2026-06-17改訂、旧仕様は2回）。Planning モードは `finish_investigation` 後すぐに修正へ移れるよう編集系ツール（`edit_file`/`write_file`/`delete_lines`/`delete_file`）を公開するが、用途は小さく確定した修正に限る。探索的な実装や広い変更は計画化して task モードで進める（task モードはタスク完了管理・execute_tasks 等が追加で使える点が異なる）。
 
 ### ファイル編集方式（find/replace コンテキストマッチ）
 `edit_file` は `find:`（既存コードの断片）と `replace:` を指定するコンテキストマッチ方式（`companion/tools/file_ops.py`）。マッチ失敗時は近似行の候補と差分ヒントを返してLLMの自己修正を促す。`companion/tools/hashline.py` の Hashline 形式（`行番号:ハッシュ|内容`）は read_file の表示補助として残っているが、編集のアンカーとしては現在使われていない（`tests/test_hashline.py` の失敗はこの移行にテストが追従していないため）。

@@ -8,6 +8,15 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: planning モード境界と旧アクション残骸を整理
+- `companion/core.py`: `note` の実装メソッド名を `action_note_` から `action_note` に統一。未登録のまま残っていた旧 `action_report` / `action_finish` / `action_status` を削除し、terminal action 判定から未登録の `finish` を除外。`::status` / `::result` は引き続きツール結果マーカー用 no-op として維持。
+- `companion/base/llm_client.py`: Sym-Ops → `Action.parameters` の特殊マッピングから廃止済み `report` / `finish` を削除。`::report` / `::finish` が出ても `response` 相当として扱わず、未知ツールフィードバックへ流れるよう整理。
+- `companion/utils/sym_ops.py` / `companion/tools/file_ops.py`: AutoRepair と protocol leak 判定から廃止済み `report` / `finish` の扱いを外し、`finish_investigation` は維持。
+- `companion/prompts/templates.py` / `companion/prompts/system_v1.py`: planning モードで編集ツールが公開される理由と条件を明記。`finish_investigation` 後の小さく確定した修正に限り、探索的・広範な実装は plan 作成後 task モードへ進める方針を追加。
+- `AGENTS.md` / `CLAUDE.md`: planning モードの編集ツール公開は条件付きであることを追記。
+- テスト追加: `tests/test_core_mode_mapping.py`（planning 境界文言、旧 report/finish 未登録、`status` no-op 維持）、`tests/test_llm_action_mapping_minimal.py`（report/finish の特殊マッピング削除）、`tests/test_autorepair_block_protection.py`（AutoRepair が report/finish を補完しない）。
+- 検証: 関連 `uv run pytest tests/test_core_mode_mapping.py tests/test_llm_action_mapping_minimal.py tests/test_autorepair_block_protection.py -v` で35件パス。全体 `uv run pytest tests/ -v` で179件パス / 1件スキップ。
+
 ### 2026-06-20: Rich 出力時の単独サロゲートによるクラッシュを修正
 - ユーザー報告: 動作確認中に Rich の `Console._write_buffer()` で `UnicodeEncodeError: 'utf-8' codec can't encode characters ... surrogates not allowed` が発生。`PYTHONIOENCODING=utf-8` だけでは解決せず、Duckflow 側が単独サロゲートを含む文字列を Rich に渡していたことが原因。
 - `companion/ui/console.py` に `_safe_text()` / `_safe_escape()` を追加。UI 表示直前に単独サロゲートを `\udcff` 形式の可視テキストへ変換し、Rich markup escaping と組み合わせて適用。

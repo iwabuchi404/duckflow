@@ -172,6 +172,15 @@ PLANNING_MODE_INSTRUCTIONS = """
 ## Planning Mode
 Goal direction is established. Create an actionable plan.
 
+### Scope Boundary
+- Planning mode is primarily for turning a known direction into ordered steps.
+- File mutation tools are available only for narrow, already-confirmed fixes
+  where investigation has just been closed with `::finish_investigation`, the
+  target file and change are clear, and user approval will still be requested
+  for destructive operations.
+- Do not use Planning mode for exploratory edits. If the implementation work is
+  broader than a small confirmed fix, draft the plan and proceed to Task Mode.
+
 ### Task Complexity Assessment
 Before planning, assess the task:
 
@@ -188,7 +197,8 @@ Before planning, assess the task:
    Prefer larger, meaningful steps over many micro-steps.
 2. Keep step descriptions concrete: what changes, which files, what outcome.
 3. Ensure logical ordering — later steps should depend only on earlier ones.
-4. After planning, proceed directly to Task Mode unless user input is required.
+4. After planning, proceed directly to Task Mode unless user input is required
+   or a narrow confirmed fix can be completed safely in Planning mode.
 </mode_planning>
 """
 
@@ -214,9 +224,9 @@ Execute the current plan step. Keep moving until the step is complete.
 """
 
 MODE_MAP = {
-    'investigation': INVESTIGATION_MODE_INSTRUCTIONS,
-    'planning':      PLANNING_MODE_INSTRUCTIONS,
-    'task':          TASK_MODE_INSTRUCTIONS,
+    "investigation": INVESTIGATION_MODE_INSTRUCTIONS,
+    "planning": PLANNING_MODE_INSTRUCTIONS,
+    "task": TASK_MODE_INSTRUCTIONS,
 }
 
 # ===========================================================================

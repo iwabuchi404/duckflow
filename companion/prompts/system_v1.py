@@ -176,6 +176,15 @@ Focus on:
 3. **Flexibility**: If a task is too complex for 7 steps, create a high-level plan first, then break down sub-plans.
 4. **Think strategically** - what's the best order of operations?
 
+**Scope Boundary:**
+- Planning mode is primarily for turning a known direction into ordered steps.
+- File mutation tools are available only for narrow, already-confirmed fixes
+  where investigation has just been closed with `::finish_investigation`, the
+  target file and change are clear, and user approval will still be requested
+  for destructive operations.
+- Do not use Planning mode for exploratory edits. If the implementation work is
+  broader than a small confirmed fix, create the plan and proceed to Task Mode.
+
 **Context Awareness:**
 - Check if a plan already exists in Current State
 - Review any previous planning attempts in the conversation history
@@ -232,7 +241,9 @@ When working with tasks:
 FEW_SHOT_EXAMPLES = [
     # パターン1: 短い質問 → response で返答
     {"role": "user", "content": "このプロジェクトは何のツールを使っていますか？"},
-    {"role": "assistant", "content": """>> ユーザーがプロジェクトの技術スタックを質問している
+    {
+        "role": "assistant",
+        "content": """>> ユーザーがプロジェクトの技術スタックを質問している
 >> 短い質問なので response で返答する
 
 ::c0.90 ::s1.0 ::m0.10 ::f0.95
@@ -240,23 +251,29 @@ FEW_SHOT_EXAMPLES = [
 ::response
 <<<
 Pythonベースで、Rich (UI)、Pydantic (状態管理)、PyYAML (設定) を使用しています。詳しく調べますか？
->>>"""},
-
+>>>""",
+    },
     # パターン2: 調査依頼 → read_file → (次ターンで) response
     {"role": "user", "content": "pacemaker.pyのループ制御を調査して"},
-    {"role": "assistant", "content": """>> 調査依頼なので、まずファイルを読む
+    {
+        "role": "assistant",
+        "content": """>> 調査依頼なので、まずファイルを読む
 >> 結果を見てから response で報告する
 
 ::c0.85 ::s1.0 ::m0.20 ::f0.90
 
-::read_file @companion/modules/pacemaker.py"""},
-
-    {"role": "assistant", "content": """::result ok
+::read_file @companion/modules/pacemaker.py""",
+    },
+    {
+        "role": "assistant",
+        "content": """::result ok
 ::tool read_file
 ::target companion/modules/pacemaker.py
-(file content here)"""},
-
-    {"role": "assistant", "content": """>> ファイルの内容を確認した
+(file content here)""",
+    },
+    {
+        "role": "assistant",
+        "content": """>> ファイルの内容を確認した
 >> 調査結果を response で構造化して報告する
 
 ::c0.90 ::s1.0 ::m0.30 ::f0.90
@@ -273,11 +290,16 @@ Pacemakerはループ回数をVitalsスコアに基づいて動的に制限し�
 
 ## 結論
 タスクの複雑度や種類は考慮されておらず、タスク数のみで計算されています。
->>>"""},
-
+>>>""",
+    },
     # パターン3: ファイル作成依頼 → write_file → response で完了報告
-    {"role": "user", "content": "hello.pyを作成して、Hello Worldを出力するコードを書いて"},
-    {"role": "assistant", "content": """>> ファイル作成依頼
+    {
+        "role": "user",
+        "content": "hello.pyを作成して、Hello Worldを出力するコードを書いて",
+    },
+    {
+        "role": "assistant",
+        "content": """>> ファイル作成依頼
 >> write_file でファイルを作成し、次のターンで response で報告する
 
 ::c0.95 ::s1.0 ::m0.10 ::f0.95
@@ -289,14 +311,18 @@ def main():
 
 if __name__ == '__main__':
     main()
->>>"""},
-
-    {"role": "assistant", "content": """::result ok
+>>>""",
+    },
+    {
+        "role": "assistant",
+        "content": """::result ok
 ::tool write_file
 ::target hello.py
-File written successfully."""},
-
-    {"role": "assistant", "content": """>> ファイル作成が完了した
+File written successfully.""",
+    },
+    {
+        "role": "assistant",
+        "content": """>> ファイル作成が完了した
 >> response で完了報告する
 
 ::c0.95 ::s1.0 ::m0.10 ::f0.95
@@ -304,26 +330,32 @@ File written successfully."""},
 ::response
 <<<
 `hello.py` を作成しました。`python hello.py` で実行できます。
->>>"""},
-
+>>>""",
+    },
     # パターン4: ファイル編集依頼 → read_file → edit_lines → response
     {"role": "user", "content": "hello.pyのmain関数にコメントを追加して"},
-    {"role": "assistant", "content": """>> 編集依頼なので、まずファイルを読んで行番号を確認する
+    {
+        "role": "assistant",
+        "content": """>> 編集依頼なので、まずファイルを読んで行番号を確認する
 
 ::c0.90 ::s1.0 ::m0.15 ::f0.95
 
-::read_file @hello.py"""},
-
-    {"role": "assistant", "content": """::result ok
+::read_file @hello.py""",
+    },
+    {
+        "role": "assistant",
+        "content": """::result ok
 ::tool read_file
 ::target hello.py
    1| def main():
    2|     print('Hello, World!')
    3|
    4| if __name__ == '__main__':
-   5|     main()"""},
-
-    {"role": "assistant", "content": """>> 行番号を確認した。1行目の前にコメントを追加する
+   5|     main()""",
+    },
+    {
+        "role": "assistant",
+        "content": """>> 行番号を確認した。1行目の前にコメントを追加する
 >> edit_lines で行1-1を置換する
 
 ::c0.95 ::s1.0 ::m0.20 ::f0.95
@@ -332,25 +364,32 @@ File written successfully."""},
 <<<
 # メイン関数: Hello Worldを出力する
 def main():
->>>"""},
-
-    {"role": "assistant", "content": """::result ok
+>>>""",
+    },
+    {
+        "role": "assistant",
+        "content": """::result ok
 ::tool edit_lines
 ::target hello.py
-Edited hello.py: replaced lines 1-1 (1 lines) with 2 lines (+1). File now has 6 lines."""},
-
-    {"role": "assistant", "content": """>> 編集完了。response で報告する
+Edited hello.py: replaced lines 1-1 (1 lines) with 2 lines (+1). File now has 6 lines.""",
+    },
+    {
+        "role": "assistant",
+        "content": """>> 編集完了。response で報告する
 
 ::c0.95 ::s1.0 ::m0.20 ::f0.95
 
 ::response
 <<<
 `hello.py` の `main` 関数にコメントを追加しました。
->>>"""},
+>>>""",
+    },
 ]
 
 
-def get_system_prompt(tool_descriptions: str, state_context: str, mode: str = "planning") -> str:
+def get_system_prompt(
+    tool_descriptions: str, state_context: str, mode: str = "planning"
+) -> str:
     """
     Generate system prompt with mode-specific instructions (Sym-Ops v3.2).
 
@@ -371,7 +410,7 @@ def get_system_prompt(tool_descriptions: str, state_context: str, mode: str = "p
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         tool_descriptions=tool_descriptions,
         state_context=state_context,
-        mode_specific_instructions=mode_instructions
+        mode_specific_instructions=mode_instructions,
     )
 
     # Append Sym-Ops format instructions

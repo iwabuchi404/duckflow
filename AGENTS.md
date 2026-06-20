@@ -55,7 +55,7 @@ Duckflowは、開発者のローカル環境で動作する対話型AIコーデ�
 LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテンツブロック、YAMLフロントマター引数、`::c/s/m/f` バイタル表記からなる。`companion/utils/sym_ops.py` の `SymOpsProcessor` が「前処理 → AutoRepair（典型ミスの自動修復）→ パース」のパイプラインで処理する。`ActionList` は JSON 出力契約ではなく、Sym-Ops から変換された内部アクションコンテナである。
 
 ### 3モード制
-`AgentMode`（planning / investigation / task）ごとに公開ツールが異なる（`core.py` の `MODE_TOOL_MAPPING`）。**Investigation モードは read-only 強制**で、ファイル編集系アクションはブロックされる。仮説2回失敗で duck_call（ユーザー相談）を強制。
+`AgentMode`（planning / investigation / task）ごとに公開ツールが異なる（`core.py` の `MODE_TOOL_MAPPING`）。**Investigation モードは read-only 強制**で、ファイル編集系アクションはブロックされる。planning モードは `finish_investigation` 後の小さく確定した修正へすぐ移れるよう編集系ツールを公開するが、探索的な実装や広い変更は計画化して task モードで進める。仮説2回失敗で duck_call（ユーザー相談）を強制。
 
 ### ファイル編集方式（SEARCH/REPLACE マーカー形式）
 `edit_file` は aider 型 `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE` マーカー形式（実装済み・推奨）に対応（従来 `find:`/`replace:` も後方互換で維持）。マッチ失敗時は近似行の候補と差分ヒントを返してLLMの自己修正を促す。git コンフリクトマーカー検出時は `write_file` へルーティング、健全性チェック付き。根拠と残課題（online A/B、tier別マッピング）は `docs/edit_format_search_replace_design.md`、ベンチは `benchmarks/`。
