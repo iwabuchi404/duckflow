@@ -35,6 +35,13 @@ from companion.core_action_pipeline import (
     filter_known_actions,
     move_terminal_actions_to_end,
 )
+from companion.core_action_results import (
+    build_action_summary,
+    build_denial_context,
+    build_tool_result_message,
+    get_approval_request,
+)
+from companion.core_action_invocation import filter_call_parameters
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +50,7 @@ from companion.modules.session_manager import SessionManager
 from companion.tools.shell_tool import ShellTool
 from companion.tools.results import (
     ToolStatus,
-    ToolResult,
-    format_symops_response,
     serialize_to_text,
-    wrap_tool_result,
     is_tool_result_message,
 )
 from companion.tools.sub_llm_tools import SubLLMTools
@@ -601,50 +605,33 @@ class DuckAgent:
                             ),
                         )
                     )
-                    # ブロック結果を会話履歴に追加してLLMにフィードバックする
-                    blocked_res = ToolResult(
-                        status=ToolStatus.ERROR,
-                        tool_name=action.name,
-                        target=action.parameters.get("path", ""),
-                        content=_blocked_msg,
-                    )
                     self.state.add_message(
-                        "user", wrap_tool_result(format_symops_response(blocked_res))
+                        "user",
+                        build_tool_result_message(
+                            action,
+                            _blocked_msg,
+                            status=ToolStatus.ERROR,
+                        ),
                     )
                     results.append(_blocked_msg)
                     continue
                 # ------------------------------------------------
 
                 # --- Approval Check ---
-                requires_approval = False
                 was_approved = False
-                warning_msg = ""
+                approval_request = get_approval_request(action, file_ops.file_exists)
 
-                if action.name in ["delete_file", "delete_lines", "edit_file"]:
-                    requires_approval = True
-                    warning_msg = f"This action will modify/delete '{action.parameters.get('path', 'unknown')}'. Are you sure?"
-
-                elif action.name == "write_file":
-                    path = action.parameters.get("path")
-                    if path and file_ops.file_exists(path):
-                        requires_approval = True
-                        warning_msg = f"File '{path}' already exists. Overwrite?"
-
-                if requires_approval:
-                    if not ui.request_confirmation(warning_msg):
+                if approval_request.required:
+                    if not ui.request_confirmation(approval_request.warning):
                         msg = f"Action '{action.name}' denied by user."
                         ui.print_result(msg, is_error=True)
                         self.state.last_action_result = msg
 
                         # Add denial to conversation history so LLM knows what happened
-                        denial_context = (
-                            f"[User denied approval for action '{action.name}'] "
-                            f"Reason: {warning_msg}. "
-                            f"The user refused to proceed with this operation. "
-                            f"Please either: 1) Ask the user what to do instead, "
-                            f"2) Try a different approach, or 3) Explain the situation."
+                        self.state.add_message(
+                            "user",
+                            build_denial_context(action, approval_request.warning),
                         )
-                        self.state.add_message("user", denial_context)
 
                         # Update Pacemaker vitals (denial is treated as an error)
                         self.pacemaker.update_vitals(action, msg, is_error=True)
@@ -663,31 +650,13 @@ class DuckAgent:
                         func = self.tools[action.name]
                         logger.info(f"Calling tool: {action.name}")
 
-                        # --- シグネチャフィルタ ---
-                        # 関数が受け付けないkwargs（例: content）を除去してTypeErrorを防ぐ
-                        import inspect as _inspect
-
-                        _sig = _inspect.signature(func)
-                        _has_var_kw = any(
-                            p.kind == _inspect.Parameter.VAR_KEYWORD
-                            for p in _sig.parameters.values()
+                        call_params, dropped_params = filter_call_parameters(
+                            func, action.parameters
                         )
-                        if _has_var_kw:
-                            # **kwargs を受け付ける関数はすべて渡す
-                            call_params = action.parameters
-                        else:
-                            _valid = set(_sig.parameters.keys())
-                            _dropped = set(action.parameters.keys()) - _valid
-                            if _dropped:
-                                logger.warning(
-                                    f"Tool '{action.name}': dropping unexpected params: {_dropped}"
-                                )
-                            call_params = {
-                                k: v
-                                for k, v in action.parameters.items()
-                                if k in _valid
-                            }
-                        # -----------------------
+                        if dropped_params:
+                            logger.warning(
+                                f"Tool '{action.name}': dropping unexpected params: {dropped_params}"
+                            )
 
                         # Check if function is async
                         if asyncio.iscoroutinefunction(func):
@@ -706,33 +675,17 @@ class DuckAgent:
 
                         # Add result to conversation history (for LLM context in next cycle)
                         if action.name not in ("response",):
-                            # Prepare tool result for conversion
-                            tool_status = ToolStatus.OK
-                            # We could implement truncation check here if needed later
-
-                            tool_res = ToolResult(
-                                status=tool_status,
-                                tool_name=action.name,
-                                target=action.parameters.get(
-                                    "path", action.parameters.get("command", "task")
-                                ),
-                                content=result,
-                            )
                             # ツール結果はエンベロープで包み、ユーザー発言と区別できる形で
                             # 履歴に注入する（中身はデータであり指示ではない）
-                            formatted_res = wrap_tool_result(
-                                format_symops_response(tool_res)
+                            self.state.add_message(
+                                "user",
+                                build_tool_result_message(
+                                    action,
+                                    result,
+                                    status=ToolStatus.OK,
+                                    approved=was_approved,
+                                ),
                             )
-
-                            # If this action required approval, add explicit completion message
-                            if was_approved:
-                                completion_msg = (
-                                    f"{formatted_res}\n\n"
-                                    f"[System: User approved action. Proceed with next steps.]"
-                                )
-                                self.state.add_message("user", completion_msg)
-                            else:
-                                self.state.add_message("user", formatted_res)
 
                             if isinstance(result, str):
                                 ui.print_result(result)
@@ -780,17 +733,11 @@ class DuckAgent:
                                 )
                             )
 
-                        # Add error to conversation history in Sym-Ops format
-                        err_res = ToolResult(
-                            status=ToolStatus.ERROR,
-                            tool_name=action.name,
-                            target=action.parameters.get(
-                                "path", action.parameters.get("command", "task")
-                            ),
-                            content=e,
-                        )
                         self.state.add_message(
-                            "user", wrap_tool_result(format_symops_response(err_res))
+                            "user",
+                            build_tool_result_message(
+                                action, e, status=ToolStatus.ERROR
+                            ),
                         )
 
                         results.append(error_msg)
@@ -849,7 +796,7 @@ class DuckAgent:
         # 推論とアクション概要を会話履歴に保存する。
         # ツール結果のみだと次ターンのLLMが「自分が前回何を考え何を決めたか」を
         # 参照できず、複数ターンタスクで一貫性を失う問題への対処（multi_turn_context_fix_plan.md Phase 1）。
-        action_summary = self._build_action_summary(action_list)
+        action_summary = build_action_summary(action_list)
         if action_summary:
             self.state.add_message("assistant", action_summary)
 
@@ -859,26 +806,6 @@ class DuckAgent:
 
         logger.info("Finished executing actions")
         return results
-
-    def _build_action_summary(self, action_list: ActionList) -> str:
-        """
-        LLMの推論とアクション概要を会話履歴用にフォーマットする。
-
-        Args:
-            action_list: 直前ターンでLLMが生成したActionList
-
-        Returns:
-            "assistant" ロールで履歴に追加する要約テキスト（内容が無ければ空文字）
-        """
-        lines = []
-        if action_list.reasoning:
-            lines.append(f">> {action_list.reasoning}")
-        for action in action_list.actions:
-            target = action.parameters.get("path", action.parameters.get("command", ""))
-            lines.append(
-                f":: {action.name} @{target}" if target else f":: {action.name}"
-            )
-        return "\n".join(lines)
 
     # --- No-op (LLMのプロトコル的出力を吸収) ---
 

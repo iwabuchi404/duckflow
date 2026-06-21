@@ -14,6 +14,11 @@
 - `tests/test_core_mode_mapping.py` に core_tools への分離とモード別説明フィルタの回帰テストを追加。
 - `companion/core_action_pipeline.py` を新規追加し、`execute_actions()` の前処理（未知ツール除外、1ターン上限、terminal action 並べ替え）を純粋関数として分離。
 - `tests/test_core_action_pipeline.py` を追加し、前処理仕様を `execute_actions()` 本体から独立して回帰テスト化。
+- `companion/core_action_results.py` を新規追加し、承認要否判定、denial context、ツール結果履歴メッセージ生成を純粋関数として分離。
+- `tests/test_core_action_results.py` を追加し、承認判定と `[TOOL_RESULT]` 履歴メッセージ生成を回帰テスト化。
+- `companion/core_action_invocation.py` を新規追加し、ツール呼び出し前のシグネチャベース引数フィルタを分離。
+- `tests/test_core_action_invocation.py` を追加し、未対応引数の drop と `**kwargs` 関数の全引数保持を回帰テスト化。
+- 旧 Phase 1 前提の `tests/test_llm_output_validator.py` / `tests/test_transition_controller.py` を削除し、Windows symlink 権限がない環境では `test_file_protector.py` の symlink テストを skip するよう修正。検証: `uv run pytest tests/ -v` で339件パス / 2件スキップ。
 
 ### 2026-06-21: Sprint 2 S2-1 未使用 Phase 1 遺物を削除
 - `companion/state/enums.py`, `companion/state/transition.py`, `companion/state/transition_controller.py`, `companion/state/action_result.py` を削除。現行 `core.py` / `agent_state.py` 経路から未参照で、旧 Step/Status 前提の Phase 1 遺物だった。

@@ -6,6 +6,8 @@ FileProtector enforces workspace-boundary and extension-based safety rules.
 
 from pathlib import Path
 
+import pytest
+
 from companion.security.file_protector import FileProtector
 
 
@@ -36,7 +38,12 @@ class TestIsInsideWorkdir:
         real_dir = tmp_path / "real"
         real_dir.mkdir()
         link = tmp_path / "link"
-        link.symlink_to(real_dir)
+        try:
+            link.symlink_to(real_dir, target_is_directory=True)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) == 1314:
+                pytest.skip("Symlink creation requires Windows privileges")
+            raise
         fp = self._make(str(real_dir))
         assert fp.is_inside_workdir(str(link / "file.py"))
 
