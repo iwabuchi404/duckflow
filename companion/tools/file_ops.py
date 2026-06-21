@@ -5,32 +5,10 @@ from typing import List, Optional
 from pathlib import Path
 import yaml
 from .hashline import HashlineHelper
-
-# find_files / grep_files のディレクトリ走査で除外するノイズディレクトリ。
-# ドット始まり（.git, .venv 等）以外にも、ビルド成果物やキャッシュ等
-# テキスト検索の対象として無意味、かつ .pyc のようなバイナリノイズの
-# 発生源になるディレクトリ名を明示的に除外する。
-NOISE_DIR_NAMES = frozenset(
-    {
-        "__pycache__",
-        "node_modules",
-        "dist",
-        "build",
-        "egg-info",
-    }
+from companion.utils.fs_utils import (
+    should_skip_entry,
+    read_text_with_fallback,
 )
-
-
-def _is_noise_dir_name(name: str) -> bool:
-    """Return whether a directory name should be skipped during file search.
-
-    Args:
-        name: Directory name to check.
-
-    Returns:
-        True when the directory is a known cache/build artifact directory.
-    """
-    return name in NOISE_DIR_NAMES or name.endswith(".egg-info")
 
 
 class FileOps:
@@ -490,10 +468,7 @@ class FileOps:
         # --- SEARCH/REPLACE マーカー形式の分岐（docs/edit_format_search_replace_design.md） ---
         if content and self._content_uses_markers(content):
             # ルーティング: 対象ファイルがコンフリクト中ならマーカー形式は危険 → write_file へ誘導
-            try:
-                _existing = full_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                _existing = full_path.read_text(encoding="latin-1")
+            _existing = read_text_with_fallback(full_path)
             if self._has_git_conflict_markers(_existing):
                 return (
                     f"::status error\n"
@@ -612,10 +587,7 @@ class FileOps:
             )
 
         # ファイルを読み込み
-        try:
-            raw_content = full_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            raw_content = full_path.read_text(encoding="latin-1")
+        raw_content = read_text_with_fallback(full_path)
 
         file_lines = [l.rstrip("\n") for l in raw_content.split("\n")]
 
@@ -835,7 +807,7 @@ class FileOps:
             raise FileNotFoundError(f"Path not found: {path}")
         results = []
         for item in full_path.iterdir():
-            if item.name.startswith("."):
+            if should_skip_entry(item.name):
                 continue
             prefix = "[DIR] " if item.is_dir() else "[FILE]"
             rel_path = item.relative_to(self.workspace_root)
@@ -1050,7 +1022,7 @@ class FileOps:
             try:
                 for item in directory.iterdir():
                     # Skip hidden files/dirs and known noise directories
-                    if item.name.startswith(".") or _is_noise_dir_name(item.name):
+                    if should_skip_entry(item.name):
                         continue
 
                     # Check if it's within workspace
@@ -1129,7 +1101,7 @@ class FileOps:
                     return
                 try:
                     for item in sorted(directory.iterdir(), key=lambda x: x.name):
-                        if item.name.startswith(".") or _is_noise_dir_name(item.name):
+                        if should_skip_entry(item.name):
                             continue
                         if item.is_file() and fnmatch(item.name, include):
                             try:
@@ -1271,10 +1243,7 @@ class FileOps:
             )
 
         # ファイル読み込み
-        try:
-            raw_content = full_path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            raw_content = full_path.read_text(encoding="latin-1")
+        raw_content = read_text_with_fallback(full_path)
 
         file_lines = [l.rstrip("\n") for l in raw_content.split("\n")]
 

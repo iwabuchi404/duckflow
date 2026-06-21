@@ -2,11 +2,14 @@ from typing import List, Dict, Any, Optional
 import yaml
 from companion.config.config_loader import config
 from companion.ui.console import ui
+from companion.utils.config_helpers import coerce_config_value, set_nested
+
 
 class CommandHandler:
     """
     Handles internal slash commands.
     """
+
     def __init__(self, agent):
         self.agent = agent
         self.commands = {
@@ -53,43 +56,49 @@ class CommandHandler:
             table = Table(show_header=True, header_style="bold magenta", box=None)
             table.add_column("Command", style="cyan")
             table.add_column("Description", style="white")
-            
+
             table.add_row("/config show", "Show current configuration")
             table.add_row("/config set <key> <value>", "Set config value (temporary)")
             table.add_row("/config reload", "Reload config from file")
-            
-            ui.console.print(Panel(table, title="[bold]Config Commands[/bold]", border_style="blue", expand=False))
+
+            ui.console.print(
+                Panel(
+                    table,
+                    title="[bold]Config Commands[/bold]",
+                    border_style="blue",
+                    expand=False,
+                )
+            )
             return
 
         subcmd = args[0]
-        
+
         if subcmd == "show":
             # Show current config
             json_str = json.dumps(config._config, indent=2, ensure_ascii=False)
-            ui.console.print(Panel(
-                Syntax(json_str, "json", theme="monokai", line_numbers=False),
-                title="[bold]Current Configuration[/bold]",
-                border_style="green",
-                expand=False
-            ))
-        
+            ui.console.print(
+                Panel(
+                    Syntax(json_str, "json", theme="monokai", line_numbers=False),
+                    title="[bold]Current Configuration[/bold]",
+                    border_style="green",
+                    expand=False,
+                )
+            )
+
         elif subcmd == "set":
             if len(args) < 3:
                 ui.print_error("Usage: /config set <key> <value>")
                 return
             key = args[1]
             value = args[2]
-            
+
             # Try to convert value to appropriate type
-            if value.lower() == "true": value = True
-            elif value.lower() == "false": value = False
-            elif value.isdigit(): value = int(value)
-            elif value.replace(".", "", 1).isdigit(): value = float(value)
-            
+            value = coerce_config_value(value)
+
             # Update config in memory
-            self._set_config_value(key, value)
+            set_nested(config._config, key, value)
             ui.print_success(f"Config updated: {key} = {value}")
-            
+
             # If max_loops changed, update pacemaker
             if key == "agent.max_loops" and self.agent.pacemaker:
                 self.agent.pacemaker.max_loops = int(value)
@@ -97,14 +106,16 @@ class CommandHandler:
         elif subcmd == "reload":
             config._load_config()
             ui.print_success("Config reloaded from file.")
-        
+
         else:
-             ui.print_error(f"Unknown config subcommand: {subcmd}")
+            ui.print_error(f"Unknown config subcommand: {subcmd}")
 
     async def handle_status(self, args: List[str]):
         if self.agent.pacemaker:
             vitals = self.agent.state.vitals
-            ui.print_vitals(vitals, self.agent.pacemaker.loop_count, self.agent.pacemaker.max_loops)
+            ui.print_vitals(
+                vitals, self.agent.pacemaker.loop_count, self.agent.pacemaker.max_loops
+            )
         else:
             ui.print_info("Pacemaker not initialized.")
 
@@ -130,11 +141,10 @@ class CommandHandler:
         ui.print_success("Conversation history cleared.")
 
     def _set_config_value(self, key_path: str, value: Any):
-        # Helper to set nested dict value
-        keys = key_path.split('.')
-        current = config._config
-        for key in keys[:-1]:
-            if key not in current:
-                current[key] = {}
-            current = current[key]
-        current[keys[-1]] = value
+        """Set nested config value (kept for backward compat).
+
+        Args:
+            key_path: Dot-separated key path.
+            value: Value to set.
+        """
+        set_nested(config._config, key_path, value)
