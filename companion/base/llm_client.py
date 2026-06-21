@@ -7,6 +7,7 @@ from companion.state.agent_state import ActionList, Action
 from companion.config.config_loader import config
 from companion.base.response_preprocessor import default_preprocessor
 from companion.utils.sym_ops import SymOpsProcessor
+from companion.utils.provider_config import resolve_api_key, resolve_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -72,32 +73,11 @@ class LLMClient:
         logger.info(f"🔧 Initializing LLM Client with provider: {self.provider}")
 
         # Load API key based on provider (priority: param > env > config)
-        api_key_env_var = None  # Track which env var we're looking for
         if api_key:
             self.api_key = api_key
-            logger.info(f"✅ Using API key from parameter")
-        elif self.provider == "groq":
-            api_key_env_var = "GROQ_API_KEY"
-            self.api_key = os.getenv("GROQ_API_KEY")
-        elif self.provider == "openrouter":
-            api_key_env_var = "OPENROUTER_API_KEY"
-            self.api_key = os.getenv("OPENROUTER_API_KEY")
-        elif self.provider == "anthropic":
-            api_key_env_var = "ANTHROPIC_API_KEY"
-            self.api_key = os.getenv("ANTHROPIC_API_KEY")
-        elif self.provider == "openai":
-            api_key_env_var = "OPENAI_API_KEY"
-            self.api_key = os.getenv("OPENAI_API_KEY")
-        elif self.provider == "google":
-            api_key_env_var = "GOOGLE_API_KEY"
-            self.api_key = os.getenv("GOOGLE_API_KEY")
+            logger.info("✅ Using API key from parameter")
         else:
-            # Fallback: try common keys
-            api_key_env_var = "OPENAI_API_KEY or GROQ_API_KEY"
-            self.api_key = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
-
-        # Log API key status
-        if api_key_env_var:
+            self.api_key, api_key_env_var = resolve_api_key(self.provider)
             if self.api_key:
                 masked_key = (
                     self.api_key[:8] + "..." + self.api_key[-4:]
@@ -111,24 +91,7 @@ class LLMClient:
                 )
 
         # Load base URL based on provider
-        if base_url:
-            self.base_url = base_url
-        elif self.provider == "groq":
-            self.base_url = (
-                os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
-            )
-        elif self.provider == "openrouter":
-            self.base_url = (
-                os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-            )
-        elif self.provider == "anthropic":
-            self.base_url = (
-                os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com/v1"
-            )
-        elif self.provider == "openai":
-            self.base_url = os.getenv("OPENAI_BASE_URL")  # None is OK, uses default
-        else:
-            self.base_url = os.getenv("OPENAI_BASE_URL")
+        self.base_url = base_url or resolve_base_url(self.provider)
 
         if model:
             self.model = model
@@ -207,24 +170,7 @@ class LLMClient:
             )
 
             # Reload API key for new provider
-            api_key_env_var = None
-            if self.provider == "groq":
-                api_key_env_var = "GROQ_API_KEY"
-                self.api_key = os.getenv("GROQ_API_KEY")
-            elif self.provider == "openrouter":
-                api_key_env_var = "OPENROUTER_API_KEY"
-                self.api_key = os.getenv("OPENROUTER_API_KEY")
-            elif self.provider == "anthropic":
-                api_key_env_var = "ANTHROPIC_API_KEY"
-                self.api_key = os.getenv("ANTHROPIC_API_KEY")
-            elif self.provider == "openai":
-                api_key_env_var = "OPENAI_API_KEY"
-                self.api_key = os.getenv("OPENAI_API_KEY")
-            elif self.provider == "google":
-                api_key_env_var = "GOOGLE_API_KEY"
-                self.api_key = os.getenv("GOOGLE_API_KEY")
-            else:
-                self.api_key = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
+            self.api_key, api_key_env_var = resolve_api_key(self.provider)
 
             if not self.api_key:
                 logger.error(
@@ -241,22 +187,7 @@ class LLMClient:
                 return False
 
             # Reload base URL for new provider
-            if self.provider == "groq":
-                self.base_url = (
-                    os.getenv("GROQ_BASE_URL") or "https://api.groq.com/openai/v1"
-                )
-            elif self.provider == "openrouter":
-                self.base_url = (
-                    os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
-                )
-            elif self.provider == "anthropic":
-                self.base_url = (
-                    os.getenv("ANTHROPIC_BASE_URL") or "https://api.anthropic.com/v1"
-                )
-            elif self.provider == "openai":
-                self.base_url = os.getenv("OPENAI_BASE_URL")
-            else:
-                self.base_url = os.getenv("OPENAI_BASE_URL")
+            self.base_url = resolve_base_url(self.provider)
 
             # Create new client
             self.use_mock = False
