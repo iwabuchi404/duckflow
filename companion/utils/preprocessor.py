@@ -323,3 +323,37 @@ class PlainMarkdownConverter:
             f'{text}\n'
             '>>>'
         )
+
+
+# 推論系モデル（DeepSeek-R1 / Kimi K2 / Qwen3 / GLM / GPT-OSS 等）が本文に埋め込む
+# <think>...</think> ブロック。Sym-Ops の >> Thought とは別物で、パイプラインに
+# 混入すると response のコンテンツブロック内に </think> が生漏れして表示が崩れる。
+# API の別フィールド（reasoning_content 等）ではなく本文埋め込み型のモデル向け。
+_REASONING_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
+_REASONING_LEFTOVER_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
+
+
+def strip_reasoning_tags(text: str) -> Tuple[str, bool]:
+    """推論系モデルの <think>...</think> ブロックを除去する。
+
+    DeepSeek-R1 由来の推論タグは、Kimi K2 / Qwen3 / GLM / GPT-OSS 等の多くの
+    推論モデルが本文にインラインで出力する（OpenRouter reasoning フィールド等の
+    API 別フィールドではなく本文埋め込み）。Sym-Ops パイプラインに混入すると、
+    response の ``<<< ... >>>`` コンテンツブロック内に ``</think>`` が残り、
+    ユーザーへ生テキストとして漏洩して表示が崩れるため、パイプライン入口で除去する。
+
+    完全な ``<think>...</think>`` ブロックは中身ごと削除。閉じ忘れ等で残った
+    孤立タグ（``<think>``, ``</think>``）も除去する。推論内容の活用（Thought 変換）は
+    本関数の対象外（別設計: OpenRouter reasoning フィールド対応）。
+
+    Args:
+        text: LLM の生出力テキスト。
+
+    Returns:
+        ``(stripped_text, was_stripped)``: 除去後テキストと、除去を実行したかを示すフラグ。
+    """
+    if "<think" not in text.lower() and "</think" not in text.lower():
+        return text, False
+    stripped = _REASONING_BLOCK_RE.sub("", text)
+    stripped = _REASONING_LEFTOVER_RE.sub("", stripped)
+    return stripped, stripped != text

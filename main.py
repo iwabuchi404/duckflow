@@ -122,12 +122,6 @@ async def main():
         "--dir", type=str, default=".", help="Working directory for the agent"
     )
     parser.add_argument(
-        "--debug-context",
-        type=str,
-        choices=["console", "file"],
-        help="Debug: Output context messages",
-    )
-    parser.add_argument(
         "--no-session",
         action="store_true",
         help="セッション保存・復元を無効化して新規起動する",
@@ -161,7 +155,6 @@ async def main():
         resume_state = _prompt_session_resume(session_manager)
 
     agent = DuckAgent(
-        debug_context_mode=args.debug_context,
         session_manager=session_manager,
         resume_state=resume_state,
     )

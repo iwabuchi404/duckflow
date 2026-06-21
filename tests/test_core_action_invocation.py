@@ -1,4 +1,7 @@
+import pytest
+
 from companion.core_action_invocation import filter_call_parameters
+from companion.core_action_invocation import invoke_tool
 
 
 def test_filter_call_parameters_drops_unaccepted_keys() -> None:
@@ -47,3 +50,53 @@ def test_filter_call_parameters_preserves_all_keys_for_kwargs() -> None:
 
     assert filtered == {"path": "a.py", "extra": "ok"}
     assert dropped == set()
+
+
+async def _async_tool(path: str) -> str:
+    """Async tool used by invoke_tool tests."""
+    return f"async:{path}"
+
+
+def _sync_tool(path: str) -> str:
+    """Sync tool used by invoke_tool tests."""
+    return f"sync:{path}"
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_calls_sync_tool_with_filtered_params() -> None:
+    """
+    invoke_tool should call sync tools and return dropped parameters.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result, dropped = await invoke_tool(
+        _sync_tool,
+        {"path": "a.py", "extra": "drop"},
+    )
+
+    assert result == "sync:a.py"
+    assert dropped == {"extra"}
+
+
+@pytest.mark.asyncio
+async def test_invoke_tool_calls_async_tool_with_filtered_params() -> None:
+    """
+    invoke_tool should await async tools and return dropped parameters.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    result, dropped = await invoke_tool(
+        _async_tool,
+        {"path": "a.py", "extra": "drop"},
+    )
+
+    assert result == "async:a.py"
+    assert dropped == {"extra"}

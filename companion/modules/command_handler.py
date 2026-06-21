@@ -26,7 +26,8 @@ class CommandHandler:
             "/model": self.handle_model,
             "/scan": self.handle_scan,
             "/log": self.handle_log,
-            "/config": self.handle_config,
+            "/prompt": self.handle_prompt,
+            "/tokens": self.handle_tokens,
         }
 
     def is_command(self, input_text: str) -> bool:
@@ -213,8 +214,15 @@ class CommandHandler:
         [cyan]/exit[/cyan]               - Exit the agent
         [cyan]/scan <depth>[/cyan]     - Show project tree (default depth: 3)
         [cyan]/log[/cyan]              - Toggle full log verbosity (Alt+V also works)
+        [cyan]/prompt[/cyan]           - Dump messages built for the current turn
+        [cyan]/prompt all[/cyan]       - Dump system prompts for all modes
+        [cyan]/prompt raw[/cyan]       - Dump current messages as JSON
+        [cyan]/prompt file [path][/cyan] - Write current messages to a file
+        [cyan]/tokens[/cyan]           - Show token usage and memory budget
         [cyan]/config[/cyan]           - Show/set configuration or run setup wizard
         [cyan]/help[/cyan]               - Show this help
+
+        [dim]Input: Enter = send, Shift+Enter = newline[/dim]
         """
         if hasattr(ui, 'console'):
             ui.console.print(help_text)
@@ -555,5 +563,241 @@ class CommandHandler:
         for key in keys[:-1]:
             if key not in current:
                 current[key] = {}
-            current = current[key]
+            current[key] = current[key]
         current[keys[-1]] = value
+
+    # ------------------------------------------------------------------
+    # /prompt: dump messages built for the current turn (S3-4)
+    # ------------------------------------------------------------------
+    PREVIEW_LEN = 200
+    DEFAULT_DUMP_PATH = "prompt_dump.txt"
+
+    def _build_current_messages(self) -> List[dict]:
+        """
+        Build the messages list that would be sent to the LLM in this turn.
+
+        Mirrors the assembly in DuckAgent.run() (system prompt from
+        PromptBuilder + state.conversation_history). The returned list is a
+        shallow copy of each message dict; ``cache_control`` keys are
+        preserved as-is.
+
+        Returns:
+            List of message dicts (role + content [+ cache_control]).
+        """
+        from companion.prompts.builder import PromptBuilder
+
+        tool_desc = self.agent.get_tool_descriptions(
+            self.agent.state.get_context_mode()
+        )
+        base = PromptBuilder(self.agent.state).build_messages(tool_desc)
+        return list(base) + list(self.agent.state.conversation_history)
+
+    def _build_mode_messages(self, mode: str) -> List[dict]:
+        """
+        Build system+few-shot+state messages for a specific mode without
+        disturbing the live agent state.
+
+        Args:
+            mode: Mode name ("planning" | "investigation" | "task").
+
+        Returns:
+            Built message list for the given mode.
+        """
+        from companion.prompts.builder import PromptBuilder
+        from companion.state.agent_state import AgentState, AgentMode
+
+        snapshot = AgentState()
+        snapshot.current_mode = AgentMode(mode)
+        tool_desc = self.agent.get_tool_descriptions(mode)
+        return PromptBuilder(snapshot).build_messages(tool_desc)
+
+    def _preview_content(self, content: str) -> str:
+        """
+        Truncate content for one-line preview display.
+
+        Args:
+            content: Full message content.
+
+        Returns:
+            Single-line preview truncated to PREVIEW_LEN characters.
+        """
+        if not isinstance(content, str):
+            content = str(content)
+        flat = content.replace("\n", " ⏎ ").strip()
+        if len(flat) <= self.PREVIEW_LEN:
+            return flat
+        return flat[: self.PREVIEW_LEN] + "…"
+
+    def _messages_to_table(self, messages: List[dict], title: str) -> "Table":
+        """
+        Render a message list as a Rich table (role + preview + length).
+
+        Args:
+            messages: Message list to render.
+            title: Table title.
+
+        Returns:
+            Rich Table object.
+        """
+        table = Table(show_header=True, header_style="bold magenta", box=None)
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Role", style="cyan", width=12)
+        table.add_column("Preview", style="white")
+        table.add_column("Len", style="yellow", justify="right", width=6)
+        for idx, msg in enumerate(messages):
+            content = msg.get("content", "")
+            table.add_row(
+                str(idx),
+                str(msg.get("role", "?")),
+                escape(self._preview_content(content)),
+                str(len(content) if isinstance(content, str) else 0),
+            )
+        table.title = title
+        return table
+
+    async def handle_prompt(self, args: List[str]):
+        """
+        Dump messages built for the current turn (or all modes).
+
+        Sub-commands:
+            (none)   - current mode messages as a preview table
+            all      - system prompts for planning/investigation/task
+            raw      - current messages as JSON
+            file [p] - write current messages to file (default prompt_dump.txt)
+        """
+        sub = args[0] if args else ""
+
+        if sub == "all":
+            for mode in ("planning", "investigation", "task"):
+                msgs = self._build_mode_messages(mode)
+                table = self._messages_to_table(msgs, f"[bold]{mode}[/bold]")
+                if hasattr(ui, "console"):
+                    ui.console.print(
+                        Panel(
+                            table,
+                            title=f"[bold]Prompt: {mode}[/bold]",
+                            border_style="cyan",
+                            expand=False,
+                        )
+                    )
+                else:
+                    print(f"--- Prompt: {mode} ---")
+                    print(table)
+            return
+
+        messages = self._build_current_messages()
+        mode = self.agent.state.get_context_mode()
+
+        if sub == "raw":
+            payload = json.dumps(messages, ensure_ascii=False, indent=2)
+            if hasattr(ui, "console"):
+                ui.console.print(
+                    Panel(
+                        Syntax(payload, "json", theme="ansi_dark", word_wrap=True),
+                        title=f"[bold]Prompt (raw JSON) — mode={mode}[/bold]",
+                        border_style="cyan",
+                        expand=False,
+                    )
+                )
+            else:
+                print(payload)
+            return
+
+        if sub == "file":
+            path = args[1] if len(args) > 1 else self.DEFAULT_DUMP_PATH
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(messages, f, ensure_ascii=False, indent=2)
+                ui.print_success(
+                    f"Wrote {len(messages)} messages to {path} (mode={mode})"
+                )
+            except OSError as e:
+                ui.print_error(f"Failed to write {path}: {e}")
+            return
+
+        # default: preview table for current mode
+        table = self._messages_to_table(messages, f"[bold]mode={mode}[/bold]")
+        if hasattr(ui, "console"):
+            ui.console.print(
+                Panel(
+                    table,
+                    title="[bold]Prompt (current turn)[/bold]",
+                    subtitle=f"{len(messages)} messages · use /prompt raw|file|all for more",
+                    border_style="cyan",
+                    expand=False,
+                )
+            )
+        else:
+            print(table)
+
+    # ------------------------------------------------------------------
+    # /tokens: token usage and memory budget (S3-5)
+    # ------------------------------------------------------------------
+    async def handle_tokens(self, args: List[str]):
+        """
+        Show estimated token usage for system prompt + conversation history,
+        the MemoryManager budget, pruning threshold, and recent API usage.
+        """
+        mm = self.agent.memory_manager
+        # System portion = current-turn messages minus conversation_history.
+        history = list(self.agent.state.conversation_history)
+        try:
+            current_messages = self._build_current_messages()
+            system_messages = current_messages[: len(current_messages) - len(history)]
+        except Exception:
+            # Defensive: if message building fails, fall back to history only.
+            system_messages = []
+
+        sys_tokens = mm.estimate_history_tokens(system_messages)
+        hist_tokens = mm.estimate_history_tokens(history)
+        max_tokens = mm.max_tokens
+        usage_ratio = hist_tokens / max_tokens if max_tokens else 0.0
+        # Reverse-engineer the approximate context_length (max_tokens came from
+        # (ctx - 4000) * 0.6, so ctx ≈ max_tokens / 0.6 + 4000).
+        approx_ctx = int(max_tokens / 0.6 + 4000) if max_tokens else 0
+
+        stats = getattr(self.agent.llm, "usage_stats", {}) or {}
+
+        table = Table(show_header=True, header_style="bold magenta", box=None)
+        table.add_column("Metric", style="cyan", no_wrap=False)
+        table.add_column("Value", style="white")
+        table.add_row("System prompt (est.)", f"{sys_tokens:,} tokens")
+        table.add_row(
+            "Conversation history (est.)", f"{hist_tokens:,} tokens"
+        )
+        table.add_row(
+            "History budget (max_tokens)",
+            f"{max_tokens:,} tokens ({usage_ratio:.1%} used)",
+        )
+        table.add_row("Pruning threshold", "80%")
+        table.add_row("Approx. context_length", f"{approx_ctx:,} tokens")
+        table.add_row("--- API usage (cumulative) ---", "")
+        table.add_row(
+            "Input tokens",
+            f"{stats.get('input_tokens', 0):,}",
+        )
+        table.add_row(
+            "Output tokens",
+            f"{stats.get('output_tokens', 0):,}",
+        )
+        table.add_row(
+            "Total tokens",
+            f"{stats.get('total_tokens', 0):,}",
+        )
+        table.add_row(
+            "Cost estimate",
+            f"${stats.get('cost_estimate', 0.0):.4f}",
+        )
+
+        if hasattr(ui, "console"):
+            ui.console.print(
+                Panel(
+                    table,
+                    title="[bold]Token Usage[/bold]",
+                    subtitle="est. = chars×0.5 (heuristic, matches pruning logic)",
+                    border_style="yellow",
+                    expand=False,
+                )
+            )
+        else:
+            print(table)

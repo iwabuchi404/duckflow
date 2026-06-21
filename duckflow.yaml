@@ -46,7 +46,7 @@ llm:
     model: google/gemini-2.5-pro
     description: ''
   openrouter:
-    model: moonshotai/kimi-k2.7-code
+    model: qwen/qwen3.6-35b-a3b
   openai:
     model: gpt-4o-mini
   groq:

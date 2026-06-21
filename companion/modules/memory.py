@@ -486,3 +486,19 @@ class MemoryManager:
         total_chars = sum(len(msg.get("content", "")) for msg in messages)
         # 1文字 ≈ 0.5トークン（日本語・英語混在を考慮）
         return int(total_chars * 0.5)
+
+    def estimate_history_tokens(self, messages: List[Dict]) -> int:
+        """
+        任意のメッセージリストのトークン数を概算して返す公開メソッド。
+
+        ``_estimate_tokens`` と同じ概算式（1文字 ≈ 0.5トークン）を
+        システムプロンプトや任意のメッセージ群に適用するために公開。
+        ``/tokens`` コマンド等の可視化用途。pruning ロジックは変更しない。
+
+        Args:
+            messages: トークン数を概算するメッセージリスト。
+
+        Returns:
+            概算トークン数。
+        """
+        return self._estimate_tokens(messages)

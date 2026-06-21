@@ -275,6 +275,7 @@ class DuckUI:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.completion import NestedCompleter
+        from prompt_toolkit.keys import Keys
 
         # Define completer for slash commands
         completer = NestedCompleter.from_nested_dict(
@@ -285,7 +286,10 @@ class DuckUI:
                 "/help": None,
                 "/exit": None,
                 "/status": None,
+                "/clear": None,
                 "/model": {"list": None, "current": None},
+                "/prompt": {"all": None, "raw": None, "file": None},
+                "/tokens": None,
             }
         )
 
@@ -298,7 +302,44 @@ class DuckUI:
             status = "ON" if self.show_full_logs else "OFF"
             self.console.print(f"[thought] (Verbosity toggled: {status})[/thought]")
 
-        session = PromptSession(completer=completer, key_bindings=kb)
+        # Multiline input (S3-7):
+        # The session runs with multiline=True. Inside multiline mode, plain
+        # Enter inserts a newline. To keep single-line "Enter = send" ergonomic,
+        # we detect buffers that contain no newline yet and submit on Enter;
+        # once a newline exists we stay in newline-inserting mode.
+        # Shift+Enter is reported as c-j (or c-m with shift) by many terminals,
+        # so c-j is always bound to insert a newline regardless of state.
+        # Esc → Enter always submits (safe send for multiline content).
+
+        @kb.add("enter")
+        def _enter(event):
+            buf = event.current_buffer
+            if "\n" not in buf.text:
+                # First line, no newline yet → submit (single-line feel).
+                buf.validate_and_handle()
+            else:
+                # Already multiline → keep adding lines.
+                buf.insert_text("\n")
+
+        @kb.add("c-j")
+        def _ctrl_j_newline(event):
+            # Ctrl+J is what many terminals deliver for Shift+Enter. Always
+            # insert a newline so the user can build multi-line input even
+            # before the first Enter-based newline.
+            event.current_buffer.insert_text("\n")
+
+        @kb.add("escape", "enter")
+        def _alt_enter_submit(event):
+            # Esc → Enter submits regardless of buffer state. Reliable way to
+            # send multi-line input on terminals without Shift+Enter support.
+            event.current_buffer.validate_and_handle()
+
+        session = PromptSession(
+            completer=completer,
+            key_bindings=kb,
+            multiline=False,
+            prompt_continuation=" " * len(prompt),
+        )
         try:
             return await session.prompt_async(prompt)
         except (EOFError, KeyboardInterrupt):

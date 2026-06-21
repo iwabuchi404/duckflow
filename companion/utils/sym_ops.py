@@ -2,7 +2,7 @@ import re
 import yaml
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
-from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter
+from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter, strip_reasoning_tags
 
 
 @dataclass
@@ -958,6 +958,9 @@ class SymOpsProcessor:
         """
         Main processing pipeline with preprocessing
         """
+        # Phase -1: 推論系モデルの <think> ブロック除去（DeepSeek-R1 / Kimi K2 / Qwen3 / GLM 等）
+        raw_output, reasoning_stripped = strip_reasoning_tags(raw_output)
+
         # Phase 0: Plain Markdown/Text Detection & Conversion
         converted, was_converted = self.markdown_converter.convert(raw_output)
         if was_converted:
@@ -972,6 +975,8 @@ class SymOpsProcessor:
         # Phase 3: Strict Parse Attempt
         try:
             parsed = self.parser.strict_parse(repaired)
+            if reasoning_stripped:
+                parsed.warnings.append("Reasoning tags stripped (<think>)")
             if was_converted:
                 parsed.warnings.append("Converted from plain markdown/text")
             if corrections:
@@ -983,6 +988,8 @@ class SymOpsProcessor:
         # Phase 4: Fuzz Parse (Fallback)
         partial = self.parser.fuzzy_parse(repaired)
         partial.warnings.append("Partial parse used")
+        if reasoning_stripped:
+            partial.warnings.append("Reasoning tags stripped (<think>)")
         if was_converted:
             partial.warnings.append("Converted from plain markdown/text")
         if corrections:
