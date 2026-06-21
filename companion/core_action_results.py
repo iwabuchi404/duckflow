@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from companion.state.agent_state import Action
+from companion.state.agent_state import SyntaxErrorInfo
 from companion.tools.results import (
     ToolResult,
     ToolStatus,
@@ -146,3 +147,42 @@ def build_action_summary(action_list: Any) -> str:
         target = action.parameters.get("path", action.parameters.get("command", ""))
         lines.append(f":: {action.name} @{target}" if target else f":: {action.name}")
     return "\n".join(lines)
+
+
+def build_action_exception_syntax_error(
+    action: Action, error: Exception
+) -> SyntaxErrorInfo | None:
+    """
+    Build syntax correction feedback for common action execution errors.
+
+    Args:
+        action: Action that raised an exception.
+        error: Exception raised by the action.
+
+    Returns:
+        SyntaxErrorInfo when the error should be fed back to the model,
+        otherwise None.
+    """
+    if action.name in ("edit_file", "delete_lines") and isinstance(error, ValueError):
+        return SyntaxErrorInfo(
+            error_type="edit_find_mismatch",
+            raw_snippet=str(error)[:300],
+            correction_hint=(
+                "The find snippet did not match the file content. "
+                "The file may have changed since read_file was called. "
+                "Re-run read_file, copy the target lines EXACTLY as they appear "
+                "(without line-number prefixes) into find:, then retry edit_file."
+            ),
+        )
+
+    if isinstance(error, TypeError):
+        return SyntaxErrorInfo(
+            error_type="missing_param",
+            raw_snippet=str(error)[:300],
+            correction_hint=(
+                f"Wrong or missing parameter for '{action.name}'. "
+                "Check the tool description for correct parameter names and format."
+            ),
+        )
+
+    return None

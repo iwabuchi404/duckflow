@@ -1,4 +1,5 @@
 from companion.core_action_results import (
+    build_action_exception_syntax_error,
     build_action_summary,
     action_target,
     build_denial_context,
@@ -136,3 +137,60 @@ def test_build_action_summary_formats_reasoning_and_targets() -> None:
         ":: run_command @pytest",
         ":: response",
     ]
+
+
+def test_build_action_exception_syntax_error_for_edit_find_mismatch() -> None:
+    """
+    Edit ValueError should produce edit_find_mismatch feedback.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    action = Action(name="edit_file", parameters={"path": "app.py"})
+
+    syntax_error = build_action_exception_syntax_error(
+        action, ValueError("find snippet missing")
+    )
+
+    assert syntax_error is not None
+    assert syntax_error.error_type == "edit_find_mismatch"
+    assert "read_file" in syntax_error.correction_hint
+
+
+def test_build_action_exception_syntax_error_for_type_error() -> None:
+    """
+    TypeError should produce missing_param feedback.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    action = Action(name="run_command", parameters={})
+
+    syntax_error = build_action_exception_syntax_error(
+        action, TypeError("missing command")
+    )
+
+    assert syntax_error is not None
+    assert syntax_error.error_type == "missing_param"
+    assert "run_command" in syntax_error.correction_hint
+
+
+def test_build_action_exception_syntax_error_ignores_runtime_error() -> None:
+    """
+    Generic runtime errors should not create syntax correction feedback.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    action = Action(name="run_command", parameters={})
+
+    assert build_action_exception_syntax_error(action, RuntimeError("boom")) is None

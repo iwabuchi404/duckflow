@@ -42,6 +42,7 @@ from companion.core_action_pipeline import (
 )
 from companion.core_action_results import (
     build_action_summary,
+    build_action_exception_syntax_error,
     build_denial_context,
     build_tool_result_message,
     get_approval_request,
@@ -682,34 +683,9 @@ class DuckAgent:
                         self.state.last_action_result = error_msg
                         ui.print_result(str(e), is_error=True)
 
-                        # edit_file / delete_lines の ValueError → find スニペット不一致の専用ヒント
-                        if action.name in ("edit_file", "delete_lines") and isinstance(
-                            e, ValueError
-                        ):
-                            self.state.last_syntax_errors.append(
-                                SyntaxErrorInfo(
-                                    error_type="edit_find_mismatch",
-                                    raw_snippet=str(e)[:300],
-                                    correction_hint=(
-                                        "The find snippet did not match the file content. "
-                                        "The file may have changed since read_file was called. "
-                                        "Re-run read_file, copy the target lines EXACTLY as they appear "
-                                        "(without line-number prefixes) into find:, then retry edit_file."
-                                    ),
-                                )
-                            )
-                        # 引数不足などの TypeError を構文エラーとして記録
-                        elif isinstance(e, TypeError):
-                            self.state.last_syntax_errors.append(
-                                SyntaxErrorInfo(
-                                    error_type="missing_param",
-                                    raw_snippet=str(e)[:300],
-                                    correction_hint=(
-                                        f"Wrong or missing parameter for '{action.name}'. "
-                                        "Check the tool description for correct parameter names and format."
-                                    ),
-                                )
-                            )
+                        syntax_error = build_action_exception_syntax_error(action, e)
+                        if syntax_error is not None:
+                            self.state.last_syntax_errors.append(syntax_error)
 
                         self.state.add_message(
                             "user",
