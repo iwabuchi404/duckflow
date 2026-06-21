@@ -11,12 +11,15 @@
 
 Duckflowは、開発者のローカル環境で動作する対話型AIコーディングエージェントです。単なるツールではなく、開発を共にする「相棒（Companion）」を目指します。
 
-**3つの柱:**
-1. **効率的な文脈管理:** LLM呼び出しごとに、関連性の高い情報を最小限の形で賢く組み立てる
-2. **予測可能な実行制御:** 隠蔽されたグラフではなく、明示的な Think-Decide-Execute ループで制御する
-3. **開発者中心の体験:** ターミナル上でキーボード中心のシームレスな操作感を提供する
+**中核コンセプト: 協業ループ（Cooperation Loop）**
+弱いLLMでも、ユーザーとの協業を通じて実用的な成果をコスト良く出しつつ、ユーザー自身も成長させる、継続的に賢くなる相棒。強いLLMとの品質競争ではなく、**コスト効率・ユーザー学習効果・継続向上**の独自軸で価値を出す（詳細: `docs/cooperation_loop_design.md`）。
 
-**設計思想:** 「LLMは間違える」前提で、ガードレールを幾重にも張る（未知ツールフィルタ、承認、Hashlineアンカー、Correction Guide、Pacemaker介入、fail-fast）。
+**協業ループを支える3つの柱:**
+1. **効率的な文脈管理:** LLM呼び出しごとに、関連性の高い情報を最小限の形で賢く組み立てる（協業提案の質の前提）
+2. **予測可能な実行制御:** 隠蔽されたグラフではなく、明示的な Think-Decide-Execute ループで制御する（協業の安定した実行基盤）
+3. **開発者中心の体験:** ターミナル上でキーボード中心のシームレスな操作感を提供する（協業の認知負荷を下げる）
+
+**設計思想:** 「LLMは間違える」前提で、**ガードレール（受動的保護: 未知ツールフィルタ、承認、Correction Guide、Pacemaker介入、fail-fast）** と **協業ループ（能動的補正: ユーザーとの相互作用で質と学習を高める）** の両層で担保する。
 
 ## 2. 開発の基本方針（AIへの指示）
 
@@ -55,10 +58,8 @@ LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテン
 ### 3モード制
 `AgentMode`（planning / investigation / task）ごとに公開ツールが異なる（`core.py` の `MODE_TOOL_MAPPING`）。**Investigation モードは read-only 強制**で、ファイル編集系アクションはブロックされる。仮説5回失敗で duck_call（ユーザー相談）を強制（2026-06-17改訂、旧仕様は2回）。Planning モードは `finish_investigation` 後すぐに修正へ移れるよう編集系ツール（`edit_file`/`write_file`/`delete_lines`/`delete_file`）を公開するが、用途は小さく確定した修正に限る。探索的な実装や広い変更は計画化して task モードで進める（task モードはタスク完了管理・execute_tasks 等が追加で使える点が異なる）。
 
-### ファイル編集方式（find/replace コンテキストマッチ）
-`edit_file` は `find:`（既存コードの断片）と `replace:` を指定するコンテキストマッチ方式（`companion/tools/file_ops.py`）。マッチ失敗時は近似行の候補と差分ヒントを返してLLMの自己修正を促す。`companion/tools/hashline.py` の Hashline 形式（`行番号:ハッシュ|内容`）は read_file の表示補助として残っているが、編集のアンカーとしては現在使われていない（`tests/test_hashline.py` の失敗はこの移行にテストが追従していないため）。
-
-**マーカー形式（実装済み・推奨）:** `edit_file` は aider 型 `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE` 形式に対応（従来 find:/replace: も後方互換で維持）。寛容文法・git コンフリクト時の write_file ルーティング・健全性チェック付き。根拠と残課題（online A/B、tier別マッピング）は `docs/edit_format_search_replace_design.md`、ベンチは `benchmarks/`。
+### ファイル編集方式（SEARCH/REPLACE マーカー形式）
+`edit_file` は aider 型 `<<<<<<< SEARCH / ======= / >>>>>>> REPLACE` マーカー形式（実装済み・推奨）に対応（従来 `find:`/`replace:` も後方互換で維持）。マッチ失敗時は近似行の候補と差分ヒントを返してLLMの自己修正を促す。git コンフリクトマーカー検出時は `write_file` へルーティング、健全性チェック付き。根拠と残課題（online A/B、tier別マッピング）は `docs/edit_format_search_replace_design.md`、ベンチは `benchmarks/`。
 
 ### 多層防御（execute_actions 内）
 - 未知ツールのフィルタ＋近似候補の提示（difflib）
@@ -117,7 +118,7 @@ duckflow/
 |---|---|---|
 | 共通 | `note`, `response`, `exit`, `duck_call`, `search_archives`/`recall`, `get_project_tree` | 全モードで使用可 |
 | ファイル読取 | `read_file`, `list_directory`, `find_files`, `grep_files` | read_file は行番号付きで返す。検索の標準化・シンボル層・repo map 注入の設計が合意済み（`docs/code_navigation_context_design.md`、未実装） |
-| ファイル編集 | `write_file`, `edit_file`, `delete_lines`, `delete_file` | 承認必須。task モードのみ |
+| ファイル編集 | `write_file`, `edit_file`, `delete_lines`, `delete_file` | 承認必須。task モード、および planning モードの小さく確定した修正で使用可 |
 | 計画 | `propose_plan`, `generate_tasks`, `mark_step_complete`, `mark_task_complete`, `execute_tasks` | Plan → Step → Task の階層管理 |
 | 実行 | `run_command`（承認必須）, `execute_batch` | execute_batch はパーサーが展開 |
 | 調査 | `investigate`, `submit_hypothesis`, `finish_investigation` | OODAループ、read-only |
@@ -149,9 +150,8 @@ uv run ruff check companion/
 
 ## 7. 設定
 
-- **`duckflow.yaml`:** `llm.provider`、`llm.available_models`（モデル一覧）、プロバイダー別デフォルトモデル、`temperature`、`max_output_tokens` など
+- **`duckflow.yaml`:** `llm.provider`、`llm.available_models`（モデル一覧）、プロバイダー別デフォルトモデル、`temperature`、`max_output_tokens`、トップレベル `agent.max_loops` など
 - **`.env`:** `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GROQ_API_KEY` / `OPENROUTER_API_KEY`
-- ⚠️ 現在 `agent:`（max_loops / language / auto_approval）が `llm:` の下にネストされているが、コード側は**トップレベルの** `agent.max_loops` を読むため設定が効いていない可能性が高い（§8 既知の課題）
 
 ## 8. 既知の課題（コードに触る前に必ず把握すること）
 
@@ -159,11 +159,9 @@ uv run ruff check companion/
 
 1. **プロトコル境界の混同リスク:** メインエージェントの外部プロトコルは Sym-Ops、内部実行モデルは `ActionList`、補助LLM呼び出しは JSON/Pydantic。境界は整理済みだが、旧資料やコメントには JSON `ActionList` 前提の記述が残る可能性があるため、変更時は実コードを優先して確認する。
 2. **`core.py` の肥大化:** 1,200行超。ツール登録・承認・ループ制御・アクション実装の分離が必要。
-3. **陳腐化したテスト:** `tests/test_hashline.py` の10件が失敗する。edit_file のアンカー方式→find/replace 方式への移行にテストが追従していないため（リグレッションではない）。実装に合わせた書き直しが必要。
-4. **`duckflow.yaml` の `agent:` ネスト不整合**（§7参照）。
-5. **`pyproject.toml` が旧実態のまま:** プロジェクト名が `codecrafter`、未使用の langchain / langgraph / chromadb 系依存が残存。
-6. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。→ **解決の設計合意済み**（`docs/vitals_redesign_design.md`: 申告はUX表示専用に分離、制御は実測テレメトリへ。未実装）。
-7. **テストの空白地帯:** `execute_actions` の分岐群・Pacemaker にテストがない（AutoRepair・ツール結果エンベロープ・メモリスコアリング・修正ガイドは 2026-06-13 にテスト追加済み）。
+3. **`core.py` 分割前のテスト空白:** `execute_actions` の残分岐・Pacemaker の振る舞いは最低限の回帰テストが必要（AutoRepair・ツール結果エンベロープ・メモリスコアリング・修正ガイド・mode mapping・config loader はテスト追加済み）。
+4. **`pyproject.toml` が旧実態のまま:** プロジェクト名が `codecrafter`、未使用の langchain / langgraph / chromadb 系依存が残存。
+5. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。→ **解決の設計合意済み**（`docs/vitals_redesign_design.md`: 申告はUX表示専用に分離、制御は実測テレメトリへ。未実装）。
 
 ### 解決済み（経緯の記録）
 
@@ -173,6 +171,8 @@ uv run ruff check companion/
 - **`_sanitize_content` の本文破壊**（2026-06-13 修正）: 本文全体の走査削除をやめ、漏洩が実際に発生する先頭・末尾のみのエッジトリム方式（v2.4）に変更。
 - **pruning がエラーを残しタスク指示を削る逆転**（2026-06-13 修正）: エラー系キーワードの優遇を廃止し、種別ベースのスコアリング（本物のユーザー発言=1.0 > assistant=0.6 > ツール結果=0.15 > エラー結果=0.05）に変更。最初のユーザー指示は予算に関わらず必ず保持。
 - **ActionList JSON と Sym-Ops の二重プロトコル誤解**（2026-06-20 整理）: メインエージェントは Sym-Ops テキストを外部プロトコルとして使い、`LLMClient` が内部モデル `ActionList` へ変換する。JSON/Pydantic は `TaskListProposal` など補助LLM呼び出し専用であり、`ActionList` は JSON 出力契約ではない。
+- **`tests/test_hashline.py` の陳腐化**（2026-06-20 修正）: Hashline アンカー方式から SEARCH/REPLACE・find/replace 方式へ移行した実装に合わせて更新済み。直近 baseline では hashline 系テストは18件パス。
+- **`duckflow.yaml` の `agent:` ネスト不整合**（2026-06-21 修正）: `max_loops` / `language` / `auto_approval` をトップレベル `agent` 配下へ移動し、`ConfigLoader.get("agent.max_loops")` と一致させた。
 
 ## 9. ロードマップ
 

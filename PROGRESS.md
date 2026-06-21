@@ -8,6 +8,33 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: Sprint 1 即効安定化の S1-1〜S1-3 を実施
+- `duckflow.yaml`: `max_loops` / `language` / `auto_approval` を `llm.agent` 配下からトップレベル `agent` 配下へ移動し、`ConfigLoader.get("agent.max_loops")` と一致させた。既存の OpenRouter モデル変更は維持。
+- `companion/state/agent_state.py`: `InvestigationState` の説明と `to_prompt_context()` の表示を仮説上限 5 回へ更新。
+- `tests/test_agent_state_minimal.py` 新規: Investigation prompt context が `hypothesis_attempts=3/5` を出すことを回帰テスト化。
+- `AGENTS.md` / `CLAUDE.md`: 協業ループ・planning モード条件付き編集・SEARCH/REPLACE 推奨・設定構造・解決済み課題を現状へ同期。
+- `docs/ROADMAP.md`: Sprint 1 を進行中へ更新し、S1-1〜S1-3 を対応済み、S1-4 を残タスクとして整理。
+- 検証: `uv run pytest tests/test_config_loader_minimal.py tests/test_agent_state_minimal.py tests/test_core_mode_mapping.py -v` で8件パス。全体 `uv run pytest tests/ -v` で182件パス / 1件スキップ。
+
+### 2026-06-21: 協業ループを中核コンセプトに採用・連鎖更新
+- Duckflow の中核コンセプトを「協業ループ（Cooperation Loop）」に据えることを合意。弱いLLM × 協業で、コスト効率・ユーザー学習効果・継続向上の独自軸で価値を出す（強いLLMとの品質競争は明示的に放棄）。
+- `docs/cooperation_loop_design.md` 新規: 北極星・価値軸（V1/V2/V3）・筋の良い協業の4原則・ループ構造・土台への示唆・効果測定方針（3層指標・Goodhart 回避・V2 は定性観察）。
+- 連鎖更新: `CLAUDE.md` §1 ビジョン書き直し（協業ループを頂点・3柱を支える基盤に再構成）、`docs/ROADMAP.md` に Sprint 5「協業ループ」新設、Context Mixer の spec/context/decisions/ideas を反映。
+- 実装は土台（Sprint 1〜3）安定後。コンセプト確定のみ「今」済ませ、土台の方向付けに使用。
+
+### 2026-06-21: Context Mixer（duckflow コレクション）を現状に同期
+- context / spec / decisions / notes の4ドキュメントを 2026-06-17〜06-21 の進捗に更新（前回同期は 2026-06-16）。
+- **context**: 直近の完了事項追記・既知の課題の現状化（`test_hashline.py` 解消済み・プロトコル境界整理済み）・`docs/ROADMAP.md` 参照を追加。
+- **spec**: プロトコル境界（外部Sym-Ops / 内部`ActionList` / 補助JSON）・3モード（仮説5回・planning編集ツール条件付き公開）・`delete_lines` マーカー対応を反映。
+- **decisions**: 新規判断3件を追記（仮説上限 2→5 化 / プロトコル境界の明文化 / `delete_lines` の SEARCH/REPLACE 対応）。過去分は保持。
+- **notes**: 旧実装前提記述（LangGraph / Pacemaker 3指標 / テスト67件）をセクション分割して注記 + 現行実装のクセ（PyYAML glob誤解釈・Rich markup/単独サロゲートクラッシュ・doctest保護・sanitize v2.4 等）を追記。
+- ※コレクション説明文（「Python + LangGraph 5ノード」）は Context Mixer MCP の制約で更新不可のため、引き続き context 冒頭の注記で代替。
+
+### 2026-06-21: 開発ロードマップドキュメントを新規作成
+- `docs/ROADMAP.md` 新規: 今後の作業を Sprint 1〜4 に整理。各項目を重要度（Impact）と優先度（Urgency）の2軸で評価。Sprint 4 は Vitals再設計（V-A〜D）・長期記憶（L-a〜e）・Phase 3（P-a〜c）のサブタスクまで具体化。
+- アクティブな全体ロードマップが存在しなかったため新規作成（`docs/old/NEXT_STEPS_ROADMAP.md` は5ノード LangGraph 時代に陳腐化移動済み）。
+- 既知の課題（CLAUDE.md §8）と各 Sprint 項目の紐付け表、依存関係図を収録。本ドキュメントは PROGRESS.md（履歴）と対で運用。
+
 ### 2026-06-21: delete_lines を SEARCH/REPLACE マーカー形式に対応
 - `companion/tools/file_ops.py`: `delete_lines` が `edit_file` と同じ SEARCH/REPLACE マーカー形式を受け付けるように変更。削除専用のため、`REPLACE` 側は空であることを要求し、内容がある場合は `delete_lines_replace_not_empty` エラーで `edit_file` 利用へ誘導する。
 - 既存の `find:` 形式は後方互換として維持。複数削除ブロックは今回サポートせず、複数箇所は複数 `delete_lines` アクションまたは `edit_file` に寄せる方針。

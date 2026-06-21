@@ -56,7 +56,7 @@ class Vitals(BaseModel):
 class InvestigationState(BaseModel):
     """Investigationモードの調査状態"""
     hypothesis: str = Field("", description="現在の仮説")
-    hypothesis_attempts: int = Field(0, description="仮説試行回数 (2回失敗でduck_call強制)")
+    hypothesis_attempts: int = Field(0, description="仮説試行回数 (5回失敗でduck_call強制)")
     ooda_cycle: int = Field(0, description="OODAサイクル数")
     observations: List[str] = Field(default_factory=list, description="観察結果ログ")
 
@@ -222,7 +222,7 @@ class AgentState(BaseModel):
         if self.investigation_state:
             inv = self.investigation_state
             context.append(
-                f"Investigation: hypothesis_attempts={inv.hypothesis_attempts}/2, "
+                f"Investigation: hypothesis_attempts={inv.hypothesis_attempts}/5, "
                 f"ooda_cycle={inv.ooda_cycle}, "
                 f"hypothesis='{inv.hypothesis}'"
             )
