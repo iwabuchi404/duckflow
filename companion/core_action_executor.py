@@ -30,7 +30,9 @@ from companion.core_action_results import (
 )
 from companion.core_action_invocation import invoke_tool
 from companion.tool_history_policy import compress_for_history
+from companion.modules.repo_map import get_repo_map_generator
 from companion.tools.file_ops import file_ops
+from pathlib import Path
 from companion.tools.results import (
     ToolStatus,
     serialize_to_text,
@@ -187,6 +189,17 @@ async def execute_actions(agent, action_list) -> list:
                             ui.print_result(serialize_to_text(result))
 
                     results.append(result)
+
+                    # Invalidate repo map cache for file-modifying actions
+                    if action.name in ("write_file", "edit_file", "delete_file", "delete_lines"):
+                        file_path = action.parameters.get("path", "")
+                        if file_path:
+                            try:
+                                gen = get_repo_map_generator()
+                                rel = str(Path(file_path)).replace("\\", "/")
+                                gen.invalidate(rel)
+                            except Exception:
+                                pass  # Best-effort, don't block execution
 
                     agent.pacemaker.update_vitals(action, result, is_error=False)
                     consecutive_errors = 0

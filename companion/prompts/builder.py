@@ -12,6 +12,7 @@ from companion.state.agent_state import AgentState
 from companion.prompts.templates import SYSTEM_PROMPT_TEMPLATE, MODE_MAP
 from companion.prompts.few_shot import get_examples_for_mode
 from companion.utils.response_format import SYMOPS_SYSTEM_PROMPT
+from companion.modules.repo_map import generate_repo_map_text
 
 
 class PromptBuilder:
@@ -52,11 +53,21 @@ class PromptBuilder:
             messages.extend(few_shots)
         
         # 4. 動的なコンテキスト（ここから毎ターン確実に変動する）
-        dynamic_context = (
+        # 4a. Repo Map (先回りコンテキスト: ast-based symbol map)
+        repo_map_text = generate_repo_map_text(self.state.working_directory)
+
+        # 4b. 動的コンテキスト組み立て
+        dynamic_parts = [
             "## Current State & Context\n" +
-            self.state.to_prompt_context() + "\n\n" +
-            self._build_error_feedback()
-        ).strip()
+            self.state.to_prompt_context(),
+        ]
+        if repo_map_text:
+            dynamic_parts.append(repo_map_text)
+        error_feedback = self._build_error_feedback()
+        if error_feedback:
+            dynamic_parts.append(error_feedback)
+
+        dynamic_context = "\n\n".join(dynamic_parts).strip()
         
         if dynamic_context:
             messages.append({"role": "system", "content": dynamic_context})
