@@ -8,6 +8,13 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: Sprint 2 S2-3 core.py 分割の第一段階
+- `companion/core_tools.py` を新規追加し、DuckAgent のツール登録、モード別公開マッピング、Sym-Ops ツール説明生成を分離。
+- `companion/core.py` は `register_default_tools()` と `get_tool_descriptions()` への委譲に変更し、`DuckAgent.MODE_TOOL_MAPPING` / `UNIVERSAL_TOOLS` は後方互換 alias として維持。
+- `tests/test_core_mode_mapping.py` に core_tools への分離とモード別説明フィルタの回帰テストを追加。
+- `companion/core_action_pipeline.py` を新規追加し、`execute_actions()` の前処理（未知ツール除外、1ターン上限、terminal action 並べ替え）を純粋関数として分離。
+- `tests/test_core_action_pipeline.py` を追加し、前処理仕様を `execute_actions()` 本体から独立して回帰テスト化。
+
 ### 2026-06-21: Sprint 2 S2-1 未使用 Phase 1 遺物を削除
 - `companion/state/enums.py`, `companion/state/transition.py`, `companion/state/transition_controller.py`, `companion/state/action_result.py` を削除。現行 `core.py` / `agent_state.py` 経路から未参照で、旧 Step/Status 前提の Phase 1 遺物だった。
 - `companion/validators/llm_output.py` を削除。旧 `state/enums.py` のみに依存する未使用 validator で、現行 Sym-Ops → `ActionList` 経路とは別物。

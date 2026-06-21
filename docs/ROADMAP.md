@@ -26,7 +26,7 @@
 | Sprint | テーマ | ねらい | 状態 |
 |---|---|---|---|
 | **1** | 即効の安定化・正確性担保 | 小修正群で「設定が効かない」「憲法が古い」実害を消す | 完了 |
-| **2** | クリーンアップ ＋ 構造改善 | デッドコード整理・`core.py` 分割 | 進行中（S2-1/S2-2 済、S2-3 残） |
+| **2** | クリーンアップ ＋ 構造改善 | デッドコード整理・`core.py` 分割 | 進行中（S2-1/S2-2 済、S2-3 部分対応） |
 | **3** | 体験・観測・コンテキスト効率 | Phase 1.6 完了・探索/履歴管理・デバッグコマンド・複数行入力 | 未着手 |
 | **4** | 中長期の大きな価値 | Vitals 再設計・長期記憶・Phase 3 | 未着手 |
 | **5** | 協業ループ（中核コンセプト） | Molt Report/learnings/Duck Debate。**土台（1〜3）安定後** | 設計確定済（`docs/cooperation_loop_design.md`） |
@@ -54,7 +54,7 @@
 |---|---|:-:|:-:|---|
 | **S2-1** | 未使用 Phase 1 遺物の整理 | 低 | 中 | 2026-06-21 対応。未使用の `state/enums.py`, `state/transition*.py`, `state/action_result.py` と、それに依存する旧 `validators/llm_output.py` を削除 |
 | **S2-2** | `pyproject.toml` 実態化 | 中 | 中 | 2026-06-21 対応。名前を `duckflow`、package include を `companion*`、console script を `duckflow = main:cli` へ更新し、未使用依存（langchain/langgraph/chromadb/faiss/sentence-transformers/textual）を削除 |
-| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 1200行超 → ツール登録 / 承認 / ループ制御 / アクション実装へ分割。今後の機能追加すべての足かせ（§8-2）。S1-4 の最低限テストが入ったため着手可能 |
+| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 2026-06-21 部分対応。ツール登録・モード別公開マッピング・ツール説明生成を `companion/core_tools.py` へ分離。さらに未知ツール除外・アクション数上限・terminal action 並べ替えを `companion/core_action_pipeline.py` へ分離。残りは承認/履歴注入/実行ループ/アクション実装の段階的分割 |
 
 ---
 

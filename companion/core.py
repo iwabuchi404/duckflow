@@ -19,19 +19,28 @@ from companion.tools.file_ops import file_ops
 from companion.tools.plan_tool import PlanTool
 from companion.tools.task_tool import TaskTool
 from companion.tools.approval import ApprovalTool
-from companion.tools.memory_tool import MemoryTool
 from companion.execution.task_executor import TaskExecutor
 from companion.execution.result_summarizer import ResultSummarizer
 from companion.modules.pacemaker import DuckPacemaker
 from companion.modules.memory import MemoryManager
 from companion.ui import ui
+from companion.core_tools import (
+    MODE_TOOL_MAPPING,
+    UNIVERSAL_TOOLS,
+    get_tool_descriptions,
+    register_default_tools,
+)
+from companion.core_action_pipeline import (
+    limit_actions_per_turn,
+    filter_known_actions,
+    move_terminal_actions_to_end,
+)
 
 logger = logging.getLogger(__name__)
 
 from companion.modules.command_handler import CommandHandler
 from companion.modules.session_manager import SessionManager
 from companion.tools.shell_tool import ShellTool
-from companion.tools import get_project_tree
 from companion.tools.results import (
     ToolStatus,
     ToolResult,
@@ -89,64 +98,7 @@ class DuckAgent:
         # Initialize Memory Manager
         self.memory_manager = MemoryManager(llm_client=self.llm, max_tokens=8000)
 
-        # Register basic actions
-        self.register_tool("note", self.action_note)
-        self.register_tool("response", self.action_response)
-        self.register_tool("exit", self.action_exit)
-        self.register_tool("duck_call", self.approval_tool.duck_call)
-
-        # Register File Ops
-        self.register_tool("read_file", file_ops.read_file)
-        self.register_tool("write_file", file_ops.write_file)
-        # self.register_tool("create_file", file_ops.write_file)  # Alias for Sym-Ops v2
-        self.register_tool("list_directory", file_ops.list_files)
-        # self.register_tool("mkdir", file_ops.mkdir)
-        # self.register_tool("replace_in_file", file_ops.replace_in_file)
-        # self.register_tool("edit_lines", file_ops.edit_lines)
-        self.register_tool(
-            "edit_file", file_ops.edit_file
-        )  # Alias - Changed to write_file (overwrite) as agent uses it for full content
-        self.register_tool("find_files", file_ops.find_files)
-        self.register_tool("grep_files", file_ops.grep_files)
-        self.register_tool("delete_lines", file_ops.delete_lines)
-        self.register_tool("delete_file", file_ops.delete_file)
-
-        # Register Planning Tools
-        self.register_tool("propose_plan", self.plan_tool.propose_plan)
-        self.register_tool("mark_step_complete", self.plan_tool.mark_step_complete)
-        self.register_tool("generate_tasks", self.task_tool.generate_tasks)
-        self.register_tool("mark_task_complete", self.task_tool.mark_task_complete)
-
-        # Register Task Execution
-        self.register_tool("execute_tasks", self.action_execute_tasks)
-        self.register_tool("run_command", self.action_run_command)
-
-        # Register Memory Tools
-        self.memory_tool = MemoryTool()
-        self.register_tool("search_archives", self.memory_tool.search_archives)
-        self.register_tool("recall", self.memory_tool.search_archives)  # Alias
-
-        # Register Sub-LLM Tools
-        # self.register_tool("summarize_context", self.sub_llm_tools.summarize_context)
-        self.register_tool("analyze_structure", self.sub_llm_tools.analyze_structure)
-        self.register_tool("generate_code", self.sub_llm_tools.generate_code)
-
-        # Register Investigation Tools (Sym-Ops v3.1)
-        self.register_tool("investigate", self.action_investigate)
-        self.register_tool("submit_hypothesis", self.action_submit_hypothesis)
-        self.register_tool("finish_investigation", self.action_finish_investigation)
-
-        # Register execute_batch (Sym-Ops v3.1 Fast Path)
-        self.register_tool("execute_batch", self.action_execute_batch)
-
-        # Register Project Tree Tool
-        self.register_tool("get_project_tree", get_project_tree)
-
-        # ::status / ::result はツール出力やエラーメッセージ中に頻出する文字列で、
-        # LLMがアクションとして呼んでしまうことがある。ダミーツールとして登録し、
-        # 呼ばれた際に正しい使い方をフィードバックする。
-        self.register_tool("status", self._action_noop_symops_marker)
-        self.register_tool("result", self._action_noop_symops_marker)
+        register_default_tools(self)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function available to the agent."""
@@ -226,82 +178,8 @@ class DuckAgent:
             logger.error(f"❌ Error switching model: {e}")
             return False
 
-    # モード別ツールマッピング
-    # カテゴリ別にツールを分類し、各モードで公開するツールを定義
-
-    # 全モード共通の基本ツール
-    UNIVERSAL_TOOLS = {
-        "note",
-        "response",
-        "exit",
-        "duck_call",
-        "search_archives",
-        "recall",
-        "get_project_tree",
-    }
-
-    MODE_TOOL_MAPPING = {
-        "planning": {
-            # ファイル読み取り
-            "read_file",
-            "list_directory",
-            "find_files",
-            "grep_files",
-            # ファイル編集（finish_investigation 後すぐに修正へ移れるよう開放）
-            "edit_file",
-            "write_file",
-            "delete_lines",
-            "delete_file",
-            # 分析
-            "analyze_structure",
-            # 実行
-            "run_command",
-            # Sub-LLM
-            "generate_code",
-            # 調査
-            "investigate",
-            "submit_hypothesis",
-            "finish_investigation",
-        },
-        "investigation": {
-            # ファイル読み取り
-            "read_file",
-            "list_directory",
-            "find_files",
-            "grep_files",
-            # 分析
-            "analyze_structure",
-            # 計画
-            "propose_plan",
-            "generate_tasks",
-            # 調査
-            "investigate",
-            "submit_hypothesis",
-            "finish_investigation",
-        },
-        "task": {
-            # ファイル読み取り
-            "read_file",
-            "list_directory",
-            "find_files",
-            "grep_files",
-            # ファイル編集
-            "edit_file",
-            "write_file",
-            "delete_lines",
-            "delete_file",
-            # 分析
-            "analyze_structure",
-            # 完了管理
-            "mark_step_complete",
-            "mark_task_complete",
-            # 実行
-            "run_command",
-            "execute_tasks",
-            "execute_batch",
-        },
-    }
-    # ⚠️ 後方互換：task_execution は deprecated。task を使用してください。
+    UNIVERSAL_TOOLS = UNIVERSAL_TOOLS
+    MODE_TOOL_MAPPING = MODE_TOOL_MAPPING
 
     def get_tool_descriptions(self, mode: str = None) -> str:
         """
@@ -314,72 +192,7 @@ class DuckAgent:
         Returns:
             Formatted tool descriptions in Sym-Ops style.
         """
-        import inspect
-
-        # モードに基づいてツールをフィルタリング
-        allowed_tools = None
-        if mode and mode in self.MODE_TOOL_MAPPING:
-            # 共通ツール + モード固有ツール
-            allowed_tools = self.UNIVERSAL_TOOLS | self.MODE_TOOL_MAPPING[mode]
-        elif mode:
-            # 未知のモードの場合は共通ツールのみ
-            allowed_tools = self.UNIVERSAL_TOOLS
-
-        descriptions = []
-        for name, func in self.tools.items():
-            # モードによるフィルタリング
-            if allowed_tools is not None and name not in allowed_tools:
-                continue
-
-            # Extract Docstring
-            full_doc = inspect.getdoc(func) or "No description."
-            summary = full_doc.split("\n\n")[0].replace("\n", " ")
-
-            # Build Sym-Ops example signature
-            try:
-                sig = inspect.signature(func)
-                params_list = []
-                target_param = None
-                content_param = None
-
-                for p_name, p in sig.parameters.items():
-                    # Heuristics for Sym-Ops mapping:
-                    # 1. 'path', 'command', 'reason', 'hypothesis', 'message', 'result' -> @target
-                    if (
-                        p_name
-                        in [
-                            "path",
-                            "command",
-                            "reason",
-                            "hypothesis",
-                            "message",
-                            "result",
-                        ]
-                        and not target_param
-                    ):
-                        target_param = p_name
-                    # 2. 'content', 'body', 'code', 'plan_data' -> <<< block >>>
-                    elif (
-                        p_name in ["content", "body", "code", "plan_data"]
-                        and not content_param
-                    ):
-                        content_param = p_name
-                    # 3. others -> inline params
-                    else:
-                        params_list.append(f"{p_name}=val")
-
-                # Format the line
-                target_str = f" @<{target_param}>" if target_param else ""
-                params_str = f" {' '.join(params_list)}" if params_list else ""
-                content_str = "\n  <<< <content> >>>" if content_param else ""
-
-                line = f"- ::{name}{target_str}{params_str}{content_str}: {summary}"
-                descriptions.append(line)
-
-            except (ValueError, TypeError):
-                descriptions.append(f"- ::{name}: {summary}")
-
-        return "\n".join(descriptions)
+        return get_tool_descriptions(self.tools, mode)
 
     async def run(self):
         """Main execution loop."""
@@ -697,61 +510,28 @@ class DuckAgent:
         logger.info(f"Executing actions: {[a.name for a in action_list.actions]}")
         results = []
 
-        # --- Unknown Tool Filter ---
-        # LLMがハルシネーションで存在しないツールを呼ぶことがあるため、
-        # 実行前にフィルタリングする（会話履歴を汚染しない）
-        import difflib as _difflib
+        mode_val = self.state.current_mode.value if self.state.current_mode else None
+        if mode_val and mode_val in self.MODE_TOOL_MAPPING:
+            mode_tools = self.UNIVERSAL_TOOLS | self.MODE_TOOL_MAPPING[mode_val]
+        else:
+            mode_tools = self.UNIVERSAL_TOOLS
 
-        known_actions = []
-        for action in action_list.actions:
-            if action.name in self.tools:
-                known_actions.append(action)
-            else:
-                logger.warning(f"Filtered out unknown tool: {action.name}")
-                ui.print_warning(f"Unknown tool '{action.name}' was ignored.")
-
-                # 現在モードで有効なツール名のみをヒントに（全ツールリストは長すぎる）
-                mode_val = (
-                    self.state.current_mode.value if self.state.current_mode else None
-                )
-                if mode_val and mode_val in self.MODE_TOOL_MAPPING:
-                    mode_tools = sorted(
-                        self.UNIVERSAL_TOOLS | self.MODE_TOOL_MAPPING[mode_val]
-                    )
-                else:
-                    mode_tools = sorted(self.UNIVERSAL_TOOLS)
-
-                # 近似ツール候補を提示（スペルミス・類似名の誘導）
-                close = _difflib.get_close_matches(
-                    action.name, self.tools.keys(), n=2, cutoff=0.5
-                )
-                if close:
-                    hint = f"'{action.name}' is not a valid tool. Did you mean: {', '.join(close)}?"
-                else:
-                    hint = f"'{action.name}' is not a valid tool."
-                hint += f" Valid tools in this mode: {', '.join(mode_tools)}"
-
-                self.state.last_syntax_errors.append(
-                    SyntaxErrorInfo(
-                        error_type="unknown_tool",
-                        raw_snippet=action.name,
-                        correction_hint=hint,
-                    )
-                )
-        action_list.actions = known_actions
+        removed_tools = filter_known_actions(
+            action_list,
+            self.tools.keys(),
+            mode_tools,
+            self.state.last_syntax_errors,
+        )
+        for tool_name in removed_tools:
+            ui.print_warning(f"Unknown tool '{tool_name}' was ignored.")
 
         # --- Action Count Limiter ---
         # 1ターンあたりのアクション数を制限（LLMの投機的大量実行を防止）
-        MAX_ACTIONS_PER_TURN = 6
-        if len(action_list.actions) > MAX_ACTIONS_PER_TURN:
-            dropped = len(action_list.actions) - MAX_ACTIONS_PER_TURN
-            logger.warning(
-                f"Action limit exceeded: {len(action_list.actions)} actions, dropping last {dropped}"
-            )
+        dropped = limit_actions_per_turn(action_list)
+        if dropped:
             ui.print_warning(
-                f"アクション数が上限({MAX_ACTIONS_PER_TURN})を超えたため、末尾{dropped}件を切り捨てました。"
+                f"アクション数が上限(6)を超えたため、末尾{dropped}件を切り捨てました。"
             )
-            action_list.actions = action_list.actions[:MAX_ACTIONS_PER_TURN]
 
         # --- Safety Score Interceptor (Sym-Ops v3.1) ---
         # safety スコアが 0.5 未満の場合、実行前にユーザー確認を求める
@@ -777,12 +557,7 @@ class DuckAgent:
         # ターミナルアクション（ループを終了するアクション）を末尾に並べ替え
         # 例: [response, replace_in_file] → [replace_in_file, response]
         # これにより実行系アクションが先に処理され、最後にユーザーへ報告される
-        TERMINAL_ACTIONS = {"response", "exit", "duck_call"}
-        non_terminal = [
-            a for a in action_list.actions if a.name not in TERMINAL_ACTIONS
-        ]
-        terminal = [a for a in action_list.actions if a.name in TERMINAL_ACTIONS]
-        action_list.actions = non_terminal + terminal
+        move_terminal_actions_to_end(action_list)
 
         try:
             for action in action_list.actions:

@@ -1,0 +1,135 @@
+"""
+Pre-dispatch action list normalization helpers for DuckAgent.
+"""
+
+import difflib
+import logging
+from typing import Collection
+
+from companion.state.agent_state import Action, ActionList, SyntaxErrorInfo
+
+logger = logging.getLogger(__name__)
+
+MAX_ACTIONS_PER_TURN = 6
+TERMINAL_ACTIONS = {"response", "exit", "duck_call"}
+
+
+def filter_known_actions(
+    action_list: ActionList,
+    known_tool_names: Collection[str],
+    mode_tool_names: Collection[str],
+    syntax_errors: list[SyntaxErrorInfo],
+) -> list[str]:
+    """
+    Remove unknown tools from an action list and record correction hints.
+
+    Args:
+        action_list: Action list to mutate in place.
+        known_tool_names: All registered tool names.
+        mode_tool_names: Tool names currently exposed to the model.
+        syntax_errors: State-owned syntax error list to append hints to.
+
+    Returns:
+        Names of tools removed from the action list.
+    """
+    known_actions = []
+    removed_tools = []
+    known_names = set(known_tool_names)
+
+    for action in action_list.actions:
+        if action.name in known_names:
+            known_actions.append(action)
+            continue
+
+        logger.warning("Filtered out unknown tool: %s", action.name)
+        removed_tools.append(action.name)
+        syntax_errors.append(
+            SyntaxErrorInfo(
+                error_type="unknown_tool",
+                raw_snippet=action.name,
+                correction_hint=build_unknown_tool_hint(
+                    action.name, known_names, mode_tool_names
+                ),
+            )
+        )
+
+    action_list.actions = known_actions
+    return removed_tools
+
+
+def build_unknown_tool_hint(
+    tool_name: str,
+    known_tool_names: Collection[str],
+    mode_tool_names: Collection[str],
+) -> str:
+    """
+    Build a concise correction hint for an unknown tool call.
+
+    Args:
+        tool_name: Invalid tool name emitted by the model.
+        known_tool_names: All registered tool names.
+        mode_tool_names: Tool names valid in the current mode.
+
+    Returns:
+        Human-readable correction hint.
+    """
+    close = difflib.get_close_matches(tool_name, known_tool_names, n=2, cutoff=0.5)
+    if close:
+        hint = f"'{tool_name}' is not a valid tool. Did you mean: {', '.join(close)}?"
+    else:
+        hint = f"'{tool_name}' is not a valid tool."
+
+    valid_tools = ", ".join(sorted(mode_tool_names))
+    return f"{hint} Valid tools in this mode: {valid_tools}"
+
+
+def limit_actions_per_turn(
+    action_list: ActionList, max_actions: int = MAX_ACTIONS_PER_TURN
+) -> int:
+    """
+    Truncate an action list to the per-turn maximum.
+
+    Args:
+        action_list: Action list to mutate in place.
+        max_actions: Maximum number of actions to keep.
+
+    Returns:
+        Number of dropped actions.
+    """
+    if len(action_list.actions) <= max_actions:
+        return 0
+
+    dropped = len(action_list.actions) - max_actions
+    logger.warning(
+        "Action limit exceeded: %s actions, dropping last %s",
+        len(action_list.actions),
+        dropped,
+    )
+    action_list.actions = action_list.actions[:max_actions]
+    return dropped
+
+
+def move_terminal_actions_to_end(action_list: ActionList) -> None:
+    """
+    Move user-facing terminal actions after operational actions.
+
+    Args:
+        action_list: Action list to mutate in place.
+
+    Returns:
+        None.
+    """
+    action_list.actions = sorted(action_list.actions, key=_terminal_sort_key)
+
+
+def _terminal_sort_key(action: Action) -> int:
+    """
+    Sort non-terminal actions before terminal actions.
+
+    Args:
+        action: Action to classify.
+
+    Returns:
+        1 for terminal actions, 0 otherwise.
+    """
+    return 1 if action.name in TERMINAL_ACTIONS else 0

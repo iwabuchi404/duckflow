@@ -1,4 +1,5 @@
 from companion.core import DuckAgent
+from companion.core_tools import MODE_TOOL_MAPPING, get_tool_descriptions
 from companion.prompts.templates import PLANNING_MODE_INSTRUCTIONS
 
 
@@ -42,6 +43,41 @@ def test_task_mode_exposes_edit_tools() -> None:
     edit_tools = {"edit_file", "write_file", "delete_lines", "delete_file"}
 
     assert edit_tools.issubset(DuckAgent.MODE_TOOL_MAPPING["task"])
+
+
+def test_core_mode_mapping_reexports_core_tools_mapping() -> None:
+    """
+    DuckAgent should keep a backwards-compatible class-level mapping alias.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    assert DuckAgent.MODE_TOOL_MAPPING is MODE_TOOL_MAPPING
+
+
+def test_get_tool_descriptions_filters_by_mode() -> None:
+    """
+    Tool descriptions should expose only universal and mode-specific tools.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    agent = DuckAgent(llm_client=DummyLLM())
+
+    planning_descriptions = get_tool_descriptions(agent.tools, "planning")
+    unknown_mode_descriptions = get_tool_descriptions(agent.tools, "unknown")
+
+    assert "::read_file" in planning_descriptions
+    assert "::edit_file" in planning_descriptions
+    assert "::execute_tasks" not in planning_descriptions
+    assert "::response" in unknown_mode_descriptions
+    assert "::read_file" not in unknown_mode_descriptions
 
 
 def test_planning_mode_instructions_document_edit_boundaries() -> None:
