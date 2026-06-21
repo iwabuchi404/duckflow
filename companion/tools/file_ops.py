@@ -1,7 +1,8 @@
 import os
 import re
+import ast
 import shutil
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 import yaml
 from .hashline import HashlineHelper
@@ -31,6 +32,83 @@ def _is_noise_dir_name(name: str) -> bool:
         True when the directory is a known cache/build artifact directory.
     """
     return name in NOISE_DIR_NAMES or name.endswith(".egg-info")
+
+
+def _extract_symbol_headers(file_path: Path) -> Dict[int, str]:
+    """Extract symbol headers for a Python file using ast.
+
+    Returns a dict mapping line numbers to the nearest enclosing
+    function/class signature line. Used to annotate grep results
+    with "which symbol this line belongs to".
+
+    Args:
+        file_path: Path to a Python source file.
+
+    Returns:
+        Dict mapping line numbers to symbol header strings like
+        "def foo(x: int) -> str" or "class Bar(Base):".
+        Non-Python files return an empty dict.
+    """
+    try:
+        source = file_path.read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(source, filename=str(file_path))
+    except (SyntaxError, ValueError, OSError):
+        return {}
+
+    headers: Dict[int, str] = {}
+    lines = source.splitlines()
+
+    def _get_signature(node) -> str:
+        """Extract a readable signature from an ast node."""
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # Build "def name(args) -> ret" from source line
+            line_idx = node.lineno - 1
+            if line_idx < len(lines):
+                return lines[line_idx].strip()
+            return f"def {node.name}(...)"
+        elif isinstance(node, ast.ClassDef):
+            line_idx = node.lineno - 1
+            if line_idx < len(lines):
+                return lines[line_idx].strip()
+            return f"class {node.name}"
+        return ""
+
+    def _walk(node, current_header: str = ""):
+        """Walk the AST and record the enclosing symbol for each line range."""
+        header = current_header
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            header = _get_signature(node)
+
+        # Record the header for this node's line range (skip nodes without lineno)
+        start_line = getattr(node, "lineno", None)
+        if start_line is not None:
+            end_line = getattr(node, "end_lineno", start_line) or start_line
+            for ln in range(start_line, end_line + 1):
+                headers[ln] = header
+
+        for child in ast.iter_child_nodes(node):
+            _walk(child, header)
+
+    _walk(tree)
+    return headers
+
+
+def _find_symbol_for_line(headers: Dict[int, str], line_num: int) -> str | None:
+    """Find the enclosing symbol header for a given line number.
+
+    Does a reverse search from the given line to find the nearest
+    symbol header.
+
+    Args:
+        headers: Dict from _extract_symbol_headers.
+        line_num: Line number to look up.
+
+    Returns:
+        Symbol header string, or None if not inside any symbol.
+    """
+    for ln in range(line_num, 0, -1):
+        if ln in headers and headers[ln]:
+            return headers[ln]
 
 
 class FileOps:
@@ -1079,10 +1157,14 @@ class FileOps:
         include: str = "*",
         recursive: bool = True,
         max_results: int = 50,
+        case_sensitive: bool = True,
     ) -> str:
         """
-        ファイルの内容を正規表現パターンで検索する。
-        find_files（ファイル名検索）と異なり、ファイルの中身を検索する。
+        Search file contents with a regex pattern (ripgrep-style).
+
+        Results are grouped by file, with each match showing the enclosing
+        symbol header (function/class) for Python files. Truncation is
+        always explicit.
 
         Sym-Ops format:
         ::grep_files
@@ -1091,34 +1173,38 @@ class FileOps:
         pattern: "def .*_handler"
         include: "*.py"
         path: "companion"
+        case_sensitive: false
         ---
         >>>
 
         Args:
-            pattern: 検索する正規表現パターン（例: "def .*_handler", "TODO:", "import os"）
-            path: 検索開始ディレクトリ（デフォルト: "."、ワークスペースルートからの相対パス）
-            include: 検索対象ファイルのパターン（デフォルト: "*"、例: "*.py", "*.ts"）
-            recursive: サブディレクトリも再帰的に検索するか（デフォルト: True）
-            max_results: 最大マッチ件数（デフォルト: 50）
+            pattern: Regex pattern to search (e.g. "def .*_handler", "TODO:", "import os")
+            path: Search directory (default: ".", relative to workspace root)
+            include: File name glob filter (default: "*", e.g. "*.py", "*.ts")
+            recursive: Search subdirectories (default: True)
+            max_results: Max matches before truncation (default: 50)
+            case_sensitive: Case-sensitive search (default: True, use False for -i)
 
         Returns:
-            "filepath:line_num: content" 形式のマッチ行一覧と件数サマリー
+            File-grouped match list with symbol headers and summary.
+            Format: "path:line: content" per match, grouped by file.
         """
         import re as _re
         from fnmatch import fnmatch
 
-        # 正規表現コンパイル
+        # Compile regex with case sensitivity flag
+        flags = 0 if case_sensitive else _re.IGNORECASE
         try:
-            regex = _re.compile(pattern)
+            regex = _re.compile(pattern, flags)
         except _re.error as e:
             return f"::status error\nReason: Invalid regex pattern '{pattern}': {e}"
 
-        # 検索開始ディレクトリ
+        # Search directory
         start_dir = (self.workspace_root / path).resolve()
         if not start_dir.exists():
             return f"::status error\nReason: Path not found: {path}"
 
-        # 検索対象ファイルの収集
+        # Collect files
         if start_dir.is_file():
             files_to_search: List[Path] = [start_dir]
         else:
@@ -1136,7 +1222,7 @@ class FileOps:
                                 item.relative_to(self.workspace_root)
                                 files_to_search.append(item)
                             except ValueError:
-                                pass  # ワークスペース外はスキップ
+                                pass
                         elif item.is_dir() and recursive:
                             collect_files(item, depth + 1)
                 except PermissionError:
@@ -1144,36 +1230,65 @@ class FileOps:
 
             collect_files(start_dir)
 
-        # 各ファイルを検索
-        results: List[str] = []
+        # Search each file and collect matches with symbol headers
+        # Group by file: {rel_path: [(line_num, line_content, symbol_header), ...]}
+        file_matches: Dict[str, List[Tuple[int, str, str | None]]] = {}
         total_matches = 0
+        truncated = False
 
         for file_path in files_to_search:
             if total_matches >= max_results:
+                truncated = True
                 break
             try:
+                rel_path = str(file_path.relative_to(self.workspace_root))
+                # Extract symbol headers for Python files
+                symbol_headers: Dict[int, str] = {}
+                if file_path.suffix == ".py":
+                    symbol_headers = _extract_symbol_headers(file_path)
+
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
                     for line_num, line in enumerate(f, 1):
                         if regex.search(line):
-                            rel_path = file_path.relative_to(self.workspace_root)
-                            results.append(f"{rel_path}:{line_num}: {line.rstrip()}")
+                            sym = _find_symbol_for_line(symbol_headers, line_num)
+                            file_matches.setdefault(rel_path, []).append(
+                                (line_num, line.rstrip(), sym)
+                            )
                             total_matches += 1
                             if total_matches >= max_results:
+                                truncated = True
                                 break
             except (OSError, PermissionError):
                 pass
 
-        if not results:
-            return f"No matches found for pattern '{pattern}' in '{path}' (include='{include}')"
+        if not file_matches:
+            cs_note = "" if case_sensitive else " (case-insensitive)"
+            return f"No matches found for pattern '{pattern}' in '{path}' (include='{include}'{cs_note})"
 
-        if total_matches >= max_results:
-            results.append(
-                f"\n(Results truncated at {max_results}. "
+        # Build grouped output
+        parts: List[str] = []
+        for fpath, matches in sorted(file_matches.items()):
+            parts.append(f"--- {fpath} ({len(matches)} match(es)) ---")
+            current_sym: str | None = None
+            for line_num, line_content, sym in matches:
+                # Show symbol header when it changes
+                if sym and sym != current_sym:
+                    parts.append(f"  [{sym}]")
+                    current_sym = sym
+                elif sym is None and current_sym is not None:
+                    current_sym = None
+                parts.append(f"  {fpath}:{line_num}: {line_content}")
+            parts.append("")  # blank line between files
+
+        if truncated:
+            parts.append(
+                f"(Results truncated at {max_results}. "
                 f"Use a more specific pattern or path to narrow results.)"
             )
 
-        results.append(f"\n{total_matches} match(es) found.")
-        return "\n".join(results)
+        parts.append(f"{total_matches} match(es) found in {len(file_matches)} file(s).")
+        return "\n".join(parts)
+
 
     async def delete_lines(
         self, path: str, find: str = "", occurrence: int = 1, content: str = ""

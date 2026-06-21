@@ -8,6 +8,7 @@ from typing import Any, Callable, Mapping
 from companion.tools import get_project_tree
 from companion.tools.file_ops import file_ops
 from companion.tools.memory_tool import MemoryTool
+from companion.tools.symbols import list_symbols, find_definition
 
 
 UNIVERSAL_TOOLS = {
@@ -18,6 +19,8 @@ UNIVERSAL_TOOLS = {
     "search_archives",
     "recall",
     "get_project_tree",
+    "list_symbols",
+    "find_definition",
 }
 
 MODE_TOOL_MAPPING = {
@@ -115,6 +118,9 @@ def register_default_tools(agent: Any) -> None:
 
     agent.register_tool("execute_batch", actions.action_execute_batch)
     agent.register_tool("get_project_tree", get_project_tree)
+
+    agent.register_tool("list_symbols", list_symbols)
+    agent.register_tool("find_definition", find_definition)
 
     agent.register_tool("status", actions._action_noop_symops_marker)
     agent.register_tool("result", actions._action_noop_symops_marker)
