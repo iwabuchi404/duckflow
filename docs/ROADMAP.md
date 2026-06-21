@@ -66,7 +66,7 @@
 |---|---|:-:|:-:|---|
 | **S3-1** | Phase 1.6 残：実行結果の高度な要約表示 | 中 | 中 | `ResultSummarizer` の骨格あり。フェーズ完遂・UX 向上 |
 | **S3-2** | 探索/コンテキスト設計の実装 | 高 | 中 | `docs/code_navigation_context_design.md`：検索の rg 慣習標準化（A）・ast シンボル層（B）・repo map 先回り注入（C・本命）。「弱モデルでも動く」＝実用性の鍵。**S2-3 完了後**が望ましい |
-| **S3-3** | ツール結果の履歴注入ポリシー | 高 | 中 | UI には原文を出しつつ、LLM 履歴へ入れる tool result は tool 別に `exact excerpt + summary + raw_ref` へ整形。長期タスクのコンテキスト圧迫を減らす。ただし編集根拠になる exact text は失ってはいけないため、設計を先に固定する |
+| **S3-3** | ツール結果の履歴注入ポリシー | 高 | 中 | 2026-06-21 対応（Phase 1）。`companion/tool_history_policy.py` 新規作成: `grep_files`（50件→10件+ファイル別集計）、`get_project_tree`（深階層省略+top-level+件数）、`run_command`成功時（head/tail各20行）の3ツール圧縮。`build_tool_result_message` に `history_content` パラメータ追加でUI表示（原文）とLLM履歴注入（圧縮版）を分離。`read_file`・編集失敗結果は後回し。395 passed |
 | **S3-4** | `/prompt` コマンド（システムプロンプトダンプ） | 中 | **高** | 2026-06-21 対応。`/prompt`（現ターン preview）/`all`（3モード）/`raw`（JSON）/`file` を追加。`--debug-context`（宛先 `ui.print_debug_context` 未実装のデッドパス）は廃止して `/prompt` に集約 |
 | **S3-5** | `/tokens` コマンド | 中 | **高** | 2026-06-21 対応。system/履歴の概算トークン・max_tokens 使用率・pruning 閾値・API usage を一覧表示。`MemoryManager.estimate_history_tokens` 公開メソッドを追加 |
 | **S3-6** | `/config` 強化 | 低 | 中 | 現在のモード・公開ツール一覧・モデル・max_loops を実行状態に基づき一覧出力（既存 `/config show` の拡張） |

@@ -29,6 +29,7 @@ from companion.core_action_results import (
     get_approval_request,
 )
 from companion.core_action_invocation import invoke_tool
+from companion.tool_history_policy import compress_for_history
 from companion.tools.file_ops import file_ops
 from companion.tools.results import (
     ToolStatus,
@@ -165,6 +166,10 @@ async def execute_actions(agent, action_list) -> list:
                     )
 
                     if action.name not in ("response",):
+                        # Compress result for LLM history (UI shows raw result)
+                        result_str = result if isinstance(result, str) else serialize_to_text(result)
+                        history_content = compress_for_history(action.name, result_str)
+
                         agent.state.add_message(
                             "user",
                             build_tool_result_message(
@@ -172,6 +177,7 @@ async def execute_actions(agent, action_list) -> list:
                                 result,
                                 status=ToolStatus.OK,
                                 approved=was_approved,
+                                history_content=history_content,
                             ),
                         )
 

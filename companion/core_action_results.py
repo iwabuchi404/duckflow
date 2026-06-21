@@ -101,24 +101,29 @@ def build_tool_result_message(
     content: Any,
     status: ToolStatus = ToolStatus.OK,
     approved: bool = False,
+    history_content: str | None = None,
 ) -> str:
     """
     Build an enveloped tool-result message for conversation history.
 
     Args:
         action: Executed action.
-        content: Tool result payload.
+        content: Tool result payload (used for UI display).
         status: Tool execution status.
         approved: Whether the user approved this action before execution.
+        history_content: Compressed content for LLM history injection.
+            When None, the raw content is used (backward compatible).
 
     Returns:
         Enveloped message suitable for role="user" history injection.
     """
+    # Use history_content for the envelope if provided, otherwise raw content
+    envelope_content = history_content if history_content is not None else content
     tool_res = ToolResult(
         status=status,
         tool_name=action.name,
         target=action_target(action),
-        content=content,
+        content=envelope_content,
     )
     formatted_res = wrap_tool_result(format_symops_response(tool_res))
     if not approved:
