@@ -8,6 +8,22 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: Sprint 2 S2-1 未使用 Phase 1 遺物を削除
+- `companion/state/enums.py`, `companion/state/transition.py`, `companion/state/transition_controller.py`, `companion/state/action_result.py` を削除。現行 `core.py` / `agent_state.py` 経路から未参照で、旧 Step/Status 前提の Phase 1 遺物だった。
+- `companion/validators/llm_output.py` を削除。旧 `state/enums.py` のみに依存する未使用 validator で、現行 Sym-Ops → `ActionList` 経路とは別物。
+- `AGENTS.md` / `CLAUDE.md`: 空になる `validators/` ディレクトリ記述を削除。
+- `docs/ROADMAP.md`: S2-1 を対応済みに更新。
+- 検証: 削除対象への参照を `rg` で確認し、全体 `uv run pytest tests/ -v` で188件パス / 1件スキップ。
+
+### 2026-06-21: Sprint 2 S2-2 pyproject.toml を実態化
+- `pyproject.toml`: プロジェクト名を `codecrafter` から `duckflow` に変更し、author / URL / package include / console script を現行 `companion` 実装に合わせた。
+- 未使用依存として実コード参照がなかった LangChain / LangGraph / Chroma / FAISS / sentence-transformers / Textual を通常依存から削除。Tree-sitter / LSP は将来機能用の optional dependency として維持。
+- `main.py`: console script 用の同期ラッパー `cli()` を追加し、`duckflow = "main:cli"` で起動できる形にした。
+- `companion/config/config_loader.py`: セットアップ後の `config.reload()` 呼び出しが成立するよう `reload()` を追加。
+- `tests/test_config_loader_minimal.py`: `reload()` がキャッシュを捨てて `duckflow.yaml` を再読込することを回帰テスト化。
+- `AGENTS.md` / `CLAUDE.md` / `docs/ROADMAP.md`: pyproject 旧実態の既知課題を解決済みとして更新。
+- 検証: `uv run pytest tests/test_config_loader_minimal.py -v` で3件パス。`uv run python -X utf8 -c "import main; assert callable(main.cli); print('cli-ok')"` で console script 参照先を確認。全体 `uv run pytest tests/ -v` で188件パス / 1件スキップ。
+
 ### 2026-06-21: Sprint 1 S1-4 テスト空白地帯の補強
 - `companion/state/agent_state.py`: Investigation の仮説上限を `MAX_HYPOTHESIS_ATTEMPTS = 5` として共有定数化。
 - `companion/core.py` / `companion/modules/pacemaker.py`: 仮説上限判定を共有定数へ寄せ、Pacemaker が古い 2 回上限で `INVESTIGATION_STUCK` を出す不整合を修正。

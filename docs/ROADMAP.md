@@ -1,5 +1,7 @@
 # Duckflow 開発ロードマップ (ROADMAP.md)
 
+> 📌 **本ファイルはミラーです。正は Context Mixer（duckflow コレクション `roadmap`）。** ナレッジの SoT は Context Mixer（2026-06-21 改訂）。
+
 **ステータス:** アクティブ（生き物 — Sprint 完了時や優先度変更時に更新する）
 **最終更新:** 2026-06-21
 **現在地:** Phase 1.6（コード実行機能）・全体約85%
@@ -24,8 +26,8 @@
 | Sprint | テーマ | ねらい | 状態 |
 |---|---|---|---|
 | **1** | 即効の安定化・正確性担保 | 小修正群で「設定が効かない」「憲法が古い」実害を消す | 完了 |
-| **2** | クリーンアップ ＋ 構造改善 | デッドコード整理・`core.py` 分割 | 未着手 |
-| **3** | マイルストーン完遂 ＋ コンテキスト効率 | Phase 1.6 完了・探索/ツール結果履歴管理 | 未着手 |
+| **2** | クリーンアップ ＋ 構造改善 | デッドコード整理・`core.py` 分割 | 進行中（S2-1/S2-2 済、S2-3 残） |
+| **3** | 体験・観測・コンテキスト効率 | Phase 1.6 完了・探索/履歴管理・デバッグコマンド・複数行入力 | 未着手 |
 | **4** | 中長期の大きな価値 | Vitals 再設計・長期記憶・Phase 3 | 未着手 |
 | **5** | 協業ループ（中核コンセプト） | Molt Report/learnings/Duck Debate。**土台（1〜3）安定後** | 設計確定済（`docs/cooperation_loop_design.md`） |
 
@@ -50,21 +52,25 @@
 
 | ID | 項目 | 重要度 | 優先度 | 内容・理由 |
 |---|---|:-:|:-:|---|
-| **S2-1** | 未使用 Phase 1 遺物の整理 | 低 | 中 | `state/enums.py`, `state/transition*.py`, `state/action_result.py` は現在の `core.py` から未参照。再利用可能性を確認の上、archive 配下へ移行 or 削除 |
-| **S2-2** | `pyproject.toml` 実態化 | 中 | 中 | 名前 `codecrafter` → `companion`、未使用依存（langchain/langgraph/chromadb 系）の削除。本当に未使用か grep 確認が必須 |
+| **S2-1** | 未使用 Phase 1 遺物の整理 | 低 | 中 | 2026-06-21 対応。未使用の `state/enums.py`, `state/transition*.py`, `state/action_result.py` と、それに依存する旧 `validators/llm_output.py` を削除 |
+| **S2-2** | `pyproject.toml` 実態化 | 中 | 中 | 2026-06-21 対応。名前を `duckflow`、package include を `companion*`、console script を `duckflow = main:cli` へ更新し、未使用依存（langchain/langgraph/chromadb/faiss/sentence-transformers/textual）を削除 |
 | **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 1200行超 → ツール登録 / 承認 / ループ制御 / アクション実装へ分割。今後の機能追加すべての足かせ（§8-2）。S1-4 の最低限テストが入ったため着手可能 |
 
 ---
 
-## Sprint 3 — マイルストーン完遂 ＋ コンテキスト効率
+## Sprint 3 — 体験・観測・コンテキスト効率
 
-> 直近マイルストーンを閉じ、探索とツール結果履歴を「長く動いても壊れにくい」形へ寄せる。
+> 直近マイルストーンを閉じ、探索とツール結果履歴を「長く動いても壊れにくい」形へ寄せるとともに、**開発者体験・観測性**（デバッグコマンド・複数行入力）を強化する。協業ループの認知負荷を下げる土台。
 
 | ID | 項目 | 重要度 | 優先度 | 内容・理由 |
 |---|---|:-:|:-:|---|
 | **S3-1** | Phase 1.6 残：実行結果の高度な要約表示 | 中 | 中 | `ResultSummarizer` の骨格あり。フェーズ完遂・UX 向上 |
 | **S3-2** | 探索/コンテキスト設計の実装 | 高 | 中 | `docs/code_navigation_context_design.md`：検索の rg 慣習標準化（A）・ast シンボル層（B）・repo map 先回り注入（C・本命）。「弱モデルでも動く」＝実用性の鍵。**S2-3 完了後**が望ましい |
 | **S3-3** | ツール結果の履歴注入ポリシー | 高 | 中 | UI には原文を出しつつ、LLM 履歴へ入れる tool result は tool 別に `exact excerpt + summary + raw_ref` へ整形。長期タスクのコンテキスト圧迫を減らす。ただし編集根拠になる exact text は失ってはいけないため、設計を先に固定する |
+| **S3-4** | `/prompt` コマンド（システムプロンプトダンプ） | 中 | **高** | 現ターンでLLMに渡るシステムプロンプト＋構築メッセージをモード別にダンプ。`dump_prompt.py`（静的）の動的版。`--debug-context` のコマンド化 |
+| **S3-5** | `/tokens` コマンド | 中 | **高** | トークン数（system/履歴/合計）と予算使用率を表示。MemoryManager 可視化・S3-3 観測に直結 |
+| **S3-6** | `/config` 強化 | 低 | 中 | 現在のモード・公開ツール一覧・モデル・max_loops を実行状態に基づき一覧出力（既存 `/config show` の拡張） |
+| **S3-7** | 複数行入力（Shift+Enter） | 中 | **高** | 入力UI で Shift+Enter=改行 / Enter=送信。Rich/prompt_toolkit キーバインド。長い指示の入力性向上 |
 
 ### S3-3 ツール結果履歴管理の初期方針
 
@@ -90,7 +96,13 @@
 ## Sprint 4 — 中長期の大きな価値
 
 > 設計合意済みの大規模変更と、プロダクト中核の新機能。サブタスクまで具体化済み。
-> 推奨着手順: **V-A → V-B → L-a/L-b → V-C → L-c → L-d/L-e → P系 → V-D**
+> 推奨着手順: **T-1（tier 整備）→ V-A → V-B → L-a/L-b → V-C → L-c → L-d/L-e → P系 → V-D**
+
+### #9 モデル tier 整備（V系・edit §7 の共通前提）
+
+| ID | 項目 | 重要度 | 優先度 | 内容 |
+|---|---|:-:|:-:|---|
+| **T-1** | `available_models` に tier（高/中/低）追加 ＋ `/model` tier 選択 | 中 | 中 | ユーザーが UI でモデルを高/中/低 で選べる。tier 概念は **V-B（repair_load×tier）・edit_format §7（tier別フォーマット）・V-D（モデル別較正）の共通前提**。これらの前に整備する |
 
 ### #10 Vitals 再設計（`docs/vitals_redesign_design.md` 準拠）
 
@@ -180,8 +192,7 @@ Sprint 4 V系 ←─┘（core 分割後に着手しやすい）─┘
 |---|---|---|
 | §8-2 `core.py` 肥大化 | **S2-3** | |
 | §8-3 `core.py` 分割前のテスト空白 | **S1-4** | AutoRepair/エンベロープ/メモリ/修正ガイド/mode mapping/config loader は追加済み、execute_actions 残分岐と Pacemaker 残を埋める |
-| §8-4 pyproject.toml 旧実態 | **S2-2** | |
-| §8-5 Vitals 自己申告は較正されていない | **Sprint 4 V-A〜D** | 設計合意済み |
+| §8-4 Vitals 自己申告は較正されていない | **Sprint 4 V-A〜D** | 設計合意済み |
 | §8-1 プロトコル境界の混同リスク | （継続的注意） | 実コード優先で確認。特定タスクではなく運用ルール |
 | ツール結果による履歴圧迫 | **S3-3** | 既知課題として §8 には未収録。圧縮ではなく履歴注入ポリシーとして扱う |
 | 協業ループの効果測定（計測困難） | **Sprint 5 C-1** | 3層指標・Goodhart 回避で扱う（`cooperation_loop_design.md` §6.2） |

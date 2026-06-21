@@ -22,8 +22,10 @@ install(show_locals=False)
 
 from companion.ui import ui
 
+
 class UILogHandler(logging.Handler):
     """Custom logging handler to send logs to the DuckUI sidebar."""
+
     def emit(self, record):
         try:
             msg = self.format(record)
@@ -31,19 +33,20 @@ class UILogHandler(logging.Handler):
         except Exception:
             self.handleError(record)
 
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(name)s: %(message)s',
+    format="%(name)s: %(message)s",
     handlers=[
         RotatingFileHandler(
             "duckflow_v4.log",
-            maxBytes=5*1024*1024,  # 5MB
+            maxBytes=5 * 1024 * 1024,  # 5MB
             backupCount=3,
-            encoding='utf-8'
+            encoding="utf-8",
         ),
-        UILogHandler()  # Use UI sidebar instead of StreamHandler
-    ]
+        UILogHandler(),  # Use UI sidebar instead of StreamHandler
+    ],
 )
 # Set external libs to WARNING to reduce noise
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -51,6 +54,7 @@ logging.getLogger("openai").setLevel(logging.WARNING)
 
 import argparse
 from companion.tools.file_ops import file_ops
+
 
 def _prompt_session_resume(session_manager: SessionManager):
     """
@@ -75,6 +79,7 @@ def _prompt_session_resume(session_manager: SessionManager):
     # 日時をフォーマット
     try:
         from datetime import datetime
+
         last_active = datetime.fromisoformat(latest["last_active"])
         time_str = last_active.strftime("%Y-%m-%d %H:%M")
     except Exception:
@@ -95,10 +100,14 @@ def _prompt_session_resume(session_manager: SessionManager):
         if answer in ("y", "yes"):
             state = session_manager.load_latest()
             if state:
-                print(f"✅ セッションを復元しました（{len(state.conversation_history)} 件の会話履歴）\n")
+                print(
+                    f"✅ セッションを復元しました（{len(state.conversation_history)} 件の会話履歴）\n"
+                )
                 return state
             else:
-                print("⚠️  セッションの読み込みに失敗しました。新規セッションで起動します。\n")
+                print(
+                    "⚠️  セッションの読み込みに失敗しました。新規セッションで起動します。\n"
+                )
                 return None
         elif answer in ("n", "no", ""):
             return None
@@ -109,21 +118,35 @@ def _prompt_session_resume(session_manager: SessionManager):
 async def main():
     # Parse arguments
     parser = argparse.ArgumentParser(description="Duckflow v4 Agent")
-    parser.add_argument("--dir", type=str, default=".", help="Working directory for the agent")
-    parser.add_argument("--debug-context", type=str, choices=["console", "file"], help="Debug: Output context messages")
-    parser.add_argument("--no-session", action="store_true", help="セッション保存・復元を無効化して新規起動する")
+    parser.add_argument(
+        "--dir", type=str, default=".", help="Working directory for the agent"
+    )
+    parser.add_argument(
+        "--debug-context",
+        type=str,
+        choices=["console", "file"],
+        help="Debug: Output context messages",
+    )
+    parser.add_argument(
+        "--no-session",
+        action="store_true",
+        help="セッション保存・復元を無効化して新規起動する",
+    )
     parser.add_argument("--setup", action="store_true", help="Run the setup wizard")
     args = parser.parse_args()
 
     # 1. Check if setup is needed
     from companion.ui.setup_wizard import SetupWizard
+
     wizard = SetupWizard()
     if args.setup or wizard.should_run():
         await wizard.run()
         # Reload environment and config after setup
         from dotenv import load_dotenv
+
         load_dotenv(override=True)
         from companion.config.config_loader import config
+
         config.reload()
 
     # Set workspace
@@ -144,8 +167,14 @@ async def main():
     )
     await agent.run()
 
+
+def cli() -> None:
+    """Run the Duckflow command line entrypoint."""
+    asyncio.run(main())
+
+
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        cli()
     except KeyboardInterrupt:
         pass

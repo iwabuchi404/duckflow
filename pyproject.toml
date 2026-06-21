@@ -3,11 +3,11 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codecrafter"
+name = "duckflow"
 version = "0.3.0"
 description = "AI-powered coding agent for local development environments"
 authors = [
-    {name = "CodeCrafter Team", email = "dev@codecrafter.ai"}
+    {name = "Duckflow Team", email = "dev@duckflow.local"}
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -26,18 +26,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "langchain>=0.1.0",
-    "langchain-community>=0.0.20",
-    "langchain-openai>=0.0.8",
-    "langchain-anthropic>=0.1.0",
-    "langchain-google-genai>=0.0.11",
-    "langchain-groq>=0.1.0",
-    "langgraph>=0.0.30",
-    "chromadb>=0.4.0",
-    "faiss-cpu>=1.7.4",
-    "sentence-transformers>=2.2.0",
     "rich>=13.7.0",
-    "textual>=0.48.2",
     "pydantic>=2.5.0",
     "pyyaml>=6.0.1",
     "python-dotenv>=1.0.0",
@@ -53,27 +42,26 @@ dev = [
     "ruff>=0.1.8",
     "mypy>=1.7.0",
 ]
-rag = [
-    "chromadb>=0.4.0",
-    "faiss-cpu>=1.7.4",
-]
 lsp = [
     "python-lsp-server>=1.9.0",
     "tree-sitter>=0.20.0",
 ]
 
 [project.urls]
-Homepage = "https://github.com/codecrafter-team/codecrafter"
-Repository = "https://github.com/codecrafter-team/codecrafter"
-Issues = "https://github.com/codecrafter-team/codecrafter/issues"
-Documentation = "https://codecrafter.readthedocs.io/"
+Homepage = "https://github.com/duckflow-ai/duckflow"
+Repository = "https://github.com/duckflow-ai/duckflow"
+Issues = "https://github.com/duckflow-ai/duckflow/issues"
+Documentation = "https://github.com/duckflow-ai/duckflow#readme"
 
 [project.scripts]
-codecrafter = "codecrafter.main:main"
+duckflow = "main:cli"
+
+[tool.setuptools]
+py-modules = ["main"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["codecrafter*"]
+include = ["companion*"]
 
 [tool.black]
 line-length = 88
@@ -129,8 +117,6 @@ strict_equality = true
 
 [[tool.mypy.overrides]]
 module = [
-    "langchain.*",
-    "textual.*",
     "rich.*",
 ]
 ignore_missing_imports = true

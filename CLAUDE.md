@@ -98,7 +98,6 @@ duckflow/
 │   ├── utils/                 # Sym-Ops パーサー, 前処理
 │   ├── config/                # 設定ローダー/ライター
 │   ├── security/              # ファイル保護
-│   ├── validators/            # LLM出力検証
 │   └── output/ / logging/ / task_management/
 ├── tests/                     # pytest テスト（hashline, response_format, frontmatter 等）
 ├── docs/                      # 設計ドキュメント群（old/ は陳腐化注意）
@@ -110,7 +109,7 @@ duckflow/
 └── CLAUDE.md                  # このドキュメント
 ```
 
-※ 旧 `codecrafter/` ディレクトリおよびルートの `config/` ディレクトリは**既に存在しない**。`pyproject.toml` のプロジェクト名が `codecrafter` のままなのは既知の課題（§8）。
+※ 旧 `codecrafter/` ディレクトリおよびルートの `config/` ディレクトリは**既に存在しない**。
 
 ## 5. エージェントのツール一覧（登録済みアクション）
 
@@ -160,8 +159,7 @@ uv run ruff check companion/
 1. **プロトコル境界の混同リスク:** メインエージェントの外部プロトコルは Sym-Ops、内部実行モデルは `ActionList`、補助LLM呼び出しは JSON/Pydantic。境界は整理済みだが、旧資料やコメントには JSON `ActionList` 前提の記述が残る可能性があるため、変更時は実コードを優先して確認する。
 2. **`core.py` の肥大化:** 1,200行超。ツール登録・承認・ループ制御・アクション実装の分離が必要。
 3. **`core.py` 分割前のテスト空白:** `execute_actions` の残分岐・Pacemaker の振る舞いは最低限の回帰テストが必要（AutoRepair・ツール結果エンベロープ・メモリスコアリング・修正ガイド・mode mapping・config loader はテスト追加済み）。
-4. **`pyproject.toml` が旧実態のまま:** プロジェクト名が `codecrafter`、未使用の langchain / langgraph / chromadb 系依存が残存。
-5. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。→ **解決の設計合意済み**（`docs/vitals_redesign_design.md`: 申告はUX表示専用に分離、制御は実測テレメトリへ。未実装）。
+4. **Vitals 自己申告は較正されていない:** safety ゲートの実効性は限定的。客観信号（ループ上限・連続エラー）が実質の制御を担う。→ **解決の設計合意済み**（`docs/vitals_redesign_design.md`: 申告はUX表示専用に分離、制御は実測テレメトリへ。未実装）。
 
 ### 解決済み（経緯の記録）
 
@@ -173,6 +171,7 @@ uv run ruff check companion/
 - **ActionList JSON と Sym-Ops の二重プロトコル誤解**（2026-06-20 整理）: メインエージェントは Sym-Ops テキストを外部プロトコルとして使い、`LLMClient` が内部モデル `ActionList` へ変換する。JSON/Pydantic は `TaskListProposal` など補助LLM呼び出し専用であり、`ActionList` は JSON 出力契約ではない。
 - **`tests/test_hashline.py` の陳腐化**（2026-06-20 修正）: Hashline アンカー方式から SEARCH/REPLACE・find/replace 方式へ移行した実装に合わせて更新済み。直近 baseline では hashline 系テストは18件パス。
 - **`duckflow.yaml` の `agent:` ネスト不整合**（2026-06-21 修正）: `max_loops` / `language` / `auto_approval` をトップレベル `agent` 配下へ移動し、`ConfigLoader.get("agent.max_loops")` と一致させた。
+- **`pyproject.toml` の旧実態**（2026-06-21 修正）: プロジェクト名・console script・package include を Duckflow / companion 実態へ更新し、未使用の LangChain / LangGraph / Chroma / FAISS / sentence-transformers / Textual 依存を削除した。
 
 ## 9. ロードマップ
 
