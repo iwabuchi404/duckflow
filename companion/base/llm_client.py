@@ -47,6 +47,31 @@ def _extract_reasoning(message) -> str | None:
     return None
 
 
+def _get_retry_after(error: APIError) -> float | None:
+    """Extract Retry-After value from an APIError response.
+
+    Checks for Retry-After header in the raw response. Returns the delay
+    in seconds, or None if not present.
+
+    Args:
+        error: The APIError from the API call.
+
+    Returns:
+        Retry delay in seconds, or None.
+    """
+    response = getattr(error, "response", None)
+    if response is not None:
+        headers = getattr(response, "headers", None)
+        if headers:
+            retry_after = headers.get("Retry-After") or headers.get("retry-after")
+            if retry_after:
+                try:
+                    return float(retry_after)
+                except (ValueError, TypeError):
+                    pass
+    return None
+
+
 # コンテキスト長のフォールバックテーブル（API取得失敗時に使用）
 # キー: モデルIDの部分一致で検索される
 CONTEXT_LENGTH_FALLBACK: Dict[str, int] = {
@@ -191,6 +216,8 @@ class LLMClient:
             "output_tokens": 0,
             "total_tokens": 0,
             "cost_estimate": 0.0,  # Placeholder for cost calculation
+            "retry_count": 0,
+            "retry_successes": 0,
         }
 
         logger.info(
@@ -409,6 +436,81 @@ class LLMClient:
         )
         return DEFAULT_CONTEXT_LENGTH
 
+    async def _call_with_retry(self, **kwargs):
+        """Call the LLM API with exponential backoff retry.
+
+        Retries on:
+        - APIError with status_code 429/500/502/503
+        - asyncio.TimeoutError
+        - Connection errors
+
+        Uses Retry-After header for 429 when available.
+        """
+        import asyncio as _asyncio
+        import random as _random
+
+        max_retries = config.get("llm.retry.max_retries", 3)
+        base_delay = config.get("llm.retry.base_delay", 1.0)
+        max_delay = config.get("llm.retry.max_delay", 30.0)
+        retryable_codes = config.get(
+            "llm.retry.retryable_status_codes", [429, 500, 502, 503]
+        )
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = await self.client.chat.completions.create(**kwargs)
+                if attempt > 0:
+                    self.usage_stats["retry_successes"] += 1
+                    logger.info(f"API call succeeded after {attempt} retry(es)")
+                return response
+
+            except APIError as e:
+                status_code = getattr(e, "status_code", None) or getattr(
+                    e, "code", None
+                )
+
+                # Check if retryable
+                if status_code not in retryable_codes:
+                    raise
+
+                if attempt >= max_retries:
+                    logger.error(
+                        f"API call failed after {max_retries} retries "
+                        f"(status={status_code}): {e}"
+                    )
+                    raise
+
+                # Calculate delay
+                delay = min(base_delay * (2 ** attempt) + _random.uniform(0, 0.5), max_delay)
+
+                # Respect Retry-After header for 429
+                if status_code == 429:
+                    retry_after = _get_retry_after(e)
+                    if retry_after:
+                        delay = max(delay, retry_after)
+
+                self.usage_stats["retry_count"] += 1
+                logger.warning(
+                    f"API error (status={status_code}), retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                await _asyncio.sleep(delay)
+
+            except (_asyncio.TimeoutError, ConnectionError, OSError) as e:
+                if attempt >= max_retries:
+                    logger.error(
+                        f"API call failed after {max_retries} retries: {e}"
+                    )
+                    raise
+
+                delay = min(base_delay * (2 ** attempt) + _random.uniform(0, 0.5), max_delay)
+                self.usage_stats["retry_count"] += 1
+                logger.warning(
+                    f"Connection error, retrying in {delay:.1f}s "
+                    f"(attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                await _asyncio.sleep(delay)
+
     async def chat(
         self,
         messages: List[Dict[str, str]],
@@ -471,8 +573,8 @@ class LLMClient:
 
             content = None
             for attempt in range(1, MAX_EMPTY_RETRIES + 2):
-                # OpenAI SDKを使用してリクエスト送信
-                response = await self.client.chat.completions.create(
+                # OpenAI SDKを使用してリクエスト送信 (with retry)
+                response = await self._call_with_retry(
                     model=self.model,
                     messages=processed_messages,
                     temperature=temperature,
