@@ -333,27 +333,48 @@ _REASONING_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IG
 _REASONING_LEFTOVER_RE = re.compile(r"</?think\b[^>]*>", re.IGNORECASE)
 
 
-def strip_reasoning_tags(text: str) -> Tuple[str, bool]:
-    """推論系モデルの <think>...</think> ブロックを除去する。
+def strip_reasoning_tags(text: str) -> Tuple[str, bool, "str | None"]:
+    """Remove imd blocks from reasoning models, extracting content for Thought reuse.
 
-    DeepSeek-R1 由来の推論タグは、Kimi K2 / Qwen3 / GLM / GPT-OSS 等の多くの
-    推論モデルが本文にインラインで出力する（OpenRouter reasoning フィールド等の
-    API 別フィールドではなく本文埋め込み）。Sym-Ops パイプラインに混入すると、
-    response の ``<<< ... >>>`` コンテンツブロック内に ``</think>`` が残り、
-    ユーザーへ生テキストとして漏洩して表示が崩れるため、パイプライン入口で除去する。
+    DeepSeek-R1 / Kimi K2 / Qwen3 / GLM / GPT-OSS etc. embed imd blocks
+    inline in the response body. These leak into response content blocks
+    and break the UI, so they are stripped at pipeline entry.
 
-    完全な ``<think>...</think>`` ブロックは中身ごと削除。閉じ忘れ等で残った
-    孤立タグ（``<think>``, ``</think>``）も除去する。推論内容の活用（Thought 変換）は
-    本関数の対象外（別設計: OpenRouter reasoning フィールド対応）。
+    Complete imd blocks have their inner content extracted before removal.
+    Orphaned tags (imd, imd) are also removed.
 
     Args:
-        text: LLM の生出力テキスト。
+        text: Raw LLM output text.
 
     Returns:
-        ``(stripped_text, was_stripped)``: 除去後テキストと、除去を実行したかを示すフラグ。
+        (stripped_text, was_stripped, reasoning_content): Cleaned text,
+        whether stripping occurred, and extracted reasoning (None if none).
     """
     if "<think" not in text.lower() and "</think" not in text.lower():
-        return text, False
+        return text, False, None
+
+    reasoning_parts = []
+    for match in _REASONING_BLOCK_RE.finditer(text):
+        inner = match.group(0)
+        inner = re.sub(r"</?think\b[^>]*>", "", inner, flags=re.IGNORECASE).strip()
+        if inner:
+            reasoning_parts.append(inner)
+
     stripped = _REASONING_BLOCK_RE.sub("", text)
     stripped = _REASONING_LEFTOVER_RE.sub("", stripped)
-    return stripped, stripped != text
+
+    reasoning_content = "\n".join(reasoning_parts) if reasoning_parts else None
+    return stripped, stripped != text, reasoning_content
+
+
+def reasoning_to_thought(reasoning: str) -> str:
+    """Convert reasoning text to Sym-Ops >> Thought lines.
+
+    Args:
+        reasoning: Raw reasoning text from imd blocks or API reasoning field.
+
+    Returns:
+        Sym-Ops formatted thought block (each non-empty line prefixed with >>).
+    """
+    lines = reasoning.strip().split("\n")
+    return "\n".join(f">> {line.strip()}" for line in lines if line.strip())

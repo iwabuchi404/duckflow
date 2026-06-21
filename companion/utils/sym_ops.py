@@ -1,8 +1,11 @@
 import re
 import yaml
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
-from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter, strip_reasoning_tags
+from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter, strip_reasoning_tags, reasoning_to_thought
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -959,7 +962,13 @@ class SymOpsProcessor:
         Main processing pipeline with preprocessing
         """
         # Phase -1: 推論系モデルの <think> ブロック除去（DeepSeek-R1 / Kimi K2 / Qwen3 / GLM 等）
-        raw_output, reasoning_stripped = strip_reasoning_tags(raw_output)
+        raw_output, reasoning_stripped, reasoning_content = strip_reasoning_tags(raw_output)
+
+        # If reasoning was extracted from imd blocks, prepend as >> Thought lines
+        if reasoning_content:
+            thought_block = reasoning_to_thought(reasoning_content)
+            raw_output = f"{thought_block}\n\n{raw_output}"
+            logger.info(f"Extracted reasoning from imd blocks ({len(reasoning_content)} chars), prepended as >> Thought")
 
         # Phase 0: Plain Markdown/Text Detection & Conversion
         converted, was_converted = self.markdown_converter.convert(raw_output)

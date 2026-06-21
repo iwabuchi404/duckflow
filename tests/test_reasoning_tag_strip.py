@@ -11,7 +11,7 @@ from companion.utils.sym_ops import SymOpsProcessor
 def test_strip_removes_full_block():
     """完全な <think>...</think> ブロックを中身ごと除去する。"""
     text = "<think>推論過程</think>\n::response\n<<<\nこんにちは\n>>>"
-    stripped, was = strip_reasoning_tags(text)
+    stripped, was, _ = strip_reasoning_tags(text)
     assert was is True
     assert "<think>" not in stripped
     assert "</think>" not in stripped
@@ -22,7 +22,7 @@ def test_strip_removes_full_block():
 def test_strip_removes_orphan_close_tag():
     """コンテンツブロック内に漏れた孤立 </think> を除去（表示崩れの直接原因）。"""
     text = "::response\n<<<\nこんにちは\n</think>\n>>>"
-    stripped, was = strip_reasoning_tags(text)
+    stripped, was, _ = strip_reasoning_tags(text)
     assert was is True
     assert "</think>" not in stripped
     assert "こんにちは" in stripped
@@ -31,7 +31,7 @@ def test_strip_removes_orphan_close_tag():
 def test_strip_removes_orphan_open_tag():
     """孤立 <think>（閉じ忘れ）も除去する。"""
     text = "<think>残り\n::response\n<<<\nこんにちは\n>>>"
-    stripped, was = strip_reasoning_tags(text)
+    stripped, was, _ = strip_reasoning_tags(text)
     assert was is True
     assert "<think>" not in stripped
     assert "こんにちは" in stripped
@@ -40,7 +40,7 @@ def test_strip_removes_orphan_open_tag():
 def test_strip_noop_when_absent():
     """<think> が含まれない場合は何もしない。"""
     text = "::response\n<<<\nこんにちは\n>>>"
-    stripped, was = strip_reasoning_tags(text)
+    stripped, was, _ = strip_reasoning_tags(text)
     assert was is False
     assert stripped == text
 
@@ -48,7 +48,7 @@ def test_strip_noop_when_absent():
 def test_strip_case_insensitive():
     """大文字小文字を区別しない（<THINK> 等も除去）。"""
     text = "<THINK>reasoning</THINK>\n::response\n<<<\nhi\n>>>"
-    stripped, was = strip_reasoning_tags(text)
+    stripped, was, _ = strip_reasoning_tags(text)
     assert was is True
     assert "reasoning" not in stripped
     assert "hi" in stripped

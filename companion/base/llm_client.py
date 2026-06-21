@@ -1,14 +1,51 @@
 import os
 import json
 import logging
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Tuple
 from openai import OpenAI, AsyncOpenAI, APIError
 from companion.state.agent_state import ActionList, Action
 from companion.config.config_loader import config
 from companion.base.response_preprocessor import default_preprocessor
 from companion.utils.sym_ops import SymOpsProcessor
+from companion.utils.preprocessor import reasoning_to_thought
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_reasoning(message) -> str | None:
+    """Extract reasoning text from an OpenRouter reasoning model response.
+
+    OpenRouter returns reasoning in a separate field for models like
+    DeepSeek-R1, Kimi K2, GLM, GPT-OSS, etc. The field may appear as:
+    - message.reasoning (direct attribute)
+    - message.model_extra_fields['reasoning'] (Pydantic extra fields)
+    - message.reasoning_content (some providers)
+
+    Args:
+        message: The chat completion message object from the API response.
+
+    Returns:
+        Reasoning text if found, otherwise None.
+    """
+    # Direct attribute
+    reasoning = getattr(message, "reasoning", None)
+    if reasoning and isinstance(reasoning, str) and reasoning.strip():
+        return reasoning
+
+    # reasoning_content (some providers use this name)
+    reasoning = getattr(message, "reasoning_content", None)
+    if reasoning and isinstance(reasoning, str) and reasoning.strip():
+        return reasoning
+
+    # Pydantic model_extra_fields
+    extra = getattr(message, "model_extra_fields", None)
+    if extra and isinstance(extra, dict):
+        reasoning = extra.get("reasoning") or extra.get("reasoning_content")
+        if reasoning and isinstance(reasoning, str) and reasoning.strip():
+            return reasoning
+
+    return None
+
 
 # コンテキスト長のフォールバックテーブル（API取得失敗時に使用）
 # キー: モデルIDの部分一致で検索される
@@ -467,6 +504,18 @@ class LLMClient:
                         logger.info(f"🚀 Prompt Cache Hit: {cache_read:,} tokens")
 
                 content = response.choices[0].message.content
+
+                # Extract reasoning from OpenRouter reasoning models
+                # OpenRouter returns reasoning in a separate field for models like
+                # DeepSeek-R1, Kimi K2, GLM, GPT-OSS, etc.
+                reasoning_text = _extract_reasoning(response.choices[0].message)
+                if reasoning_text:
+                    logger.info(
+                        f"🧠 Extracted reasoning ({len(reasoning_text)} chars), "
+                        f"prepending as >> Thought"
+                    )
+                    thought_block = reasoning_to_thought(reasoning_text)
+                    content = f"{thought_block}\n\n{content}" if content else thought_block
 
                 if content:
                     break  # 正常なレスポンスを取得

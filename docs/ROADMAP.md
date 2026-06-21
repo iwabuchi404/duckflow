@@ -71,7 +71,7 @@
 | **S3-5** | `/tokens` コマンド | 中 | **高** | 2026-06-21 対応。system/履歴の概算トークン・max_tokens 使用率・pruning 閾値・API usage を一覧表示。`MemoryManager.estimate_history_tokens` 公開メソッドを追加 |
 | **S3-6** | `/config` 強化 | 低 | 中 | 現在のモード・公開ツール一覧・モデル・max_loops を実行状態に基づき一覧出力（既存 `/config show` の拡張） |
 | **S3-7** | 複数行入力（Shift+Enter） | 中 | **高** | 2026-06-21 対応。`prompt_toolkit` キーバインド追加: Enter=送信（1行目）/ 改行（複数行化後）、`Ctrl+J`=改行（Shift+Enter 相当）、`Esc→Enter`=複数行送信。`/clear` の補完漏れも修正 |
-| **S3-8** | 推論モデル統合（OpenRouter reasoning → Thought） | 中 | 中 | Hotfix（本文 `<think>` 除去）の発展形。LLMClient で OpenRouter `reasoning` フィールドを受け取り、本文に混入させず Sym-Ops `>>` Thought として活かす（協業ループ原則3・提案質の底上げ）。推論モデル（Kimi K2/DeepSeek-R1/GLM/GPT-OSS）は安価で高性能なので V1 コスト効率に直結。`reasoning.enabled` 制御は T-1（tier）と連動 |
+| **S3-8** | 推論モデル統合（OpenRouter reasoning → Thought） | 中 | 中 | 2026-06-22 対応。`_extract_reasoning()` で OpenRouter API の `reasoning`/`reasoning_content` フィールドを抽出し `reasoning_to_thought()` で `>>` Thought に変換して content 先頭に prepend。本文埋め込み型 imd ブロックも `strip_reasoning_tags` が3値返却に拡張され、推論内容を Thought として活用しつつタグ除去。408 passed |
 
 ### S3-3 ツール結果履歴管理の初期方針
 
