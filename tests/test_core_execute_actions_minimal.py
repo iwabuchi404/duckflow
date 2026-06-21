@@ -112,4 +112,91 @@ async def test_execute_actions_fail_fast_aborts_after_two_consecutive_errors() -
     assert calls == ["fail_one", "fail_two"]
     assert len(results) == 2
     assert all("failed" in item for item in results)
-    assert any("連続2回のエラー" in msg["content"] for msg in agent.state.conversation_history)
+    assert any(
+        "連続2回のエラー" in msg["content"] for msg in agent.state.conversation_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_limits_actions_per_turn() -> None:
+    """Only the first six valid actions should run in one execution turn."""
+    agent = _agent()
+    calls = []
+
+    def ping(index: int) -> str:
+        """Record that a test action was executed."""
+        calls.append(index)
+        return f"pong-{index}"
+
+    agent.register_tool("ping", ping)
+    action_list = ActionList(
+        reasoning="too many actions",
+        actions=[
+            Action(name="ping", parameters={"index": index}) for index in range(8)
+        ],
+    )
+
+    results = await agent.execute_actions(action_list)
+
+    assert calls == [0, 1, 2, 3, 4, 5]
+    assert results == ["pong-0", "pong-1", "pong-2", "pong-3", "pong-4", "pong-5"]
+    assert len(action_list.actions) == 6
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_low_safety_denial_cancels_all_actions(
+    monkeypatch,
+) -> None:
+    """A denied low-safety turn should not dispatch any proposed action."""
+    agent = _agent()
+    calls = []
+
+    def ping() -> str:
+        """Tool that must not execute after safety denial."""
+        calls.append("ping")
+        return "unexpected"
+
+    agent.register_tool("ping", ping)
+    monkeypatch.setattr("companion.core.ui.request_confirmation", lambda _: False)
+    monkeypatch.setattr("companion.core.ui.print_safety_warning", lambda _: None)
+    action_list = ActionList(
+        reasoning="unsafe action",
+        vitals={"safety": 0.2},
+        actions=[Action(name="ping", parameters={})],
+    )
+
+    results = await agent.execute_actions(action_list)
+
+    assert results == []
+    assert calls == []
+    assert any(
+        "Safety Score が低いため" in msg["content"]
+        for msg in agent.state.conversation_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_moves_terminal_actions_to_the_end() -> None:
+    """Terminal user-facing actions should run after operational actions."""
+    agent = _agent()
+    calls = []
+
+    def ping() -> str:
+        """Operational action used to verify execution order."""
+        calls.append("ping")
+        return "pong"
+
+    agent.register_tool("ping", ping)
+    action_list = ActionList(
+        reasoning="respond after work",
+        actions=[
+            Action(name="response", parameters={"message": "done"}),
+            Action(name="ping", parameters={}),
+        ],
+    )
+
+    results = await agent.execute_actions(action_list)
+
+    assert calls == ["ping"]
+    assert results == ["pong", "Responded to user."]
+    assert [action.name for action in action_list.actions] == ["ping", "response"]

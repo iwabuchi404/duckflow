@@ -6,11 +6,13 @@ from enum import Enum
 
 # --- Enums ---
 
+
 class SyntaxErrorInfo(BaseModel):
     """直前ターンで発生した構文エラーの情報"""
+
     error_type: str = Field(description="エラー種別 (例: unknown_tool, missing_param)")
-    raw_snippet: str = Field(default='', description="問題のあった出力の抜粋")
-    correction_hint: str = Field(default='', description="修正ガイド文")
+    raw_snippet: str = Field(default="", description="問題のあった出力の抜粋")
+    correction_hint: str = Field(default="", description="修正ガイド文")
 
 
 class TaskStatus(str, Enum):
@@ -20,25 +22,37 @@ class TaskStatus(str, Enum):
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
 
+
 class AgentPhase(str, Enum):
     IDLE = "IDLE"
     THINKING = "THINKING"
     EXECUTING = "EXECUTING"
     AWAITING_USER = "AWAITING_USER"
 
+
 class AgentMode(str, Enum):
     """Sym-Ops v3.1 の3モード"""
-    PLANNING      = "planning"       # 目標明確・計画立案フェーズ
+
+    PLANNING = "planning"  # 目標明確・計画立案フェーズ
     INVESTIGATION = "investigation"  # 原因不明・OODAループフェーズ
-    TASK          = "task"           # タスク実行フェーズ
+    TASK = "task"  # タスク実行フェーズ
+
+
+MAX_HYPOTHESIS_ATTEMPTS = 5
 
 # --- Vitals (Soul) ---
 
+
 class Vitals(BaseModel):
     """アヒルの健康状態 (Sym-Ops v3.1)"""
+
     confidence: float = Field(1.0, ge=0.0, le=1.0, description="自信 ::c (0.0-1.0)")
-    safety: float = Field(1.0, ge=0.0, le=1.0, description="安全度 ::s (0.0-1.0, 0.5未満で確認要求)")
-    memory: float = Field(1.0, ge=0.0, le=1.0, description="メモリ使用状況 ::m (0.0-1.0)")
+    safety: float = Field(
+        1.0, ge=0.0, le=1.0, description="安全度 ::s (0.0-1.0, 0.5未満で確認要求)"
+    )
+    memory: float = Field(
+        1.0, ge=0.0, le=1.0, description="メモリ使用状況 ::m (0.0-1.0)"
+    )
     focus: float = Field(1.0, ge=0.0, le=1.0, description="集中力 ::f (0.0-1.0)")
 
     def decay(self, amount: float = 0.05):
@@ -51,19 +65,28 @@ class Vitals(BaseModel):
         self.safety = min(1.0, self.safety + amount)
         self.focus = min(1.0, self.focus + amount)
 
+
 # --- Investigation State ---
+
 
 class InvestigationState(BaseModel):
     """Investigationモードの調査状態"""
+
     hypothesis: str = Field("", description="現在の仮説")
-    hypothesis_attempts: int = Field(0, description="仮説試行回数 (5回失敗でduck_call強制)")
+    hypothesis_attempts: int = Field(
+        0,
+        description=f"仮説試行回数 ({MAX_HYPOTHESIS_ATTEMPTS}回失敗でduck_call強制)",
+    )
     ooda_cycle: int = Field(0, description="OODAサイクル数")
     observations: List[str] = Field(default_factory=list, description="観察結果ログ")
 
+
 # --- Pacemaker Intervention ---
+
 
 class InterventionReason(BaseModel):
     """Pacemakerの介入理由"""
+
     type: Literal[
         "SAFETY_DEPLETED",
         "LOOP_EXHAUSTED",
@@ -71,39 +94,46 @@ class InterventionReason(BaseModel):
         "ERROR_CASCADE",
         "STAGNATION",
         "CONFIDENCE_LOW",
-        "INVESTIGATION_STUCK"
+        "INVESTIGATION_STUCK",
     ]
     message: str
     severity: Literal["critical", "high", "medium", "low"]
 
+
 # --- Hierarchical Planning Models ---
+
 
 class Task(BaseModel):
     """最小実行単位"""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     title: str
     description: str = ""
     status: TaskStatus = TaskStatus.PENDING
     result: str = ""
-    command: Optional[str] = None # 実行するコマンドがあれば
-    file_path: Optional[str] = None # 編集するファイルがあれば
-    action: Optional["Action"] = None # 実行するツールアクション (Explicit)
+    command: Optional[str] = None  # 実行するコマンドがあれば
+    file_path: Optional[str] = None  # 編集するファイルがあれば
+    action: Optional["Action"] = None  # 実行するツールアクション (Explicit)
+
 
 class Step(BaseModel):
     """中期目標 (1つのStepは複数のTaskを持つ)"""
+
     id: str = Field(default_factory=lambda: str(uuid.uuid4())[:8])
     title: str
     description: str = ""
     status: TaskStatus = TaskStatus.PENDING
     tasks: List[Task] = Field(default_factory=list)
-    
+
     def add_task(self, title: str, description: str = "") -> Task:
         task = Task(title=title, description=description)
         self.tasks.append(task)
         return task
 
+
 class Plan(BaseModel):
     """長期計画"""
+
     goal: str
     steps: List[Step] = Field(default_factory=list)
     current_step_index: int = 0
@@ -113,30 +143,42 @@ class Plan(BaseModel):
         step = Step(title=title, description=description)
         self.steps.append(step)
         return step
-    
+
     def get_current_step(self) -> Optional[Step]:
         if 0 <= self.current_step_index < len(self.steps):
             return self.steps[self.current_step_index]
         return None
 
+
 # --- Action Protocol ---
+
 
 class Action(BaseModel):
     """LLMが生成する単一の行動"""
+
     name: str = Field(..., description="実行するツール/アクションの名前")
-    parameters: Dict[str, Any] = Field(default_factory=dict, description="アクションの引数")
+    parameters: Dict[str, Any] = Field(
+        default_factory=dict, description="アクションの引数"
+    )
     thought: str = Field(default="", description="このアクションを選んだ理由")
+
 
 class ActionList(BaseModel):
     """Internal action container produced from parsed main-agent Sym-Ops output."""
+
     actions: List[Action]
     reasoning: str = Field(..., description="全体的な思考プロセス")
-    vitals: Optional[Dict[str, float]] = Field(default=None, description="アヒルのバイタル情報")
+    vitals: Optional[Dict[str, float]] = Field(
+        default=None, description="アヒルのバイタル情報"
+    )
+
 
 # --- Main State ---
 
+
 class AgentState(BaseModel):
     """エージェントの全状態を保持するSingle Source of Truth"""
+
     phase: AgentPhase = AgentPhase.IDLE
     vitals: Vitals = Field(default_factory=Vitals)
 
@@ -160,25 +202,28 @@ class AgentState(BaseModel):
 
     # セッション管理
     session_id: str = Field(
-        default_factory=lambda: datetime.now().strftime('%Y%m%d_%H%M%S') + '_' + str(uuid.uuid4())[:4],
-        description='セッション識別子（YYYYMMDD_HHMMSS_xxxx 形式）'
+        default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S")
+        + "_"
+        + str(uuid.uuid4())[:4],
+        description="セッション識別子（YYYYMMDD_HHMMSS_xxxx 形式）",
     )
-    created_at: datetime = Field(default_factory=datetime.now, description='セッション開始日時')
-    last_active: datetime = Field(default_factory=datetime.now, description='最終アクティブ日時')
-    turn_count: int = Field(default=0, description='ターン数（ユーザー入力回数）')
-    
+    created_at: datetime = Field(
+        default_factory=datetime.now, description="セッション開始日時"
+    )
+    last_active: datetime = Field(
+        default_factory=datetime.now, description="最終アクティブ日時"
+    )
+    turn_count: int = Field(default=0, description="ターン数（ユーザー入力回数）")
+
     def add_message(self, role: str, content: str):
         self.conversation_history.append({"role": role, "content": content})
-        
+
     async def add_message_with_pruning(
-        self, 
-        role: str, 
-        content: str, 
-        memory_manager: Any = None
+        self, role: str, content: str, memory_manager: Any = None
     ):
         """
         メッセージを追加し、必要なら履歴を整理
-        
+
         Args:
             role: メッセージのロール ("user", "assistant", "system")
             content: メッセージ内容
@@ -186,7 +231,7 @@ class AgentState(BaseModel):
         """
         # 通常の追加
         self.add_message(role, content)
-        
+
         # 整理チェック
         if memory_manager and memory_manager.should_prune(self.conversation_history):
             self.conversation_history, stats = await memory_manager.prune_history(
@@ -201,7 +246,7 @@ class AgentState(BaseModel):
                     "user",
                     f"[SYSTEM] 緊急メモリ整理を実行しました（要約なしで{removed}件の古いメッセージを削除）。"
                     "直前までの文脈の一部が失われている可能性があります。"
-                    "タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。"
+                    "タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。",
                 )
 
     def update_vitals(self):
@@ -222,24 +267,34 @@ class AgentState(BaseModel):
         if self.investigation_state:
             inv = self.investigation_state
             context.append(
-                f"Investigation: hypothesis_attempts={inv.hypothesis_attempts}/5, "
+                f"Investigation: hypothesis_attempts={inv.hypothesis_attempts}/{MAX_HYPOTHESIS_ATTEMPTS}, "
                 f"ooda_cycle={inv.ooda_cycle}, "
                 f"hypothesis='{inv.hypothesis}'"
             )
-        
+
         if self.current_plan:
             context.append(f"\nCurrent Plan: {self.current_plan.goal}")
             current_step = self.current_plan.get_current_step()
             if current_step:
-                context.append(f"Current Step: {current_step.title} ({current_step.status.value})")
+                context.append(
+                    f"Current Step: {current_step.title} ({current_step.status.value})"
+                )
                 if current_step.tasks:
-                    pending_tasks = [t for t in current_step.tasks if t.status == TaskStatus.PENDING]
-                    completed_tasks = [t for t in current_step.tasks if t.status == TaskStatus.COMPLETED]
-                    context.append(f"Tasks: {len(completed_tasks)}/{len(current_step.tasks)} completed")
-        
+                    pending_tasks = [
+                        t for t in current_step.tasks if t.status == TaskStatus.PENDING
+                    ]
+                    completed_tasks = [
+                        t
+                        for t in current_step.tasks
+                        if t.status == TaskStatus.COMPLETED
+                    ]
+                    context.append(
+                        f"Tasks: {len(completed_tasks)}/{len(current_step.tasks)} completed"
+                    )
+
         if self.last_action_result:
             context.append(f"\nLast Result:\n{self.last_action_result}")
-            
+
         return "\n".join(context)
 
     def get_context_mode(self) -> str:
@@ -278,10 +333,10 @@ class AgentState(BaseModel):
         Returns:
             全フィールドをJSON互換型に変換した辞書
         """
-        return self.model_dump(mode='json')
+        return self.model_dump(mode="json")
 
     @classmethod
-    def from_session_dict(cls, data: dict) -> 'AgentState':
+    def from_session_dict(cls, data: dict) -> "AgentState":
         """
         セッションファイルから AgentState を復元する。
 
@@ -292,4 +347,3 @@ class AgentState(BaseModel):
             復元された AgentState インスタンス
         """
         return cls.model_validate(data)
-

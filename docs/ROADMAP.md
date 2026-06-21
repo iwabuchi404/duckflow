@@ -23,7 +23,7 @@
 
 | Sprint | テーマ | ねらい | 状態 |
 |---|---|---|---|
-| **1** | 即効の安定化・正確性担保 | 小修正群で「設定が効かない」「憲法が古い」実害を消す | 進行中（S1-1〜S1-3 済 / S1-4 残） |
+| **1** | 即効の安定化・正確性担保 | 小修正群で「設定が効かない」「憲法が古い」実害を消す | 完了 |
 | **2** | クリーンアップ ＋ 構造改善 | デッドコード整理・`core.py` 分割 | 未着手 |
 | **3** | マイルストーン完遂 ＋ コンテキスト効率 | Phase 1.6 完了・探索/ツール結果履歴管理 | 未着手 |
 | **4** | 中長期の大きな価値 | Vitals 再設計・長期記憶・Phase 3 | 未着手 |
@@ -40,7 +40,7 @@
 | **S1-1** | `duckflow.yaml` の `agent:` ネスト不整合解消 | 高 | **高** | 2026-06-21 対応。`max_loops` / `language` / `auto_approval` をトップレベル `agent` 配下へ移動し、コードが読む `agent.max_loops` と一致させた |
 | **S1-2** | AGENTS.md / CLAUDE.md の陳腐化更新 | 中 | **高** | 2026-06-21 対応。`test_hashline.py` 解消済み、planning モードの条件付き編集公開、SEARCH/REPLACE 推奨、設定構造を現状へ反映 |
 | **S1-3** | `InvestigationState` 仮説閾値コメント修正（2→5） | 低 | **高** | 2026-06-21 対応。`InvestigationState` の説明と `to_prompt_context()` の表示を 5 回上限へ更新 |
-| **S1-4** | テスト空白地帯の埋め | 中 | **高** | `execute_actions` 残分岐・Pacemaker 残。**S2-3（core 分割）の安全網**として必須 |
+| **S1-4** | テスト空白地帯の埋め | 中 | **高** | 2026-06-21 対応。`execute_actions` の action cap / low-safety cancel / terminal action ordering と、Pacemaker の error-rate cascade / investigation stuck 上限を回帰テスト化 |
 
 ---
 
@@ -52,7 +52,7 @@
 |---|---|:-:|:-:|---|
 | **S2-1** | 未使用 Phase 1 遺物の整理 | 低 | 中 | `state/enums.py`, `state/transition*.py`, `state/action_result.py` は現在の `core.py` から未参照。再利用可能性を確認の上、archive 配下へ移行 or 削除 |
 | **S2-2** | `pyproject.toml` 実態化 | 中 | 中 | 名前 `codecrafter` → `companion`、未使用依存（langchain/langgraph/chromadb 系）の削除。本当に未使用か grep 確認が必須 |
-| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 1200行超 → ツール登録 / 承認 / ループ制御 / アクション実装へ分割。今後の機能追加すべての足かせ（§8-2）。**S1-4 完了後**に着手 |
+| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 1200行超 → ツール登録 / 承認 / ループ制御 / アクション実装へ分割。今後の機能追加すべての足かせ（§8-2）。S1-4 の最低限テストが入ったため着手可能 |
 
 ---
 

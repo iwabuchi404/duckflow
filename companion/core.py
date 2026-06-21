@@ -11,6 +11,7 @@ from companion.state.agent_state import (
     TaskStatus,
     AgentMode,
     SyntaxErrorInfo,
+    MAX_HYPOTHESIS_ATTEMPTS,
 )
 from companion.base.llm_client import default_client, LLMClient
 from companion.prompts.builder import PromptBuilder
@@ -1272,8 +1273,6 @@ class DuckAgent:
         Returns:
             仮説の登録確認と残り試行回数を含むメッセージ
         """
-        MAX_HYPOTHESIS_ATTEMPTS = 5
-
         if self.state.investigation_state is None:
             # Investigationモードでなければ自動的に遷移
             self.state.enter_investigation_mode()

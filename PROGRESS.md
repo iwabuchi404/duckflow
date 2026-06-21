@@ -8,6 +8,14 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: Sprint 1 S1-4 テスト空白地帯の補強
+- `companion/state/agent_state.py`: Investigation の仮説上限を `MAX_HYPOTHESIS_ATTEMPTS = 5` として共有定数化。
+- `companion/core.py` / `companion/modules/pacemaker.py`: 仮説上限判定を共有定数へ寄せ、Pacemaker が古い 2 回上限で `INVESTIGATION_STUCK` を出す不整合を修正。
+- `tests/test_core_execute_actions_minimal.py`: `execute_actions()` の action cap（6件上限）、低 safety 時のユーザー拒否による全アクションキャンセル、terminal action の末尾実行を追加検証。
+- `tests/test_pacemaker_minimal.py`: 直近10件中5件エラーの cascade 検知、Investigation stuck が共有上限直前では発火せず上限到達で発火することを追加検証。
+- `docs/ROADMAP.md`: Sprint 1 を完了に更新。S2-3 `core.py` 分割は S1-4 の最低限テストが入ったため着手可能に整理。
+- 検証: `uv run pytest tests/test_core_execute_actions_minimal.py tests/test_pacemaker_minimal.py tests/test_agent_state_minimal.py -v` で12件パス。全体 `uv run pytest tests/ -v` で187件パス / 1件スキップ。
+
 ### 2026-06-21: Sprint 1 即効安定化の S1-1〜S1-3 を実施
 - `duckflow.yaml`: `max_loops` / `language` / `auto_approval` を `llm.agent` 配下からトップレベル `agent` 配下へ移動し、`ConfigLoader.get("agent.max_loops")` と一致させた。既存の OpenRouter モデル変更は維持。
 - `companion/state/agent_state.py`: `InvestigationState` の説明と `to_prompt_context()` の表示を仮説上限 5 回へ更新。
