@@ -26,8 +26,8 @@
 | Sprint | テーマ | ねらい | 状態 |
 |---|---|---|---|
 | **1** | 即効の安定化・正確性担保 | 小修正群で「設定が効かない」「憲法が古い」実害を消す | 完了 |
-| **2** | クリーンアップ ＋ 構造改善 | デッドコード整理・`core.py` 分割 | 進行中（S2-1/S2-2 済、S2-3 部分対応） |
-| **3** | 体験・観測・コンテキスト効率 | Phase 1.6 完了・探索/履歴管理・デバッグコマンド・複数行入力 | 未着手 |
+| **2** | クリーンアップ ＋ 構造改善 | デッドコード整理・`core.py` 分割 | 完了 |
+| **3** | 体験・観測・コンテキスト効率 | Phase 1.6 完了・探索/履歴管理・デバッグコマンド・複数行入力・推論モデル統合 | 未着手 |
 | **4** | 中長期の大きな価値 | Vitals 再設計・長期記憶・Phase 3 | 未着手 |
 | **5** | 協業ループ（中核コンセプト） | Molt Report/learnings/Duck Debate。**土台（1〜3）安定後** | 設計確定済（`docs/cooperation_loop_design.md`） |
 
@@ -54,7 +54,7 @@
 |---|---|:-:|:-:|---|
 | **S2-1** | 未使用 Phase 1 遺物の整理 | 低 | 中 | 2026-06-21 対応。未使用の `state/enums.py`, `state/transition*.py`, `state/action_result.py` と、それに依存する旧 `validators/llm_output.py` を削除 |
 | **S2-2** | `pyproject.toml` 実態化 | 中 | 中 | 2026-06-21 対応。名前を `duckflow`、package include を `companion*`、console script を `duckflow = main:cli` へ更新し、未使用依存（langchain/langgraph/chromadb/faiss/sentence-transformers/textual）を削除 |
-| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 2026-06-21 部分対応。ツール登録・モード別公開マッピング・ツール説明生成を `companion/core_tools.py` へ分離。さらに未知ツール除外・アクション数上限・terminal action 並べ替え・低 safety 判定・編集アクション判定を `companion/core_action_pipeline.py`、承認判定・denial context・ツール結果履歴メッセージ生成を `companion/core_action_results.py`、ツール呼び出し引数フィルタを `companion/core_action_invocation.py` へ分離。残りは実行ループ/アクション実装の段階的分割 |
+| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 2026-06-21 完了。ツール登録・モード別公開マッピング・ツール説明生成を `companion/core_tools.py` へ分離。さらに未知ツール除外・アクション数上限・terminal action 並べ替え・低 safety 判定・編集アクション判定を `companion/core_action_pipeline.py`、承認判定・denial context・ツール結果履歴メッセージ生成を `companion/core_action_results.py`、ツール呼び出し引数フィルタを `companion/core_action_invocation.py` へ分離。アクションメソッド群を companion/core_actions.py、アクション実行ディスパッチャを companion/core_action_executor.py、run()ヘルパーを companion/core_loop_helpers.py へ分離し、core.py を1000行→400行へ縮小 |
 
 ---
 
@@ -67,10 +67,11 @@
 | **S3-1** | Phase 1.6 残：実行結果の高度な要約表示 | 中 | 中 | `ResultSummarizer` の骨格あり。フェーズ完遂・UX 向上 |
 | **S3-2** | 探索/コンテキスト設計の実装 | 高 | 中 | `docs/code_navigation_context_design.md`：検索の rg 慣習標準化（A）・ast シンボル層（B）・repo map 先回り注入（C・本命）。「弱モデルでも動く」＝実用性の鍵。**S2-3 完了後**が望ましい |
 | **S3-3** | ツール結果の履歴注入ポリシー | 高 | 中 | UI には原文を出しつつ、LLM 履歴へ入れる tool result は tool 別に `exact excerpt + summary + raw_ref` へ整形。長期タスクのコンテキスト圧迫を減らす。ただし編集根拠になる exact text は失ってはいけないため、設計を先に固定する |
-| **S3-4** | `/prompt` コマンド（システムプロンプトダンプ） | 中 | **高** | 現ターンでLLMに渡るシステムプロンプト＋構築メッセージをモード別にダンプ。`dump_prompt.py`（静的）の動的版。`--debug-context` のコマンド化 |
-| **S3-5** | `/tokens` コマンド | 中 | **高** | トークン数（system/履歴/合計）と予算使用率を表示。MemoryManager 可視化・S3-3 観測に直結 |
+| **S3-4** | `/prompt` コマンド（システムプロンプトダンプ） | 中 | **高** | 2026-06-21 対応。`/prompt`（現ターン preview）/`all`（3モード）/`raw`（JSON）/`file` を追加。`--debug-context`（宛先 `ui.print_debug_context` 未実装のデッドパス）は廃止して `/prompt` に集約 |
+| **S3-5** | `/tokens` コマンド | 中 | **高** | 2026-06-21 対応。system/履歴の概算トークン・max_tokens 使用率・pruning 閾値・API usage を一覧表示。`MemoryManager.estimate_history_tokens` 公開メソッドを追加 |
 | **S3-6** | `/config` 強化 | 低 | 中 | 現在のモード・公開ツール一覧・モデル・max_loops を実行状態に基づき一覧出力（既存 `/config show` の拡張） |
-| **S3-7** | 複数行入力（Shift+Enter） | 中 | **高** | 入力UI で Shift+Enter=改行 / Enter=送信。Rich/prompt_toolkit キーバインド。長い指示の入力性向上 |
+| **S3-7** | 複数行入力（Shift+Enter） | 中 | **高** | 2026-06-21 対応。`prompt_toolkit` キーバインド追加: Enter=送信（1行目）/ 改行（複数行化後）、`Ctrl+J`=改行（Shift+Enter 相当）、`Esc→Enter`=複数行送信。`/clear` の補完漏れも修正 |
+| **S3-8** | 推論モデル統合（OpenRouter reasoning → Thought） | 中 | 中 | Hotfix（本文 `<think>` 除去）の発展形。LLMClient で OpenRouter `reasoning` フィールドを受け取り、本文に混入させず Sym-Ops `>>` Thought として活かす（協業ループ原則3・提案質の底上げ）。推論モデル（Kimi K2/DeepSeek-R1/GLM/GPT-OSS）は安価で高性能なので V1 コスト効率に直結。`reasoning.enabled` 制御は T-1（tier）と連動 |
 
 ### S3-3 ツール結果履歴管理の初期方針
 

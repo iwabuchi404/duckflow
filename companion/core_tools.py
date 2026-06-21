@@ -79,9 +79,10 @@ def register_default_tools(agent: Any) -> None:
     Returns:
         None.
     """
-    agent.register_tool("note", agent.action_note)
-    agent.register_tool("response", agent.action_response)
-    agent.register_tool("exit", agent.action_exit)
+    actions = agent._actions
+    agent.register_tool("note", actions.action_note)
+    agent.register_tool("response", actions.action_response)
+    agent.register_tool("exit", actions.action_exit)
     agent.register_tool("duck_call", agent.approval_tool.duck_call)
 
     agent.register_tool("read_file", file_ops.read_file)
@@ -98,8 +99,8 @@ def register_default_tools(agent: Any) -> None:
     agent.register_tool("generate_tasks", agent.task_tool.generate_tasks)
     agent.register_tool("mark_task_complete", agent.task_tool.mark_task_complete)
 
-    agent.register_tool("execute_tasks", agent.action_execute_tasks)
-    agent.register_tool("run_command", agent.action_run_command)
+    agent.register_tool("execute_tasks", actions.action_execute_tasks)
+    agent.register_tool("run_command", actions.action_run_command)
 
     agent.memory_tool = MemoryTool()
     agent.register_tool("search_archives", agent.memory_tool.search_archives)
@@ -108,15 +109,15 @@ def register_default_tools(agent: Any) -> None:
     agent.register_tool("analyze_structure", agent.sub_llm_tools.analyze_structure)
     agent.register_tool("generate_code", agent.sub_llm_tools.generate_code)
 
-    agent.register_tool("investigate", agent.action_investigate)
-    agent.register_tool("submit_hypothesis", agent.action_submit_hypothesis)
-    agent.register_tool("finish_investigation", agent.action_finish_investigation)
+    agent.register_tool("investigate", actions.action_investigate)
+    agent.register_tool("submit_hypothesis", actions.action_submit_hypothesis)
+    agent.register_tool("finish_investigation", actions.action_finish_investigation)
 
-    agent.register_tool("execute_batch", agent.action_execute_batch)
+    agent.register_tool("execute_batch", actions.action_execute_batch)
     agent.register_tool("get_project_tree", get_project_tree)
 
-    agent.register_tool("status", agent._action_noop_symops_marker)
-    agent.register_tool("result", agent._action_noop_symops_marker)
+    agent.register_tool("status", actions._action_noop_symops_marker)
+    agent.register_tool("result", actions._action_noop_symops_marker)
 
 
 def get_tool_descriptions(

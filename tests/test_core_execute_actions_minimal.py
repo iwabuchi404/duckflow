@@ -157,8 +157,8 @@ async def test_execute_actions_low_safety_denial_cancels_all_actions(
         return "unexpected"
 
     agent.register_tool("ping", ping)
-    monkeypatch.setattr("companion.core.ui.request_confirmation", lambda _: False)
-    monkeypatch.setattr("companion.core.ui.print_safety_warning", lambda _: None)
+    monkeypatch.setattr("companion.core_action_executor.ui.request_confirmation", lambda _: False)
+    monkeypatch.setattr("companion.core_action_executor.ui.print_safety_warning", lambda _: None)
     action_list = ActionList(
         reasoning="unsafe action",
         vitals={"safety": 0.2},

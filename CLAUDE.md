@@ -85,7 +85,7 @@ LLMの出力テキスト形式。`::action @target`、`<<< ... >>>` コンテン
 ```
 duckflow/
 ├── companion/                 # メインパッケージ（v4）
-│   ├── core.py                # DuckAgent: メインループとアクション実行（※肥大化中、分割予定）
+│   ├── core.py                # DuckAgent: メインループ・委譲のみ（400行。アクション・実行は core_action_executor.py、アクションメソッド群は core_actions.py、ループヘルパーは core_loop_helpers.py へ分離済）
 │   ├── base/                  # LLMクライアント、レスポンス前処理
 │   ├── state/                 # AgentState ほか Pydantic モデル（Single Source of Truth）
 │   ├── prompts/               # PromptBuilder, システムプロンプト, Few-shot例
@@ -130,7 +130,6 @@ duckflow/
 uv run python -X utf8 main.py
 #   --no-session      セッション保存・復元を無効化
 #   --dir <path>      ワークスペースを指定
-#   --debug-context console|file   LLMに送るコンテキストをダンプ
 #   --setup           セットアップウィザードを起動
 
 # テスト
@@ -145,7 +144,9 @@ uv run black companion/
 uv run ruff check companion/
 ```
 
-**アプリ内コマンド:** `/help` `/status` `/config` `/model`（モデル切替） `/scan`（プロジェクトツリー） `/clear` `/log` `/exit`
+**アプリ内コマンド:** `/help` `/status` `/config` `/model`（モデル切替） `/scan`（プロジェクトツリー） `/clear` `/log` `/prompt`（現ターンのプロンプトダンプ: 既定/all/raw/file） `/tokens`（トークン使用量・メモリ予算） `/exit`
+
+**入力:** `Enter`=送信、`Shift+Enter`（対応ターミナル）または `Ctrl+J`=改行、`Esc→Enter`=複数行入力の送信
 
 ## 7. 設定
 

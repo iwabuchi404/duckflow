@@ -8,6 +8,34 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: Sprint 2 完了 (S2-3 core.py 詳細分割)
+- companion/core_actions.py (新規): action_* メソッド群（note/response/run_command/exit/execute_tasks/investigate/submit_hypothesis/finish_investigation/execute_batch/noop）を CoreActions クラスとして抽出。DuckAgent は self._actions で保持。
+- companion/core_action_executor.py (新規): execute_actions() をスタンドアロン関数として抽出。DuckAgent.execute_actions は薄い委譲メソッドのみ残置。
+- companion/core_loop_helpers.py (新規): run() から update_vitals_from_response / build_intervention_prompt / check_and_prune_if_needed / should_return_to_user を抽出。
+- companion/core_tools.py: register_default_tools の登録先を agent.action_* → agent._actions.action_* へ更新。
+- companion/core.py: 1000行→400行へ縮小（__init__ + switch_model + get_tool_descriptions + run + execute_actions委譲）。
+- テスト: 	ests/test_core_actions.py (新規、10件) 追加。	ests/test_core_execute_actions_minimal.py の monkeypatch 対象を companion.core_action_executor.ui へ更新。	ests/test_core_mode_mapping.py の hasattr チェックを agent._actions へ更新。
+- 検証: uv run pytest tests/ -v = 383 passed / 2 skipped。
+
+
+### 2026-06-21: Sprint 3 小粒DX群（S3-4 / S3-5 / S3-7）を実装
+- `companion/modules/command_handler.py`: `/prompt` ハンドラを追加（既定=現ターン preview 表 / `all`=3モード / `raw`=JSON / `file [path]`=ファイル書き出し）。メッセージ構築ヘルパ `_build_current_messages` / `_build_mode_messages` / `_preview_content` / `_messages_to_table` を分離。`/tokens` ハンドラを追加（system/履歴の概算トークン・max_tokens 使用率・pruning 閾値・API usage を Table 表示）。`self.commands` 辞書の `/config` 重複を解消し `/prompt` `/tokens` を登録。`/help` に新コマンドと入力案内を追記。
+- `companion/modules/memory.py`: `estimate_history_tokens(messages)` 公開メソッドを追加（`_estimate_tokens` と同じ概算式 chars×0.5 を任意メッセージ群に適用）。pruning ロジックは不変更。
+- `companion/ui/console.py`: `get_user_input` に複数行入力のキーバインドを追加（Enter=1行目送信 / 改行済みなら改行挿入、`Ctrl+J`=改行=Shift+Enter 相当、`Esc→Enter`=複数行送信）。`NestedCompleter` に `/prompt` `/tokens` `/clear` を追加。
+- `companion/core.py` / `main.py`: `--debug-context console|file` オプションと `DuckAgent.debug_context_mode` を廃止（宛先 `ui.print_debug_context` が未実装のデッドパスだったため）。`/prompt` に機能を集約。
+- テスト追加: `tests/test_command_prompt.py`（9件）、`tests/test_command_tokens.py`（7件）、`tests/test_multiline_input.py`（3件）。合計19件。
+- ドキュメント: `AGENTS.md` / `CLAUDE.md` §6 のコマンド一覧と入力案内を更新、`docs/ROADMAP.md` の S3-4/S3-5/S3-7 を対応済みへ。
+- 検証: 新規3テスト19件パス。`uv run python -X utf8 -c "import main"` で起動健全性確認。
+
+### 2026-06-21: 推論モデルの <think> タグ生漏れを Hotfix
+- 現象: 推論系モデル（Kimi K2.7 等）使用時、LLM 出力の `<think>...</think>` が除去されず、response メッセージ等に `</think>` が生漏れして表示が崩れていた（リファクタリングとは無関係の潜伏バグ）。
+- 原因: `companion/` 全体で `<think>` 処理が未実装。DeepSeek-R1 由来の推論タグ（Kimi K2/Qwen3/GLM/GPT-OSS 等）が本文埋め込み型で出力するのを Duckflow が想定外だった。
+- `companion/utils/preprocessor.py`: `strip_reasoning_tags()` を追加。完全な `<think>...</think>` ブロックと孤立タグ（`<think>`/`</think>`）を除去（大文字小文字問わない）。
+- `companion/utils/sym_ops.py`: `SymOpsProcessor.process` の入口（Phase -1）で `strip_reasoning_tags` を呼び出し、strict/fuzzy 両方で `Reasoning tags stripped (<think>)` 警告を記録。
+- `tests/test_reasoning_tag_strip.py` 新規（6件）: 完全ブロック除去・孤立タグ除去・ケース非依存・パイプライン統合（response content への漏洩がないこと）を検証。
+- 検証: `uv run pytest tests/` で **347件パス / 2件スキップ**。リグレッションなし。
+- ※推論内容を Thought として活かす設計（OpenRouter `reasoning` フィールド対応）は ROADMAP **S3-8** に追加。
+
 ### 2026-06-21: Sprint 2 S2-3 core.py 分割の第一段階
 - `companion/core_tools.py` を新規追加し、DuckAgent のツール登録、モード別公開マッピング、Sym-Ops ツール説明生成を分離。
 - `companion/core.py` は `register_default_tools()` と `get_tool_descriptions()` への委譲に変更し、`DuckAgent.MODE_TOOL_MAPPING` / `UNIVERSAL_TOOLS` は後方互換 alias として維持。

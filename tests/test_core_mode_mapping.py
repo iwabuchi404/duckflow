@@ -113,7 +113,7 @@ def test_registered_tools_exclude_retired_report_finish_actions() -> None:
 
     assert "report" not in agent.tools
     assert "finish" not in agent.tools
-    assert hasattr(agent, "action_note")
+    assert hasattr(agent._actions, "action_note")
     assert not hasattr(agent, "action_note_")
     assert not hasattr(agent, "action_report")
     assert not hasattr(agent, "action_finish")
