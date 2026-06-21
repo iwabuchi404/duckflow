@@ -11,7 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -239,3 +239,134 @@ async def find_definition(
 
     header = f"Definition(s) of '{name}' ({len(matches)} found):"
     return "\n".join([header] + matches)
+
+
+async def replace_function(
+    path: str,
+    name: str,
+    body: str,
+    workspace_root: str = ".",
+) -> str:
+    r'''Replace a function or class definition in a Python file by name.
+
+    Uses ast to locate the target symbol by name, then replaces its source
+    text with the provided body. The new body is syntax-validated before
+    writing. If multiple symbols share the same name, an ambiguity error
+    is returned with candidate locations.
+
+    Sym-Ops format:
+        ::replace_function
+        <<<
+        ---
+        path: "companion/core.py"
+        name: "execute_actions"
+        body: |
+          def execute_actions(actions):
+              """Execute a list of actions."""
+              for a in actions:
+                  await a.run()
+        ---
+        >>>
+
+    Args:
+        path: Path to the Python file (relative to workspace root).
+        name: Symbol name to replace (function or class).
+        body: New function/class source code (must be valid Python).
+        workspace_root: Workspace root directory.
+
+    Returns:
+        Success message with line range, or error message.
+    '''
+    root = Path(workspace_root).resolve()
+    file_path = (root / path).resolve()
+
+    if not file_path.exists():
+        return f"::status error\nReason: File not found: {path}"
+
+    if file_path.suffix != ".py":
+        return f"::status error\nReason: Not a Python file: {path}"
+
+    # Validate new body syntax
+    try:
+        ast.parse(body)
+    except SyntaxError as e:
+        return (
+            f"::status error\n"
+            f"Reason: New body has syntax error: {e}"
+        )
+
+    # Read source
+    try:
+        source = file_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return f"::status error\nReason: Cannot read file: {e}"
+
+    source_lines = source.splitlines(keepends=True)
+
+    # Parse and find matching symbols
+    try:
+        tree = ast.parse(source, filename=str(file_path))
+    except SyntaxError as e:
+        return f"::status error\nReason: File has syntax error: {e}"
+
+    candidates: List[Tuple[int, int, str]] = []  # (lineno, end_lineno, kind)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            simple_name = node.name.rsplit(".")[-1] if hasattr(node, 'name') else ""
+            if simple_name == name:
+                end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
+                kind = "class" if isinstance(node, ast.ClassDef) else "function"
+                candidates.append((node.lineno, end_line, kind))
+
+    if not candidates:
+        return f"::status error\nReason: Symbol '{name}' not found in {path}"
+
+    if len(candidates) > 1:
+        locs = "\n".join(
+            f"  line {ln}-{end} ({kind})" for ln, end, kind in candidates
+        )
+        return (
+            f"::status error\n"
+            f"Reason: Multiple definitions of '{name}' found:\n{locs}\n"
+            f"Use edit_file with SEARCH/REPLACE for ambiguous targets."
+        )
+
+    start_line, end_line, kind = candidates[0]
+
+    # Replace the source lines
+    # source_lines is 0-indexed, ast lineno is 1-indexed
+    new_lines = source_lines[:start_line - 1] + [body]
+    if not body.endswith("\n"):
+        new_lines.append("\n")
+    new_lines.extend(source_lines[end_line:])
+
+    new_source = "".join(new_lines)
+
+    # Validate the full file after replacement
+    try:
+        ast.parse(new_source)
+    except SyntaxError as e:
+        return (
+            f"::status error\n"
+            f"Reason: Replacement produces invalid syntax in file: {e}"
+        )
+
+    # Write the file
+    try:
+        file_path.write_text(new_source, encoding="utf-8")
+    except OSError as e:
+        return f"::status error\nReason: Cannot write file: {e}"
+
+    # Invalidate repo map cache
+    try:
+        from companion.modules.repo_map import get_repo_map_generator
+        rel = str(file_path.relative_to(root)).replace("\\", "/")
+        get_repo_map_generator().invalidate(rel)
+    except Exception:
+        pass  # Best-effort
+
+    return (
+        f"Replaced {kind} '{name}' in {path} "
+        f"(lines {start_line}-{end_line} -> new body)."
+    )

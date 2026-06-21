@@ -117,6 +117,36 @@ def fix_func(values: list) -> list:
 >>>"""},
 ]
 
+# replace_function recovery example: edit_file fails -> replace_function by symbol name
+REPLACE_FUNCTION_EXAMPLES = [
+    {"role": "user", "content": """\
+::result error
+Reason: find_not_matched (Edit 1)
+Candidates near the first line of 'find':
+  - line 1: "def process_data(data):"
+Detailed Diff with closest candidate (Line 1):
+- def process_data(data):
++ def process_data(data):"""},
+    {"role": "assistant", "content": """\
+>> edit_file keeps failing on whitespace mismatch. Using replace_function instead.
+>> This replaces the entire function by name, no SEARCH block needed.
+::c0.8 ::s1.0 ::m0.2 ::f0.9
+::replace_function
+<<<
+---
+path: "utils.py"
+name: "process_data"
+body: |
+  def process_data(data):
+      '''Process the input data and return results.'''
+      results = []
+      for item in data:
+          results.append(item.strip().lower())
+      return results
+---
+>>>"""},
+]
+
 # Planning Specific Examples
 PLANNING_EXAMPLES = [
     {"role": "user", "content": "Build a weather app"},
@@ -187,13 +217,16 @@ def get_examples_for_mode(mode: str) -> list:
         examples.extend(TASK_EXAMPLES)
         # edit_file 失敗時のリカバリーパターンを常に含める
         examples.extend(RECOVERY_EXAMPLES)
+        examples.extend(REPLACE_FUNCTION_EXAMPLES)
     elif mode == "planning":
         examples.extend(PLANNING_EXAMPLES)
+        examples.extend(REPLACE_FUNCTION_EXAMPLES)
     elif mode == "investigation":
         examples.extend(INVESTIGATION_EXAMPLES)
     else:
         # Mix for generic modes
         examples.extend(TASK_EXAMPLES[:2])
         examples.extend(RECOVERY_EXAMPLES)
+        examples.extend(REPLACE_FUNCTION_EXAMPLES)
         examples.extend(PLANNING_EXAMPLES[:1])
     return examples

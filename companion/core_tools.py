@@ -8,7 +8,7 @@ from typing import Any, Callable, Mapping
 from companion.tools import get_project_tree
 from companion.tools.file_ops import file_ops
 from companion.tools.memory_tool import MemoryTool
-from companion.tools.symbols import list_symbols, find_definition
+from companion.tools.symbols import list_symbols, find_definition, replace_function
 
 
 UNIVERSAL_TOOLS = {
@@ -39,6 +39,7 @@ MODE_TOOL_MAPPING = {
         "investigate",
         "submit_hypothesis",
         "finish_investigation",
+        "replace_function",
     },
     "investigation": {
         "read_file",
@@ -67,6 +68,7 @@ MODE_TOOL_MAPPING = {
         "run_command",
         "execute_tasks",
         "execute_batch",
+        "replace_function",
     },
 }
 
@@ -121,6 +123,7 @@ def register_default_tools(agent: Any) -> None:
 
     agent.register_tool("list_symbols", list_symbols)
     agent.register_tool("find_definition", find_definition)
+    agent.register_tool("replace_function", replace_function)
 
     agent.register_tool("status", actions._action_noop_symops_marker)
     agent.register_tool("result", actions._action_noop_symops_marker)
