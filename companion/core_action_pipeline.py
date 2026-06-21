@@ -15,6 +15,7 @@ MAX_ACTIONS_PER_TURN = 6
 TERMINAL_ACTIONS = {"response", "exit", "duck_call"}
 EDIT_ACTIONS = {"edit_file", "write_file", "delete_file", "delete_lines"}
 SAFETY_CONFIRMATION_THRESHOLD = 0.5
+MAX_CONSECUTIVE_ERRORS = 2
 
 
 @dataclass(frozen=True)
@@ -239,6 +240,64 @@ def build_investigation_edit_block(action: Action) -> InvestigationBlock:
         ),
     )
     return InvestigationBlock(message=message, syntax_error=syntax_error)
+
+
+def should_fail_fast(consecutive_errors: int) -> bool:
+    """
+    Determine whether consecutive errors should abort the remaining actions.
+
+    Args:
+        consecutive_errors: Current consecutive error count.
+
+    Returns:
+        True when the fail-fast threshold has been reached.
+    """
+    return consecutive_errors >= MAX_CONSECUTIVE_ERRORS
+
+
+def remaining_actions_after(action_list: ActionList, action: Action) -> int:
+    """
+    Count remaining actions after the current action.
+
+    Args:
+        action_list: Full action list being executed.
+        action: Current action.
+
+    Returns:
+        Number of actions that would be skipped after the current action.
+    """
+    return len(action_list.actions) - action_list.actions.index(action) - 1
+
+
+def build_fail_fast_warning(consecutive_errors: int, remaining: int) -> str:
+    """
+    Build a user-facing fail-fast warning.
+
+    Args:
+        consecutive_errors: Consecutive error count.
+        remaining: Number of remaining actions being aborted.
+
+    Returns:
+        Warning text for UI display.
+    """
+    return f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。"
+
+
+def build_fail_fast_history_message(consecutive_errors: int, remaining: int) -> str:
+    """
+    Build a model-facing fail-fast history message.
+
+    Args:
+        consecutive_errors: Consecutive error count.
+        remaining: Number of remaining actions being aborted.
+
+    Returns:
+        Conversation-history message for the next model turn.
+    """
+    return (
+        f"[SYSTEM] 連続{consecutive_errors}回のエラーにより残り{remaining}件のアクションを中断しました。"
+        "原因を確認してから再試行してください。"
+    )
 
 
 def _terminal_sort_key(action: Action) -> int:

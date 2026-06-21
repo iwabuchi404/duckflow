@@ -32,13 +32,17 @@ from companion.core_tools import (
 )
 from companion.core_action_pipeline import (
     action_list_safety_score,
+    build_fail_fast_history_message,
+    build_fail_fast_warning,
     build_safety_cancel_message,
     build_investigation_edit_block,
     limit_actions_per_turn,
     filter_known_actions,
     move_terminal_actions_to_end,
+    remaining_actions_after,
     requires_safety_confirmation,
     should_block_investigation_edit,
+    should_fail_fast,
 )
 from companion.core_action_results import (
     build_action_summary,
@@ -556,7 +560,6 @@ class DuckAgent:
         # ------------------------------------------------
 
         # --- Fail-fast: 連続エラーカウンター ---
-        MAX_CONSECUTIVE_ERRORS = 2
         consecutive_errors = 0
 
         # ターミナルアクション（ループを終了するアクション）を末尾に並べ替え
@@ -701,23 +704,22 @@ class DuckAgent:
 
                         # --- Fail-fast: 連続エラーで残りのアクションを中断 ---
                         consecutive_errors += 1
-                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                            remaining = (
-                                len(action_list.actions)
-                                - action_list.actions.index(action)
-                                - 1
-                            )
+                        if should_fail_fast(consecutive_errors):
+                            remaining = remaining_actions_after(action_list, action)
                             if remaining > 0:
                                 logger.warning(
                                     f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions"
                                 )
                                 ui.print_warning(
-                                    f"連続{consecutive_errors}回エラーのため、残り{remaining}件のアクションを中断しました。"
+                                    build_fail_fast_warning(
+                                        consecutive_errors, remaining
+                                    )
                                 )
                                 self.state.add_message(
                                     "user",
-                                    f"[SYSTEM] 連続{consecutive_errors}回のエラーにより残り{remaining}件のアクションを中断しました。"
-                                    "原因を確認してから再試行してください。",
+                                    build_fail_fast_history_message(
+                                        consecutive_errors, remaining
+                                    ),
                                 )
                             break
                 else:

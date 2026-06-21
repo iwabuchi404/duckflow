@@ -1,5 +1,7 @@
 from companion.core_action_pipeline import (
     action_list_safety_score,
+    build_fail_fast_history_message,
+    build_fail_fast_warning,
     build_investigation_edit_block,
     build_safety_cancel_message,
     build_unknown_tool_hint,
@@ -7,8 +9,10 @@ from companion.core_action_pipeline import (
     is_edit_action,
     limit_actions_per_turn,
     move_terminal_actions_to_end,
+    remaining_actions_after,
     requires_safety_confirmation,
     should_block_investigation_edit,
+    should_fail_fast,
 )
 from companion.state.agent_state import Action, ActionList
 
@@ -182,3 +186,29 @@ def test_investigation_edit_block_helpers() -> None:
     assert "Investigation Mode" in block.message
     assert block.syntax_error.error_type == "investigation_edit_blocked"
     assert block.syntax_error.raw_snippet == "::write_file"
+
+
+def test_fail_fast_helpers() -> None:
+    """
+    Fail-fast helpers should count remaining actions and build feedback.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    action_list = ActionList(
+        reasoning="fail",
+        actions=[
+            Action(name="fail_one", parameters={}),
+            Action(name="fail_two", parameters={}),
+            Action(name="later", parameters={}),
+        ],
+    )
+
+    assert should_fail_fast(1) is False
+    assert should_fail_fast(2) is True
+    assert remaining_actions_after(action_list, action_list.actions[1]) == 1
+    assert "残り1件" in build_fail_fast_warning(2, 1)
+    assert "[SYSTEM]" in build_fail_fast_history_message(2, 1)
