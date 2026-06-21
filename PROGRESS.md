@@ -19,6 +19,7 @@
 - `companion/core_action_invocation.py` を新規追加し、ツール呼び出し前のシグネチャベース引数フィルタを分離。
 - `tests/test_core_action_invocation.py` を追加し、未対応引数の drop と `**kwargs` 関数の全引数保持を回帰テスト化。
 - 旧 Phase 1 前提の `tests/test_llm_output_validator.py` / `tests/test_transition_controller.py` を削除し、Windows symlink 権限がない環境では `test_file_protector.py` の symlink テストを skip するよう修正。検証: `uv run pytest tests/ -v` で339件パス / 2件スキップ。
+- `core_action_pipeline.py` に低 safety 判定・キャンセルメッセージ生成・編集アクション判定を追加し、`execute_actions()` の前処理責務をさらに分離。関連テストを追加。
 
 ### 2026-06-21: Sprint 2 S2-1 未使用 Phase 1 遺物を削除
 - `companion/state/enums.py`, `companion/state/transition.py`, `companion/state/transition_controller.py`, `companion/state/action_result.py` を削除。現行 `core.py` / `agent_state.py` 経路から未参照で、旧 Step/Status 前提の Phase 1 遺物だった。

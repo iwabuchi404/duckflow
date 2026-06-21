@@ -31,9 +31,13 @@ from companion.core_tools import (
     register_default_tools,
 )
 from companion.core_action_pipeline import (
+    action_list_safety_score,
+    build_safety_cancel_message,
+    is_edit_action,
     limit_actions_per_turn,
     filter_known_actions,
     move_terminal_actions_to_end,
+    requires_safety_confirmation,
 )
 from companion.core_action_results import (
     build_action_summary,
@@ -539,18 +543,13 @@ class DuckAgent:
 
         # --- Safety Score Interceptor (Sym-Ops v3.1) ---
         # safety スコアが 0.5 未満の場合、実行前にユーザー確認を求める
-        safety_score = 1.0
-        if action_list.vitals:
-            safety_score = action_list.vitals.get("safety", 1.0)
-        if safety_score < 0.5:
+        safety_score = action_list_safety_score(action_list)
+        if requires_safety_confirmation(action_list):
             ui.print_safety_warning(safety_score)
             if not ui.request_confirmation("低い Safety Score で実行を続けますか？"):
-                cancel_msg = (
-                    f"Safety Score が低いため ({safety_score:.2f})、"
-                    "ユーザーがすべてのアクションをキャンセルしました。"
-                    "安全な代替手段を検討してください。"
+                self.state.add_message(
+                    "user", build_safety_cancel_message(safety_score)
                 )
-                self.state.add_message("user", cancel_msg)
                 return results
         # ------------------------------------------------
 
@@ -569,14 +568,8 @@ class DuckAgent:
 
                 # --- Investigation Mode Guard ---
                 # Investigation モード中はファイル変更系アクションをブロック（read-only）
-                _EDIT_ACTIONS = {
-                    "edit_file",
-                    "write_file",
-                    "delete_file",
-                    "delete_lines",
-                }
                 if (
-                    action.name in _EDIT_ACTIONS
+                    is_edit_action(action)
                     and self.state.get_context_mode() == "investigation"
                 ):
                     _blocked_msg = (

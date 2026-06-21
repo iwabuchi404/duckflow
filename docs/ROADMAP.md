@@ -54,7 +54,7 @@
 |---|---|:-:|:-:|---|
 | **S2-1** | 未使用 Phase 1 遺物の整理 | 低 | 中 | 2026-06-21 対応。未使用の `state/enums.py`, `state/transition*.py`, `state/action_result.py` と、それに依存する旧 `validators/llm_output.py` を削除 |
 | **S2-2** | `pyproject.toml` 実態化 | 中 | 中 | 2026-06-21 対応。名前を `duckflow`、package include を `companion*`、console script を `duckflow = main:cli` へ更新し、未使用依存（langchain/langgraph/chromadb/faiss/sentence-transformers/textual）を削除 |
-| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 2026-06-21 部分対応。ツール登録・モード別公開マッピング・ツール説明生成を `companion/core_tools.py` へ分離。さらに未知ツール除外・アクション数上限・terminal action 並べ替えを `companion/core_action_pipeline.py`、承認判定・denial context・ツール結果履歴メッセージ生成を `companion/core_action_results.py`、ツール呼び出し引数フィルタを `companion/core_action_invocation.py` へ分離。残りは実行ループ/アクション実装の段階的分割 |
+| **S2-3** | `core.py` 肥大化解消 | 高 | 中 | 2026-06-21 部分対応。ツール登録・モード別公開マッピング・ツール説明生成を `companion/core_tools.py` へ分離。さらに未知ツール除外・アクション数上限・terminal action 並べ替え・低 safety 判定・編集アクション判定を `companion/core_action_pipeline.py`、承認判定・denial context・ツール結果履歴メッセージ生成を `companion/core_action_results.py`、ツール呼び出し引数フィルタを `companion/core_action_invocation.py` へ分離。残りは実行ループ/アクション実装の段階的分割 |
 
 ---
 
