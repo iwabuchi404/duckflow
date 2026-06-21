@@ -4,6 +4,7 @@ Pre-dispatch action list normalization helpers for DuckAgent.
 
 import difflib
 import logging
+from dataclasses import dataclass
 from typing import Collection
 
 from companion.state.agent_state import Action, ActionList, SyntaxErrorInfo
@@ -14,6 +15,20 @@ MAX_ACTIONS_PER_TURN = 6
 TERMINAL_ACTIONS = {"response", "exit", "duck_call"}
 EDIT_ACTIONS = {"edit_file", "write_file", "delete_file", "delete_lines"}
 SAFETY_CONFIRMATION_THRESHOLD = 0.5
+
+
+@dataclass(frozen=True)
+class InvestigationBlock:
+    """
+    Feedback generated when an edit action is blocked in Investigation Mode.
+
+    Attributes:
+        message: Tool-result content shown to the model.
+        syntax_error: Correction hint for the next model turn.
+    """
+
+    message: str
+    syntax_error: SyntaxErrorInfo
 
 
 def filter_known_actions(
@@ -180,6 +195,50 @@ def is_edit_action(action: Action) -> bool:
         True for file mutation actions.
     """
     return action.name in EDIT_ACTIONS
+
+
+def should_block_investigation_edit(action: Action, context_mode: str) -> bool:
+    """
+    Determine whether an action should be blocked in Investigation Mode.
+
+    Args:
+        action: Action to classify.
+        context_mode: Current agent context mode.
+
+    Returns:
+        True when a file mutation is attempted during investigation.
+    """
+    return context_mode == "investigation" and is_edit_action(action)
+
+
+def build_investigation_edit_block(action: Action) -> InvestigationBlock:
+    """
+    Build feedback for a blocked Investigation Mode edit action.
+
+    Args:
+        action: Blocked file mutation action.
+
+    Returns:
+        Block message and syntax correction hint.
+    """
+    message = (
+        f"[BLOCKED] '{action.name}' is not allowed during Investigation Mode. "
+        "Investigation is read-only. "
+        "Allowed: read_file, grep_files, list_directory, run_command, "
+        "submit_hypothesis, finish_investigation. "
+        "Call ::finish_investigation @<conclusion> when root cause is confirmed, "
+        "then re-enter Task mode to apply edits."
+    )
+    syntax_error = SyntaxErrorInfo(
+        error_type="investigation_edit_blocked",
+        raw_snippet=f"::{action.name}",
+        correction_hint=(
+            f"'{action.name}' cannot be called during Investigation Mode. "
+            "Close investigation first: ::finish_investigation @<conclusion>, "
+            "then re-enter Task mode to apply edits."
+        ),
+    )
+    return InvestigationBlock(message=message, syntax_error=syntax_error)
 
 
 def _terminal_sort_key(action: Action) -> int:

@@ -1,5 +1,6 @@
 from companion.core_action_pipeline import (
     action_list_safety_score,
+    build_investigation_edit_block,
     build_safety_cancel_message,
     build_unknown_tool_hint,
     filter_known_actions,
@@ -7,6 +8,7 @@ from companion.core_action_pipeline import (
     limit_actions_per_turn,
     move_terminal_actions_to_end,
     requires_safety_confirmation,
+    should_block_investigation_edit,
 )
 from companion.state.agent_state import Action, ActionList
 
@@ -150,3 +152,33 @@ def test_is_edit_action_detects_file_mutations() -> None:
     assert is_edit_action(Action(name="edit_file", parameters={})) is True
     assert is_edit_action(Action(name="delete_lines", parameters={})) is True
     assert is_edit_action(Action(name="read_file", parameters={})) is False
+
+
+def test_investigation_edit_block_helpers() -> None:
+    """
+    Investigation Mode should block edit actions with correction feedback.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
+    action = Action(name="write_file", parameters={"path": "app.py"})
+
+    assert should_block_investigation_edit(action, "investigation") is True
+    assert should_block_investigation_edit(action, "task") is False
+    assert (
+        should_block_investigation_edit(
+            Action(name="read_file", parameters={"path": "app.py"}),
+            "investigation",
+        )
+        is False
+    )
+
+    block = build_investigation_edit_block(action)
+
+    assert "[BLOCKED]" in block.message
+    assert "Investigation Mode" in block.message
+    assert block.syntax_error.error_type == "investigation_edit_blocked"
+    assert block.syntax_error.raw_snippet == "::write_file"

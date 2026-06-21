@@ -33,11 +33,12 @@ from companion.core_tools import (
 from companion.core_action_pipeline import (
     action_list_safety_score,
     build_safety_cancel_message,
-    is_edit_action,
+    build_investigation_edit_block,
     limit_actions_per_turn,
     filter_known_actions,
     move_terminal_actions_to_end,
     requires_safety_confirmation,
+    should_block_investigation_edit,
 )
 from companion.core_action_results import (
     build_action_summary,
@@ -568,45 +569,29 @@ class DuckAgent:
 
                 # --- Investigation Mode Guard ---
                 # Investigation モード中はファイル変更系アクションをブロック（read-only）
-                if (
-                    is_edit_action(action)
-                    and self.state.get_context_mode() == "investigation"
+                if should_block_investigation_edit(
+                    action, self.state.get_context_mode()
                 ):
-                    _blocked_msg = (
-                        f"[BLOCKED] '{action.name}' is not allowed during Investigation Mode. "
-                        "Investigation is read-only. "
-                        "Allowed: read_file, grep_files, list_directory, run_command, "
-                        "submit_hypothesis, finish_investigation. "
-                        "Call ::finish_investigation @<conclusion> when root cause is confirmed, "
-                        "then re-enter Task mode to apply edits."
-                    )
+                    investigation_block = build_investigation_edit_block(action)
                     ui.print_warning(
                         f"Investigation Mode中のファイル変更をブロック: {action.name}"
                     )
                     logger.warning(
                         f"Blocked edit action in Investigation Mode: {action.name}"
                     )
-                    self.state.last_action_result = _blocked_msg
+                    self.state.last_action_result = investigation_block.message
                     self.state.last_syntax_errors.append(
-                        SyntaxErrorInfo(
-                            error_type="investigation_edit_blocked",
-                            raw_snippet=f"::{action.name}",
-                            correction_hint=(
-                                f"'{action.name}' cannot be called during Investigation Mode. "
-                                "Close investigation first: ::finish_investigation @<conclusion>, "
-                                "then re-enter Task mode to apply edits."
-                            ),
-                        )
+                        investigation_block.syntax_error
                     )
                     self.state.add_message(
                         "user",
                         build_tool_result_message(
                             action,
-                            _blocked_msg,
+                            investigation_block.message,
                             status=ToolStatus.ERROR,
                         ),
                     )
-                    results.append(_blocked_msg)
+                    results.append(investigation_block.message)
                     continue
                 # ------------------------------------------------
 
