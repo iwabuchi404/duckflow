@@ -112,9 +112,9 @@
 
 | ID | 項目 | 重要度 | 優先度 | 内容 |
 |---|---|:-:|:-:|---|
-| **V-A1** | Safety Score Interceptor 削除 | 高 | 高 | 申告 `safety` によるゲート廃止。破壊的操作の承認は既存機構に一本化 |
-| **V-A2** | Pacemaker を実測値ベース化 | 高 | 高 | `check_health` / `calculate_max_loops` を execution_history 由来へ。`decay()` 廃止 |
-| **V-A3** | 申告頻度ルール変更 | 中 | 高 | 「全アクション前の申告」→ `::response` / `::duck_call` / 破壊的編集提案時のみ |
+| **V-A1** | Safety Score Interceptor 削除 | 高 | 高 | 2026-06-22 対応。`action_list_safety_score` / `requires_safety_confirmation` / `build_safety_cancel_message` を `core_action_pipeline.py` から削除。`core_action_executor.py` の Safety Score Interceptor ブロックを削除。破壊的操作の承認は既存の `get_approval_request` 機構に一本化。`SAFETY_CONFIRMATION_THRESHOLD` 定数も削除 |
+| **V-A2** | Pacemaker を実測値ベース化 | 高 | 高 | 2026-06-22 対応。`calculate_max_loops` を execution_history 由来の `_calculate_measured_factor` へ置換（申告 vitals 係数廃止）。`check_health` から `SAFETY_DEPLETED` / `FOCUS_LOST` / `CONFIDENCE_LOW` を削除。`update_vitals` から vitals 操作（safety/focus 加減算・`decay()` 呼び出し）を削除。`reset()` から `vitals.recover()` を削除。`Vitals.decay()` / `Vitals.recover()` メソッドと `AgentState.update_vitals()` を削除。`InterventionReason.type` から申告由来の3種を削除 |
+| **V-A3** | 申告頻度ルール変更 | 中 | 高 | 2026-06-22 対応。システムプロンプト §2 を「全アクション前の申告」から `::response` / `::duck_call` / 破壊的編集提案時のみに変更。内部アクション（read_file, grep等）には申告不要と明記。`::s` によるゲートが廃止されたことをプロンプトに明示 |
 | **V-B1** | MeasuredVitals / ReportedVitals 再編 | 高 | 高 | 実測（success_rate/error_rate/repair_load/progress）と申告（confidence/risk_note）に分離 |
 | **V-B2** | 実測算出ロジック | 高 | 高 | 移動窓 N=10。repair_load は SymOpsProcessor の warnings を集計 |
 | **V-B3** | 二重表示 UI | 中 | 中 | 申告/実績を並置、乖離時に注記（「自信過剰気味」等） |

@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 MAX_ACTIONS_PER_TURN = 6
 TERMINAL_ACTIONS = {"response", "exit", "duck_call"}
 EDIT_ACTIONS = {"edit_file", "write_file", "delete_file", "delete_lines"}
-SAFETY_CONFIRMATION_THRESHOLD = 0.5
 MAX_CONSECUTIVE_ERRORS = 2
 
 
@@ -138,51 +137,6 @@ def move_terminal_actions_to_end(action_list: ActionList) -> None:
         None.
     """
     action_list.actions = sorted(action_list.actions, key=_terminal_sort_key)
-
-
-def action_list_safety_score(action_list: ActionList) -> float:
-    """
-    Resolve the action list safety score.
-
-    Args:
-        action_list: Action list with optional vitals metadata.
-
-    Returns:
-        Safety score, defaulting to 1.0.
-    """
-    if not action_list.vitals:
-        return 1.0
-    return float(action_list.vitals.get("safety", 1.0))
-
-
-def requires_safety_confirmation(action_list: ActionList) -> bool:
-    """
-    Determine whether an action list needs low-safety confirmation.
-
-    Args:
-        action_list: Action list with optional vitals metadata.
-
-    Returns:
-        True when the safety score is below the confirmation threshold.
-    """
-    return action_list_safety_score(action_list) < SAFETY_CONFIRMATION_THRESHOLD
-
-
-def build_safety_cancel_message(safety_score: float) -> str:
-    """
-    Build feedback for a denied low-safety action list.
-
-    Args:
-        safety_score: Safety score that triggered confirmation.
-
-    Returns:
-        Conversation-history message for the next model turn.
-    """
-    return (
-        f"Safety Score が低いため ({safety_score:.2f})、"
-        "ユーザーがすべてのアクションをキャンセルしました。"
-        "安全な代替手段を検討してください。"
-    )
 
 
 def is_edit_action(action: Action) -> bool:

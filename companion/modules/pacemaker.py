@@ -37,8 +37,9 @@ class DuckPacemaker:
 
     def calculate_max_loops(self) -> int:
         """
-        タスクの種類とバイタルに応じて最大ループ回数を計算する。
-        Sym-Ops v3.1: confidence/safety/memory/focus を使用。
+        タスクの種類と実測バイタルに応じて最大ループ回数を計算する。
+        申告バイタル（confidence/safety）は制御に使用しない（V-A2）。
+        実測値（success_rate, progress）ベースで算出する。
         """
         # ベース値の決定
         if self.state.current_plan:
@@ -50,21 +51,8 @@ class DuckPacemaker:
         else:
             base_loops = 10
 
-        # バイタル係数の計算 (v3.1: c/s/m/f)
-        vitals = self.state.vitals
-        vitals_score = (
-            vitals.confidence * 0.3
-            + vitals.focus * 0.4
-            + vitals.safety * 0.2
-            + vitals.memory * 0.1
-        )
-
-        if vitals_score < 0.4:
-            vitals_factor = 0.7
-        elif vitals_score > 0.8:
-            vitals_factor = 1.2
-        else:
-            vitals_factor = 1.0
+        # 実測係数の計算（execution_history ベース）
+        vitals_factor = self._calculate_measured_factor()
 
         # 最終計算
         calculated = int(base_loops * vitals_factor)
@@ -72,15 +60,40 @@ class DuckPacemaker:
 
         logger.info(
             f"Pacemaker: max_loops={final_loops} "
-            f"(base={base_loops}, vitals_factor={vitals_factor:.2f})"
+            f"(base={base_loops}, measured_factor={vitals_factor:.2f})"
         )
 
         return final_loops
 
+    def _calculate_measured_factor(self) -> float:
+        """
+        execution_history から実測ファクターを算出する。
+        停滞がなければループ上限を緩める（反復は悪ではない原則）。
+        """
+        if not self.execution_history:
+            return 1.0  # 履歴なしは中立
+
+        recent = self.execution_history[-10:]
+        total = len(recent)
+        errors = sum(1 for item in recent if item["is_error"])
+        success_rate = (total - errors) / total
+
+        # 停滞検知: 同じ結果が繰り返されている場合は係数を下げる
+        is_stagnating = self._detect_stagnation()
+
+        if is_stagnating:
+            return 0.7
+        elif success_rate >= 0.8:
+            return 1.2  # 順調なら延長
+        elif success_rate < 0.3:
+            return 0.7  # エラー多い場合は短縮
+        else:
+            return 1.0
+
     def update_vitals(self, action: Action, result: Any, is_error: bool):
         """
-        アクション実行結果に基づいてバイタルを更新し、履歴を記録する。
-        Sym-Ops v3.1: safety / confidence を使用。
+        アクション実行結果に基づいて履歴を記録する。
+        申告バイタルの更新は行わない（V-A2: decay廃止、実測ベース化）。
         """
         # 履歴の記録
         result_str = str(result)
@@ -93,34 +106,17 @@ class DuckPacemaker:
             self.execution_history = self.execution_history[-20:]
 
         if is_error:
-            # エラー時は safety と focus が低下
-            self.state.vitals.safety = max(0.0, self.state.vitals.safety - 0.1)
-            self.state.vitals.focus = max(0.0, self.state.vitals.focus - 0.05)
             self.consecutive_errors += 1
-            logger.debug("Vitals decreased (error)")
+            logger.debug("Error recorded (consecutive=%d)", self.consecutive_errors)
         else:
-            # 成功時は緩やかに回復
-            self.state.vitals.safety = min(1.0, self.state.vitals.safety + 0.02)
             self.consecutive_errors = 0
-
-        # 通常のdecay
-        self.state.vitals.decay(0.03)
 
     def check_health(self) -> Optional[InterventionReason]:
         """健康状態を診断し、介入が必要ならその理由を返す。
-        Sym-Ops v3.1: safety/confidence/focus を監視、Investigationモードの仮説失敗も検知。
+        V-A2: 申告バイタル（safety/confidence/focus）由来の監視を廃止。
+        実測値（error_rate, stagnation, hypothesis_attempts）のみで判定する。
         """
-        vitals = self.state.vitals
-
-        # 1. Safety枯渇（最優先）
-        if vitals.safety < 0.1:
-            return InterventionReason(
-                type="SAFETY_DEPLETED",
-                message="安全スコアが限界です。これ以上の作業は危険です。",
-                severity="critical",
-            )
-
-        # 2. ループ回数超過
+        # 1. ループ回数超過
         if self.loop_count >= self.max_loops:
             return InterventionReason(
                 type="LOOP_EXHAUSTED",
@@ -128,7 +124,7 @@ class DuckPacemaker:
                 severity="high",
             )
 
-        # 3. Investigationモードの仮説失敗 (Stuck Protocol)
+        # 2. Investigationモードの仮説失敗 (Stuck Protocol)
         if (
             self.state.investigation_state is not None
             and self.state.investigation_state.hypothesis_attempts
@@ -143,7 +139,7 @@ class DuckPacemaker:
                 severity="high",
             )
 
-        # 4. エラー連鎖
+        # 3. エラー連鎖
         if self._detect_error_cascade():
             return InterventionReason(
                 type="ERROR_CASCADE",
@@ -151,28 +147,12 @@ class DuckPacemaker:
                 severity="high",
             )
 
-        # 5. スタック検知（停滞）
+        # 4. スタック検知（停滞）
         if self._detect_stagnation():
             return InterventionReason(
                 type="STAGNATION",
                 message="同じ操作または結果が繰り返されており、進捗がありません。",
                 severity="medium",
-            )
-
-        # 6. Focus低下
-        if vitals.focus < 0.3:
-            return InterventionReason(
-                type="FOCUS_LOST",
-                message="思考が停滞しています。別のアプローチが必要かもしれません。",
-                severity="medium",
-            )
-
-        # 7. Confidence低下
-        if vitals.confidence < 0.4:
-            return InterventionReason(
-                type="CONFIDENCE_LOW",
-                message="現在の計画に自信が持てていません。",
-                severity="low",
             )
 
         return None
@@ -273,12 +253,16 @@ class DuckPacemaker:
         elif self._detect_stagnation():
             lines.append("\n⚠️ 検知パターン: 同じ操作が繰り返されている（停滞）")
 
-        # バイタル
-        v = self.state.vitals
-        lines.append(
-            f"\n📊 バイタル: C={v.confidence:.2f} S={v.safety:.2f} "
-            f"M={v.memory:.2f} F={v.focus:.2f} | Loop: {self.loop_count}/{self.max_loops}"
-        )
+        # 実測統計
+        if self.execution_history:
+            recent = self.execution_history[-10:]
+            total = len(recent)
+            errors = sum(1 for item in recent if item["is_error"])
+            success_rate = (total - errors) / total
+            lines.append(
+                f"\n📊 実測: success_rate={success_rate:.0%} "
+                f"({total - errors}/{total}) | Loop: {self.loop_count}/{self.max_loops}"
+            )
 
         return "\n".join(lines)
 
@@ -287,12 +271,8 @@ class DuckPacemaker:
         logger.info(f"Pacemaker intervention: {reason.type} - {reason.message}")
 
         vitals_info = (
-            f"\n\n📊 現在のバイタル:\n"
-            f"  Confidence: {self.state.vitals.confidence:.2f}\n"
-            f"  Safety: {self.state.vitals.safety:.2f}\n"
-            f"  Memory: {self.state.vitals.memory:.2f}\n"
-            f"  Focus: {self.state.vitals.focus:.2f}\n"
-            f"  ループ: {self.loop_count}/{self.max_loops}"
+            f"\n\n📊 ループ: {self.loop_count}/{self.max_loops}"
+            f" | 連続エラー: {self.consecutive_errors}"
         )
 
         summary_section = f"\n\n📋 {summary}" if summary else ""
@@ -317,5 +297,4 @@ class DuckPacemaker:
         self.loop_count = 0
         self.consecutive_errors = 0
         self.execution_history = []
-        self.state.vitals.recover(0.2)
         logger.debug("Pacemaker reset")

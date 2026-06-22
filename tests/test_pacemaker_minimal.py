@@ -74,20 +74,22 @@ def test_pacemaker_investigation_stuck_uses_shared_hypothesis_limit() -> None:
 
 
 def test_pacemaker_max_loops_is_clamped_to_supported_range() -> None:
-    """Dynamic loop calculation should stay inside the documented 3..35 range."""
+    """Dynamic loop calculation should stay inside the documented 3..35 range.
+    V-A2: max_loops no longer depends on declared vitals — only on execution_history."""
     state = AgentState()
-    state.vitals.confidence = 0.0
-    state.vitals.safety = 0.0
-    state.vitals.memory = 0.0
-    state.vitals.focus = 0.0
+    pacemaker = DuckPacemaker(state)
 
-    low = DuckPacemaker(state).calculate_max_loops()
+    # No execution history → neutral factor (1.0)
+    loops = pacemaker.calculate_max_loops()
+    assert 3 <= loops <= 35
 
-    state.vitals.confidence = 1.0
-    state.vitals.safety = 1.0
-    state.vitals.memory = 1.0
-    state.vitals.focus = 1.0
-    high = DuckPacemaker(state).calculate_max_loops()
-
-    assert 3 <= low <= 35
-    assert 3 <= high <= 35
+    # With execution history showing high success rate → factor 1.2
+    for i in range(10):
+        pacemaker.update_vitals(
+            Action(name="read_file", parameters={"path": f"file{i}.py"}),
+            f"result-{i}",
+            is_error=False,
+        )
+    loops_high = pacemaker.calculate_max_loops()
+    assert 3 <= loops_high <= 35
+    assert loops_high >= loops  # high success rate should not reduce loops

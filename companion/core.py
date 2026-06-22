@@ -33,16 +33,13 @@ from companion.core_tools import (
     register_default_tools,
 )
 from companion.core_action_pipeline import (
-    action_list_safety_score,
     build_fail_fast_history_message,
     build_fail_fast_warning,
-    build_safety_cancel_message,
     build_investigation_edit_block,
     limit_actions_per_turn,
     filter_known_actions,
     move_terminal_actions_to_end,
     remaining_actions_after,
-    requires_safety_confirmation,
     should_block_investigation_edit,
     should_fail_fast,
 )

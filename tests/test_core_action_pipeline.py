@@ -1,16 +1,13 @@
 from companion.core_action_pipeline import (
-    action_list_safety_score,
     build_fail_fast_history_message,
     build_fail_fast_warning,
     build_investigation_edit_block,
-    build_safety_cancel_message,
     build_unknown_tool_hint,
     filter_known_actions,
     is_edit_action,
     limit_actions_per_turn,
     move_terminal_actions_to_end,
     remaining_actions_after,
-    requires_safety_confirmation,
     should_block_investigation_edit,
     should_fail_fast,
 )
@@ -122,25 +119,6 @@ def test_build_unknown_tool_hint_uses_mode_scoped_valid_tools() -> None:
     assert "delete_file" in hint
     assert "Valid tools in this mode: read_file" in hint
     assert "execute_tasks" not in hint
-
-
-def test_safety_helpers_default_and_low_score() -> None:
-    """
-    Safety helpers should default to safe and flag low reported scores.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
-    default_list = ActionList(reasoning="default", actions=[])
-    unsafe_list = ActionList(reasoning="unsafe", vitals={"safety": 0.2}, actions=[])
-
-    assert action_list_safety_score(default_list) == 1.0
-    assert requires_safety_confirmation(default_list) is False
-    assert requires_safety_confirmation(unsafe_list) is True
-    assert "0.20" in build_safety_cancel_message(0.2)
 
 
 def test_is_edit_action_detects_file_mutations() -> None:

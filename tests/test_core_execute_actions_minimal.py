@@ -144,21 +144,19 @@ async def test_execute_actions_limits_actions_per_turn() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_actions_low_safety_denial_cancels_all_actions(
+async def test_execute_actions_low_safety_no_longer_blocks_execution(
     monkeypatch,
 ) -> None:
-    """A denied low-safety turn should not dispatch any proposed action."""
+    """Safety Score Interceptor is removed; low safety should not cancel actions."""
     agent = _agent()
     calls = []
 
     def ping() -> str:
-        """Tool that must not execute after safety denial."""
+        """Tool that should execute regardless of declared safety score."""
         calls.append("ping")
-        return "unexpected"
+        return "pong"
 
     agent.register_tool("ping", ping)
-    monkeypatch.setattr("companion.core_action_executor.ui.request_confirmation", lambda _: False)
-    monkeypatch.setattr("companion.core_action_executor.ui.print_safety_warning", lambda _: None)
     action_list = ActionList(
         reasoning="unsafe action",
         vitals={"safety": 0.2},
@@ -167,9 +165,10 @@ async def test_execute_actions_low_safety_denial_cancels_all_actions(
 
     results = await agent.execute_actions(action_list)
 
-    assert results == []
-    assert calls == []
-    assert any(
+    assert results == ["pong"]
+    assert calls == ["ping"]
+    # No safety cancel message should be in conversation history
+    assert not any(
         "Safety Score が低いため" in msg["content"]
         for msg in agent.state.conversation_history
     )

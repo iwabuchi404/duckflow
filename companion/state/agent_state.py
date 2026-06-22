@@ -55,16 +55,6 @@ class Vitals(BaseModel):
     )
     focus: float = Field(1.0, ge=0.0, le=1.0, description="集中力 ::f (0.0-1.0)")
 
-    def decay(self, amount: float = 0.05):
-        """ループごとの自然減衰"""
-        self.safety = max(0.0, self.safety - amount)
-        self.focus = max(0.0, self.focus - amount)
-
-    def recover(self, amount: float = 0.3):
-        """ユーザー応答後の回復"""
-        self.safety = min(1.0, self.safety + amount)
-        self.focus = min(1.0, self.focus + amount)
-
 
 # --- Investigation State ---
 
@@ -88,12 +78,9 @@ class InterventionReason(BaseModel):
     """Pacemakerの介入理由"""
 
     type: Literal[
-        "SAFETY_DEPLETED",
         "LOOP_EXHAUSTED",
-        "FOCUS_LOST",
         "ERROR_CASCADE",
         "STAGNATION",
-        "CONFIDENCE_LOW",
         "INVESTIGATION_STUCK",
     ]
     message: str
@@ -248,9 +235,6 @@ class AgentState(BaseModel):
                     "直前までの文脈の一部が失われている可能性があります。"
                     "タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。",
                 )
-
-    def update_vitals(self):
-        self.vitals.decay()
 
     def to_prompt_context(self) -> str:
         """プロンプトに埋め込むためのコンテキスト情報を生成"""

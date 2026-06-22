@@ -9,16 +9,13 @@ import logging
 import time
 
 from companion.core_action_pipeline import (
-    action_list_safety_score,
     build_fail_fast_history_message,
     build_fail_fast_warning,
-    build_safety_cancel_message,
     build_investigation_edit_block,
     limit_actions_per_turn,
     filter_known_actions,
     move_terminal_actions_to_end,
     remaining_actions_after,
-    requires_safety_confirmation,
     should_block_investigation_edit,
     should_fail_fast,
 )
@@ -79,16 +76,6 @@ async def execute_actions(agent, action_list) -> list:
         ui.print_warning(
             f"アクション数が上限(6)を超えたため、末尾{dropped}件を切り捨てました。"
         )
-
-    # --- Safety Score Interceptor (Sym-Ops v3.1) ---
-    safety_score = action_list_safety_score(action_list)
-    if requires_safety_confirmation(action_list):
-        ui.print_safety_warning(safety_score)
-        if not ui.request_confirmation("低い Safety Score で実行を続けますか？"):
-            agent.state.add_message(
-                "user", build_safety_cancel_message(safety_score)
-            )
-            return results
 
     # --- Fail-fast: consecutive error counter ---
     consecutive_errors = 0
