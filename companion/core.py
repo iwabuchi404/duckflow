@@ -287,6 +287,8 @@ class DuckAgent:
 
                 # --- Autonomous Execution Loop ---
                 ui.start_live()
+                no_progress_count = 0
+                MAX_NO_PROGRESS = 3  # 連続して終了条件未達の回数上限
                 try:
                     while True:
                         self.pacemaker.loop_count += 1
@@ -370,6 +372,59 @@ class DuckAgent:
                             if should_return_to_user(action_list, self.state):
                                 logger.info(
                                     "Autonomous loop ending: response/exit/duck_call action executed"
+                                )
+                                self.pacemaker.reset()
+                                break
+
+                            # --- Post-execution stagnation check ---
+                            # アクション実行後にPacemakerの停滞検知を確認
+                            post_intervention = self.pacemaker.check_health()
+                            if post_intervention:
+                                logger.warning(
+                                    f"Post-execution intervention: {post_intervention.type}"
+                                )
+                                ui.print_warning(
+                                    f"\U0001f986 停滞検知: {post_intervention.message}"
+                                )
+                                summary = self.pacemaker.build_intervention_summary()
+                                intervention_action = self.pacemaker.intervene(
+                                    post_intervention, summary=summary
+                                )
+                                await self.execute_actions(
+                                    ActionList(
+                                        reasoning=f"Post-execution intervention: {post_intervention.type}",
+                                        actions=[intervention_action],
+                                    )
+                                )
+                                self.pacemaker.reset()
+                                break
+
+                            # --- No-progress counter ---
+                            no_progress_count += 1
+                            if no_progress_count >= MAX_NO_PROGRESS:
+                                logger.warning(
+                                    f"Autonomous loop: {no_progress_count} consecutive "
+                                    f"iterations without progress. Forcing duck_call."
+                                )
+                                ui.print_warning(
+                                    f"\U0001f986 連続{no_progress_count}回のイテレーションで"
+                                    "進捗がありません。ユーザーに相談します。"
+                                )
+                                fallback_action = Action(
+                                    name="duck_call",
+                                    parameters={
+                                        "message": (
+                                            "繰り返し実行していますが進捗がありません。\n"
+                                            "方針を変更するか、追加の指示をください。"
+                                        )
+                                    },
+                                    thought="No-progress counter exceeded, forcing duck_call",
+                                )
+                                await self.execute_actions(
+                                    ActionList(
+                                        reasoning="No-progress fallback",
+                                        actions=[fallback_action],
+                                    )
                                 )
                                 self.pacemaker.reset()
                                 break

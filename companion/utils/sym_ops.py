@@ -476,7 +476,38 @@ class FuzzyParser:
         if current_action:
             result.actions.append(current_action)
 
+        # 連続する同一アクションを圧縮（LLMの反復出力バグ対策）
+        result.actions = self._dedup_consecutive_actions(result.actions)
+
         return result
+
+    @staticmethod
+    def _dedup_consecutive_actions(actions: List[Action]) -> List[Action]:
+        """連続する同一アクション（type, path, params, content が同じ）を1つに圧縮する。
+
+        LLMが反復出力バグを起こした場合、同じアクションが何十回も並ぶ。
+        これを1つに圧縮して無意味な重複実行を防ぐ。
+        """
+        if not actions:
+            return actions
+        deduped: List[Action] = []
+        for action in actions:
+            if deduped:
+                prev = deduped[-1]
+                if (
+                    prev.type == action.type
+                    and prev.path == action.path
+                    and prev.params == action.params
+                    and prev.content == action.content
+                ):
+                    continue
+            deduped.append(action)
+        if len(deduped) < len(actions):
+            logger.warning(
+                f"Dedup: {len(actions)} actions → {len(deduped)} "
+                f"(removed {len(actions) - len(deduped)} consecutive duplicates)"
+            )
+        return deduped
 
     def _extract_yaml_frontmatter(self, content: str) -> tuple[dict, str]:
         """
@@ -829,7 +860,7 @@ class FuzzyParser:
             else:
                 i += 1
 
-        return actions
+        return self._dedup_consecutive_actions(actions)
 
     def _parse_vitals(self, line: str, vitals: dict) -> None:
         """Parse multiple vitals from a single line."""
@@ -968,6 +999,51 @@ class SymOpsProcessor:
         self.repairer = AutoRepair()
         self.parser = FuzzyParser()
 
+    @staticmethod
+    def _truncate_repetition(text: str, threshold: int = 5) -> str:
+        """同じ行の異常な連続繰り返しを検知し、最初の threshold 回だけ保持して残りを切り詰める。
+
+        LLM（特に推論系モデル）がデジェネレートループに陥ると、同じ思考行や
+        アクション行を何十回も繰り返す。これをそのままパーサーに渡すと
+        無意味なアクションが大量生成される。
+
+        Args:
+            text: LLM生出力テキスト
+            threshold: 同一行の連続出現を許容する上限（これを超えると切り詰める）
+
+        Returns:
+            切り詰め後のテキスト
+        """
+        lines = text.split("\n")
+        if len(lines) < threshold * 2:
+            return text
+
+        result: List[str] = []
+        repeat_count = 0
+        prev_line: Optional[str] = None
+
+        for line in lines:
+            if line == prev_line:
+                repeat_count += 1
+                if repeat_count >= threshold:
+                    continue  # threshold 回以降はスキップ
+            else:
+                repeat_count = 0
+            result.append(line)
+            prev_line = line
+
+        if len(result) < len(lines):
+            removed = len(lines) - len(result)
+            logger.warning(
+                f"Repetition detected: truncated {removed} repeated lines "
+                f"(threshold={threshold})"
+            )
+            result.append(
+                f"\n[SYSTEM] {removed} repeated lines truncated (degenerate loop detection)"
+            )
+
+        return "\n".join(result)
+
     def process(self, raw_output: str) -> ParsedResult:
         """
         Main processing pipeline with preprocessing
@@ -980,6 +1056,10 @@ class SymOpsProcessor:
             thought_block = reasoning_to_thought(reasoning_content)
             raw_output = f"{thought_block}\n\n{raw_output}"
             logger.info(f"Extracted reasoning from imd blocks ({len(reasoning_content)} chars), prepended as >> Thought")
+
+        # Phase -0.5: Repetition detection — LLMが同じ行を異常に繰り返している場合、
+        # 最初の数回だけ保持して残りを切り詰める（パーサーの負荷と無意味なアクション実行を防ぐ）
+        raw_output = self._truncate_repetition(raw_output)
 
         # Phase 0: Plain Markdown/Text Detection & Conversion
         converted, was_converted = self.markdown_converter.convert(raw_output)
