@@ -62,7 +62,8 @@ class CommandHandler:
             table.add_column("Command", style="cyan")
             table.add_column("Description", style="white")
             
-            table.add_row("/config show", "Show current configuration")
+            table.add_row("/config show", "Show current configuration (raw YAML)")
+            table.add_row("/config status", "Show runtime state (mode, tools, model, vitals)")
             table.add_row("/config set <key> <value>", "Set config value (temporary)")
             table.add_row("/config reload", "Reload config from file")
             
@@ -90,7 +91,10 @@ class CommandHandler:
                 ))
             else:
                 print(json_str)
-        
+
+        elif subcmd == "status":
+            await self._config_status()
+
         elif subcmd == "set":
             if len(args) < 3:
                 ui.print_error("Usage: /config set <key> <value>")
@@ -119,6 +123,91 @@ class CommandHandler:
         else:
              ui.print_error(f"Unknown config subcommand: {subcmd}")
 
+    async def _config_status(self):
+        """Show runtime state: mode, tools, model, max_loops, vitals."""
+        from companion.core_tools import UNIVERSAL_TOOLS, MODE_TOOL_MAPPING
+
+        agent = self.agent
+        state = agent.state
+        mode = state.get_context_mode()
+
+        # --- Runtime Info Table ---
+        info_table = Table(
+            title="Runtime Status",
+            show_header=True,
+            header_style="bold cyan",
+            box=None,
+        )
+        info_table.add_column("Property", style="dim", no_wrap=True)
+        info_table.add_column("Value", style="yellow")
+
+        info_table.add_row("Mode", mode)
+        info_table.add_row("Phase", state.phase.value)
+        info_table.add_row("Model", str(getattr(agent.llm, "model", "unknown")))
+        info_table.add_row("Provider", str(getattr(agent.llm, "provider", "unknown")))
+        info_table.add_row(
+            "Max Loops",
+            f"{agent.pacemaker.loop_count}/{agent.pacemaker.max_loops}",
+        )
+        info_table.add_row("Turn Count", str(state.turn_count))
+        info_table.add_row("Session ID", state.session_id)
+
+        # Vitals
+        v = state.vitals
+        info_table.add_row(
+            "Vitals",
+            f"c={v.confidence:.2f} s={v.safety:.2f} m={v.memory:.2f} f={v.focus:.2f}",
+        )
+
+        # Investigation state
+        if state.investigation_state:
+            inv = state.investigation_state
+            info_table.add_row(
+                "Investigation",
+                f"attempts={inv.hypothesis_attempts} cycle={inv.ooda_cycle}",
+            )
+
+        # Consecutive errors
+        info_table.add_row(
+            "Consecutive Errors", str(agent.pacemaker.consecutive_errors)
+        )
+
+        if hasattr(ui, "console"):
+            ui.console.print(
+                Panel(info_table, title="[bold]Runtime Status[/bold]", border_style="blue")
+            )
+        else:
+            for row in info_table.rows:
+                print(f"{row.cells[0]}: {row.cells[1]}")
+
+        # --- Available Tools Table ---
+        allowed = UNIVERSAL_TOOLS | MODE_TOOL_MAPPING.get(mode, set())
+        tool_table = Table(
+            title=f"Available Tools ({mode} mode)",
+            show_header=True,
+            header_style="bold cyan",
+            box=None,
+        )
+        tool_table.add_column("Tool", style="cyan")
+        tool_table.add_column("Registered", style="green")
+
+        for tool_name in sorted(allowed):
+            registered = "✓" if tool_name in agent.tools else "✗"
+            tool_table.add_row(tool_name, registered)
+
+        if hasattr(ui, "console"):
+            ui.console.print(
+                Panel(
+                    tool_table,
+                    title=f"[bold]Tools ({len(allowed)} available)[/bold]",
+                    border_style="green",
+                )
+            )
+        else:
+            print(f"\nAvailable tools ({len(allowed)}):")
+            for tool_name in sorted(allowed):
+                print(f"  {tool_name}")
+
     async def handle_log(self, args: List[str]):
         """Toggle full log verbosity."""
         ui.show_full_logs = not ui.show_full_logs
@@ -126,9 +215,9 @@ class CommandHandler:
         ui.print_success(f"Log verbosity toggled: {status}")
 
     async def handle_config(self, args: List[str]):
-        """Handle configuration commands: /config show | set <key> <value> | setup."""
+        """Handle configuration commands: /config show | status | set <key> <value> | setup."""
         if not args:
-            ui.print_info("Usage: /config [show | set <key> <value> | setup]")
+            ui.print_info("Usage: /config [show | status | set <key> <value> | reload | setup]")
             return
 
         subcommand = args[0].lower()
@@ -149,6 +238,9 @@ class CommandHandler:
             
             flatten_dict(config._config)
             ui.console.print(table)
+
+        elif subcommand == "status":
+            await self._config_status()
 
         elif subcommand == "set":
             if len(args) < 3:
@@ -201,7 +293,8 @@ class CommandHandler:
     async def handle_help(self, args: List[str]):
         help_text = """
         [bold]Available Commands:[/bold]
-        [cyan]/config show[/cyan]        - Show current configuration
+        [cyan]/config show[/cyan]        - Show current configuration (raw YAML)
+        [cyan]/config status[/cyan]      - Show runtime state (mode, tools, model, vitals)
         [cyan]/config set <k> <v>[/cyan] - Set config value (temporary)
         [cyan]/config reload[/cyan]      - Reload config from file
         [cyan]/status[/cyan]             - Show agent vitals and loop status
