@@ -64,7 +64,7 @@
 
 | ID | 項目 | 重要度 | 優先度 | 内容・理由 |
 |---|---|:-:|:-:|---|
-| **S3-1** | Phase 1.6 残：実行結果の高度な要約表示 | 中 | 中 | `ResultSummarizer` の骨格あり。フェーズ完遂・UX 向上 |
+| **S3-1** | Phase 1.6 残：実行結果の高度な要約表示 | 中 | 中 | 2026-06-22 対応。多段要約パイプライン実装: (1) `ResultCache`（LRU・連番ID・行範囲取得）+ `retrieve_result` ツール（LLM用・行範囲指定可）+ `/result` コマンド（ユーザー用）。(2) 機械的要約拡張: `read_file`（構造抽出・Python/JS/TS/Rust ヘッダ+先頭15行）、`list_symbols`（種別集計+上位20件）、汎用 head/tail フォールバック。(3) `result_pipeline.py`: Stage1 閾値判定→Stage2 機械要約→Stage3 再閾値→Stage4 SubLLM（デフォルトOFF）。`core_action_executor` に統合、元データは ResultCache に保存・`retrieve_result @id` で取り出し可能。534 passed |
 | **S3-2** | 探索/コンテキスト設計の実装 | 高 | 中 | 2026-06-22 対応（Phase A+B+C+D 完了）。Phase A: grep_files に case_sensitive・シンボルヘッダ・ファイルグループ化・切り捨て明示を追加。Phase B: symbols.py 新規作成（list_symbols / find_definition）。Phase C: repo_map.py 新規作成（astシンボルマップ・ランク付け・1.5kトークン圧縮・mtimeキャッシュ）。builder.py で注入。Phase D: replace_function 実装（ast構文検証・同名関数曖昧性エラー・ファイル全体構文チェック）。few_shot.py にリカバリ例追加。core_tools.py でツール登録・planning/task モードに追加。453 passed |
 | **S3-3** | ツール結果の履歴注入ポリシー | 高 | 中 | 2026-06-21 対応（Phase 1）。`companion/tool_history_policy.py` 新規作成: `grep_files`（50件→10件+ファイル別集計）、`get_project_tree`（深階層省略+top-level+件数）、`run_command`成功時（head/tail各20行）の3ツール圧縮。`build_tool_result_message` に `history_content` パラメータ追加でUI表示（原文）とLLM履歴注入（圧縮版）を分離。`read_file`・編集失敗結果は後回し。395 passed |
 | **S3-4** | `/prompt` コマンド（システムプロンプトダンプ） | 中 | **高** | 2026-06-21 対応。`/prompt`（現ターン preview）/`all`（3モード）/`raw`（JSON）/`file` を追加。`--debug-context`（宛先 `ui.print_debug_context` 未実装のデッドパス）は廃止して `/prompt` に集約 |
