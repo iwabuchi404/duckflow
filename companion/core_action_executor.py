@@ -31,6 +31,7 @@ from companion.core_action_results import (
 )
 from companion.core_action_invocation import invoke_tool
 from companion.tool_history_policy import compress_for_history
+from companion.execution.result_pipeline import summarize_result
 from companion.modules.repo_map import get_repo_map_generator
 from companion.modules.event_logger import event_logger
 from companion.tools.file_ops import file_ops
@@ -174,9 +175,11 @@ async def execute_actions(agent, action_list) -> list:
                     )
 
                     if action.name not in ("response",):
-                        # Compress result for LLM history (UI shows raw result)
+                        # Multi-stage summarization pipeline (S3-1)
                         result_str = result if isinstance(result, str) else serialize_to_text(result)
-                        history_content = compress_for_history(action.name, result_str)
+                        history_content, _cache_id = summarize_result(
+                            action.name, result_str, agent
+                        )
 
                         agent.state.add_message(
                             "user",
