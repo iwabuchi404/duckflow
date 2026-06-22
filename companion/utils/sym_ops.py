@@ -903,12 +903,24 @@ class FuzzyParser:
         return max(0.0, min(1.0, score))
 
     def _extract_thoughts(self, text: str) -> List[str]:
-        """Extract thought lines v2"""
-        return [
-            line.strip()[2:].strip()
-            for line in text.split("\n")
-            if line.strip().startswith(">>")
-        ]
+        """Extract thought lines v2.
+
+        Lines inside <<< >>> content blocks are raw data (file contents,
+        command output, etc.) and must NOT be treated as thoughts.
+        """
+        thoughts = []
+        in_block = False
+        for line in text.split("\n"):
+            if in_block:
+                if line.rstrip() == ">>>":
+                    in_block = False
+                continue
+            if line.strip() == "<<<":
+                in_block = True
+                continue
+            if line.strip().startswith(">>"):
+                thoughts.append(line.strip()[2:].strip())
+        return thoughts
 
     def _extract_vitals(self, text: str) -> dict:
         """Extract Duck Vitals v3.1: c=confidence, s=safety, m=memory, f=focus"""

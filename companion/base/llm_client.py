@@ -945,6 +945,25 @@ class LLMClient:
                 else "No reasoning provided."
             )
 
+            # --- Thought-Only Fallback ---
+            # If the LLM produced only thoughts (>> lines) but no actions,
+            # it likely got stuck in analysis paralysis or hit max_tokens.
+            # Convert the thoughts into a response action so the user sees
+            # the content and the loop terminates gracefully.
+            if not actions and result.thoughts:
+                logger.warning(
+                    f"Thought-only response: {len(result.thoughts)} thoughts, "
+                    f"0 actions. Converting thoughts to response action."
+                )
+                thought_text = "\n".join(result.thoughts)
+                actions.append(
+                    Action(
+                        name="response",
+                        parameters={"message": thought_text},
+                        thought="Auto-converted from thought-only output (analysis paralysis guard)",
+                    )
+                )
+
             action_list = ActionList(
                 reasoning=reasoning, actions=actions, vitals=result.vitals
             )
