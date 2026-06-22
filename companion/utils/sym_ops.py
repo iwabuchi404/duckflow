@@ -194,7 +194,6 @@ class AutoRepair:
         "execute_batch",
         "note",
         "search_archives",
-        "recall",
     }
 
     def _fix_missing_symbols(self, text: str) -> str:

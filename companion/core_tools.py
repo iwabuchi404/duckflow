@@ -17,7 +17,6 @@ UNIVERSAL_TOOLS = {
     "exit",
     "duck_call",
     "search_archives",
-    "recall",
     "get_project_tree",
     "list_symbols",
     "find_definition",
@@ -109,7 +108,6 @@ def register_default_tools(agent: Any) -> None:
 
     agent.memory_tool = MemoryTool()
     agent.register_tool("search_archives", agent.memory_tool.search_archives)
-    agent.register_tool("recall", agent.memory_tool.search_archives)
 
     agent.register_tool("analyze_structure", agent.sub_llm_tools.analyze_structure)
     agent.register_tool("generate_code", agent.sub_llm_tools.generate_code)
@@ -162,6 +160,13 @@ def get_tool_descriptions(
             target_param = None
             content_param = None
 
+            # Params that are passed inside the <<<>>> content block,
+            # not as inline key=value arguments
+            _CONTENT_BLOCK_PARAMS = {
+                "content", "body", "code", "plan_data",
+                "find", "replace", "occurrence",  # edit_file: SEARCH/REPLACE in block
+            }
+
             for p_name in sig.parameters:
                 if (
                     p_name
@@ -170,7 +175,7 @@ def get_tool_descriptions(
                 ):
                     target_param = p_name
                 elif (
-                    p_name in ["content", "body", "code", "plan_data"]
+                    p_name in _CONTENT_BLOCK_PARAMS
                     and not content_param
                 ):
                     content_param = p_name

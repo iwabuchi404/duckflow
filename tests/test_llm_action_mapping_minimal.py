@@ -61,15 +61,13 @@ def test_mark_task_complete_target_maps_to_task_index() -> None:
 
 
 def test_archive_search_target_maps_to_query_parameter() -> None:
-    """search_archives and recall should map @target to query."""
+    """search_archives should map @target to query."""
     result = _parse_actions(
         ">> search memory\n"
         "::search_archives @parser failure\n"
-        "::recall @last decision"
     )
 
     assert result.actions[0].parameters == {"query": "parser failure"}
-    assert result.actions[1].parameters == {"query": "last decision"}
 
 
 def test_retired_report_and_finish_actions_have_no_special_parameter_mapping() -> None:

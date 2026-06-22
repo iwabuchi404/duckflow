@@ -823,7 +823,7 @@ class FileOps:
         r"edit_lines|replace_in_file|run_command|duck_call|note|"
         r"investigate|execute_batch|propose_plan|list_directory|find_files|"
         r"grep_files|generate_code|analyze_structure|submit_hypothesis|"
-        r"finish_investigation|generate_tasks|search_archives|recall|"
+        r"finish_investigation|generate_tasks|search_archives|"
         r"result|status)"
     )
 
