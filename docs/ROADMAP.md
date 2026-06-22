@@ -73,7 +73,7 @@
 | **S3-7** | 複数行入力（Shift+Enter） | 中 | **高** | 2026-06-21 対応。`prompt_toolkit` キーバインド追加: Enter=送信（1行目）/ 改行（複数行化後）、`Ctrl+J`=改行（Shift+Enter 相当）、`Esc→Enter`=複数行送信。`/clear` の補完漏れも修正 |
 | **S3-8** | 推論モデル統合（OpenRouter reasoning → Thought） | 中 | 中 | 2026-06-22 対応。`_extract_reasoning()` で OpenRouter API の `reasoning`/`reasoning_content` フィールドを抽出し `reasoning_to_thought()` で `>>` Thought に変換して content 先頭に prepend。本文埋め込み型 imd ブロックも `strip_reasoning_tags` が3値返却に拡張され、推論内容を Thought として活用しつつタグ除去。408 passed |
 | **S3-9** | APIリトライ（指数バックオフ） | 高 | 中 | 2026-06-22 対応。`_call_with_retry()` を新設、`chat()` の API 呼び出しをラップ。指数バックオフ + jitter、429 は Retry-After ヘッダー尊重。対象: 429/500/502/503・タイムアウト・接続エラー。最大3回、`llm.retry.*` で設定可能。`usage_stats` に `retry_count`/`retry_successes` 追加。414 passed |
-| **S3-10** | 全ツール統一タイムアウト | 高 | 中 | `invoke_tool()` に `asyncio.wait_for` ラッパを追加し全ツールに設定ベースのタイムアウトを適用。`ShellTool`/`CodeRunner` の 30s ハードコードを設定化へ |
+| **S3-10** | 全ツール統一タイムアウト | 高 | 中 | 2026-06-22 対応。`invoke_tool()` に `asyncio.wait_for` ラッパを追加（`tool.timeout` 設定、デフォルト120s）。タイムアウト時は `::status error` を返し例外を吸収。`ShellTool.run_command` は `tool.shell_timeout`（30s）、`CodeRunner.run_python_file` は `tool.python_timeout`（30s）で設定化。469 passed |
 | **S3-11** | 観測性強化（`/timeline`・イベントログ・`/tokens`拡張） | 中 | 中 | 3機能を1セットで実装: (1) アクション実行時間計測 + `/timeline` コマンド (2) `EventLogger` による JSONL イベントログ (3) `/tokens` にレイテンシ・リトライ回数追加表示。S3-9/S3-10 の計測基盤になる |
 
 ### S3-3 ツール結果履歴管理の初期方針

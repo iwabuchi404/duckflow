@@ -3,6 +3,8 @@ import logging
 import asyncio
 from typing import Tuple
 
+from companion.config.config_loader import config
+
 logger = logging.getLogger(__name__)
 
 class ShellTool:
@@ -28,11 +30,12 @@ class ShellTool:
             )
 
             try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30.0)
+                timeout = config.get("tool.shell_timeout", 30)
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-                return f"Error: Command timed out after 30 seconds: {command}"
+                return f"Error: Command timed out after {timeout} seconds: {command}"
             
             output = ""
             if stdout:

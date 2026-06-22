@@ -2,6 +2,7 @@ import asyncio
 import sys
 from pathlib import Path
 
+from companion.config.config_loader import config
 from companion.tools.shell_tool import ShellTool
 
 from .summary import summarize_result
@@ -41,14 +42,15 @@ class CodeRunner:
         )
 
         try:
+            timeout = config.get("tool.python_timeout", 30)
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 process.communicate(),
-                timeout=30.0,
+                timeout=timeout,
             )
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            return "❌ TimeoutError: Python execution timed out after 30 seconds"
+            return f"❌ TimeoutError: Python execution timed out after {timeout} seconds"
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")
