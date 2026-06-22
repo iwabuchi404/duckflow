@@ -571,10 +571,30 @@ class LLMClient:
                 or config.get("max_output_tokens", 8192)
             )
 
+            # Build reasoning parameter for OpenRouter reasoning models
+            # (Qwen3, DeepSeek-R1, Kimi K2, GLM, etc.) to prevent infinite
+            # reasoning loops by capping reasoning tokens at the API level.
+            reasoning_param = None
+            reasoning_cfg = config.get("llm.reasoning", {})
+            if reasoning_cfg and reasoning_cfg.get("enabled", False) and self.provider == "openrouter":
+                reasoning_param = {}
+                effort = reasoning_cfg.get("effort")
+                rmax = reasoning_cfg.get("max_tokens")
+                if effort:
+                    reasoning_param["effort"] = effort
+                if rmax:
+                    reasoning_param["max_tokens"] = int(rmax)
+                if not reasoning_param:
+                    reasoning_param = None
+                else:
+                    logger.info(
+                        f"🧠 Reasoning control: effort={effort}, max_tokens={rmax}"
+                    )
+
             content = None
             for attempt in range(1, MAX_EMPTY_RETRIES + 2):
                 # OpenAI SDKを使用してリクエスト送信 (with retry)
-                response = await self._call_with_retry(
+                request_kwargs = dict(
                     model=self.model,
                     messages=processed_messages,
                     temperature=temperature,
@@ -582,6 +602,12 @@ class LLMClient:
                     presence_penalty=presence_penalty,
                     max_tokens=max_tokens,
                     extra_headers=extra_headers,
+                )
+                if reasoning_param is not None:
+                    request_kwargs["extra_body"] = {"reasoning": reasoning_param}
+
+                response = await self._call_with_retry(
+                    **request_kwargs
                 )
 
                 # Update usage stats
