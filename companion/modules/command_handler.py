@@ -29,6 +29,7 @@ class CommandHandler:
             "/prompt": self.handle_prompt,
             "/tokens": self.handle_tokens,
             "/timeline": self.handle_timeline,
+            "/result": self.handle_result,
         }
 
     def is_command(self, input_text: str) -> bool:
@@ -314,6 +315,7 @@ class CommandHandler:
         [cyan]/prompt file [path][/cyan] - Write current messages to a file
         [cyan]/tokens[/cyan]           - Show token usage and memory budget
         [cyan]/timeline[/cyan]         - Show action execution timeline
+        [cyan]/result [id] [s-e][/cyan] - Retrieve cached tool results
         [cyan]/config[/cyan]           - Show/set configuration or run setup wizard
         [cyan]/help[/cyan]               - Show this help
 
@@ -986,3 +988,79 @@ class CommandHandler:
             )
         else:
             print(table)
+
+    # ------------------------------------------------------------------
+    # /result: retrieve cached full tool results (S3-1)
+    # ------------------------------------------------------------------
+    async def handle_result(self, args: List[str]):
+        """Retrieve full (unsummarized) tool results from ResultCache.
+
+        Usage:
+            /result              - List all cached entries
+            /result <id>         - Show full result for <id>
+            /result <id> <s>-<e> - Show lines <s> to <e> of <id>
+        """
+        cache = self.agent.result_cache
+
+        if not args:
+            entries = cache.entries
+            if not entries:
+                ui.print_info("Result cache is empty.")
+                return
+
+            table = Table(
+                title="Result Cache",
+                show_header=True,
+                header_style="bold cyan",
+                box=None,
+            )
+            table.add_column("ID", style="cyan")
+            table.add_column("Tool", style="yellow")
+            table.add_column("Size", style="dim", justify="right")
+            table.add_column("Params", style="white")
+
+            for cid, entry in entries.items():
+                params_str = str(entry.params)[:60]
+                size_str = f"{entry.size_chars:,} chars"
+                table.add_row(cid, entry.tool_name, size_str, params_str)
+
+            if hasattr(ui, "console"):
+                ui.console.print(
+                    Panel(
+                        table,
+                        title="[bold]Cached Results[/bold]",
+                        subtitle=f"{cache.size} entries (max {cache._max_size})",
+                        border_style="cyan",
+                        expand=False,
+                    )
+                )
+            else:
+                print(table)
+            return
+
+        cache_id = args[0]
+        entry = cache.get(cache_id)
+
+        if entry is None:
+            ui.print_error(cache.expired_message(cache_id))
+            return
+
+        # Check for line range argument
+        if len(args) >= 2:
+            import re
+            match = re.match(r"^(\d+)-(\d+)$", args[1].strip())
+            if match:
+                start = int(match.group(1))
+                end = int(match.group(2))
+                result = cache.get_range(cache_id, start, end)
+                if result is None:
+                    ui.print_error(cache.expired_message(cache_id))
+                    return
+                ui.print_result(result)
+                return
+            else:
+                ui.print_error(f"Invalid line range: '{args[1]}'. Use 'start-end' (e.g. '120-180').")
+                return
+
+        # Full result
+        ui.print_result(entry.full_result)

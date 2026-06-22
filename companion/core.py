@@ -24,6 +24,7 @@ from companion.execution.result_summarizer import ResultSummarizer
 from companion.modules.pacemaker import DuckPacemaker
 from companion.modules.memory import MemoryManager
 from companion.modules.timeline import TimelineTracker
+from companion.modules.result_cache import ResultCache
 from companion.ui import ui
 from companion.core_tools import (
     MODE_TOOL_MAPPING,
@@ -116,6 +117,9 @@ class DuckAgent:
 
         # Initialize Timeline Tracker (S3-11)
         self.timeline = TimelineTracker(max_entries=50)
+
+        # Initialize Result Cache (S3-1)
+        self.result_cache = ResultCache(max_size=10)
 
         # Initialize Memory Manager
         self.memory_manager = MemoryManager(llm_client=self.llm, max_tokens=8000)
