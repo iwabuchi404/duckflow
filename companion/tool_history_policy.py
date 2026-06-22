@@ -5,10 +5,13 @@ Compresses tool results for LLM conversation history while preserving
 the full content for UI display. This reduces context pressure during
 long-running tasks without losing critical information.
 
-Policy targets (Phase 1):
+Policy targets:
 - grep_files: keep top 10 matches + file-level summary + re-search hint
 - get_project_tree: keep top-level entries + counts, omit deep nesting
 - run_command (success): keep head/tail 20 lines of stdout/stderr
+- read_file: structure extraction (class/function headers) + head + line count
+- list_symbols: symbol-type aggregation + top N entries
+- generic: head/tail + line/char count
 
 Tools not listed here pass through unchanged (no compression).
 """
@@ -23,6 +26,11 @@ _GREP_MAX_EXCERPTS = 10
 _PROJECT_TREE_MAX_LINES = 30
 _RUN_CMD_HEAD_TAIL_LINES = 20
 _RUN_CMD_COMPRESS_THRESHOLD = 60  # only compress if output exceeds this many lines
+_READ_FILE_HEAD_LINES = 15
+_READ_FILE_MAX_HEADERS = 20
+_LIST_SYMBOLS_MAX_ENTRIES = 20
+_GENERIC_HEAD_TAIL_LINES = 20
+_GENERIC_COMPRESS_THRESHOLD = 60  # only compress if output exceeds this many lines
 
 
 def compress_for_history(action_name: str, result: str) -> str:
@@ -43,10 +51,15 @@ def compress_for_history(action_name: str, result: str) -> str:
         "grep_files": _compress_grep,
         "get_project_tree": _compress_project_tree,
         "run_command": _compress_run_command,
+        "read_file": _compress_read_file,
+        "list_symbols": _compress_list_symbols,
     }
 
     compressor = compressors.get(action_name)
     if compressor is None:
+        # Generic fallback: head/tail compression for long outputs
+        if len(result) > 2000:
+            return _compress_generic(result)
         return result
 
     try:
@@ -194,6 +207,134 @@ def _compress_run_command(result: str) -> str:
     omitted = len(lines) - _RUN_CMD_HEAD_TAIL_LINES * 2
 
     parts: list[str] = [
+        *head,
+        f"\n[... {omitted} lines omitted ...]\n",
+        *tail,
+    ]
+
+    return "\n".join(parts)
+
+
+# --- read_file ---
+
+# Patterns for structure extraction (Python, JS/TS, and generic)
+_STRUCT_PATTERNS = [
+    re.compile(r"^(\s*(?:class|def|async def)\s+\w+.*)$", re.MULTILINE),  # Python
+    re.compile(r"^(\s*(?:export\s+)?(?:class|function|interface|type|enum)\s+\w+.*)$", re.MULTILINE),  # JS/TS
+    re.compile(r"^(\s*(?:pub(?:lic)?|priv(?:ate)?|fn|struct|impl|trait)\s+\w+.*)$", re.MULTILINE),  # Rust
+]
+
+
+def _compress_read_file(result: str) -> str:
+    """Compress read_file output to structure headers + head + line count.
+
+    Keeps:
+    - Class/function/type definition headers (with line numbers if present)
+    - First N lines of the file
+    - Total line count and file size
+
+    Drops:
+    - Full file body (headers + head give enough context for navigation)
+    """
+    lines = result.split("\n")
+    if len(lines) <= _GENERIC_COMPRESS_THRESHOLD:
+        return result  # short enough
+
+    # Extract structure headers
+    headers: list[str] = []
+    for i, line in enumerate(lines, 1):
+        for pattern in _STRUCT_PATTERNS:
+            if pattern.match(line):
+                headers.append(f"L{i}: {line.strip()}")
+                break
+        if len(headers) >= _READ_FILE_MAX_HEADERS:
+            break
+
+    head = lines[:_READ_FILE_HEAD_LINES]
+
+    parts: list[str] = [
+        f"File: {len(lines)} lines, {len(result)} chars",
+    ]
+
+    if headers:
+        parts.append(f"\nStructure ({len(headers)} definitions):")
+        parts.extend(headers)
+        if len(headers) >= _READ_FILE_MAX_HEADERS:
+            parts.append("  ... (more definitions exist)")
+
+    parts.append(f"\nFirst {_READ_FILE_HEAD_LINES} lines:")
+    parts.extend(head)
+    parts.append(f"\n[... {len(lines) - _READ_FILE_HEAD_LINES} lines omitted. "
+                 f"Use retrieve_result with line range to access specific sections.]")
+
+    return "\n".join(parts)
+
+
+# --- list_symbols ---
+
+def _compress_list_symbols(result: str) -> str:
+    """Compress list_symbols output to type aggregation + top N entries.
+
+    Keeps:
+    - Symbol counts by type (class, function, method, etc.)
+    - First N symbol entries
+    - Total symbol count
+
+    Drops:
+    - Entries beyond the first N
+    """
+    lines = result.split("\n")
+    if len(lines) <= _LIST_SYMBOLS_MAX_ENTRIES:
+        return result  # short enough
+
+    # Count symbol types (lines like "class MyClass" or "def my_func")
+    type_counts: dict[str, int] = {}
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            first_word = stripped.split()[0] if stripped.split() else ""
+            if first_word in ("class", "def", "async", "function", "interface", "type", "enum", "struct", "impl", "trait", "pub", "priv", "fn"):
+                type_counts[first_word] = type_counts.get(first_word, 0) + 1
+
+    parts: list[str] = [
+        f"Symbols: {len(lines)} total",
+    ]
+
+    if type_counts:
+        parts.append("By type:")
+        for t, c in sorted(type_counts.items(), key=lambda x: -x[1]):
+            parts.append(f"  {t}: {c}")
+
+    parts.append(f"\nFirst {_LIST_SYMBOLS_MAX_ENTRIES} entries:")
+    parts.extend(lines[:_LIST_SYMBOLS_MAX_ENTRIES])
+    parts.append(f"\n[... {len(lines) - _LIST_SYMBOLS_MAX_ENTRIES} more symbols omitted]")
+
+    return "\n".join(parts)
+
+
+# --- generic fallback ---
+
+def _compress_generic(result: str) -> str:
+    """Generic head/tail compression for any long output.
+
+    Keeps:
+    - First N lines
+    - Last N lines
+    - Total line/char count
+    """
+    lines = result.split("\n")
+    if len(lines) <= _GENERIC_COMPRESS_THRESHOLD:
+        # Single very long line? Truncate by chars.
+        if len(result) > 2000:
+            return result[:1000] + f"\n[... {len(result) - 2000} chars omitted ...]\n" + result[-1000:]
+        return result
+
+    head = lines[:_GENERIC_HEAD_TAIL_LINES]
+    tail = lines[-_GENERIC_HEAD_TAIL_LINES:]
+    omitted = len(lines) - _GENERIC_HEAD_TAIL_LINES * 2
+
+    parts: list[str] = [
+        f"[{len(lines)} lines, {len(result)} chars]",
         *head,
         f"\n[... {omitted} lines omitted ...]\n",
         *tail,
