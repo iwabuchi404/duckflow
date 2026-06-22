@@ -30,18 +30,12 @@ class TestSummarizeResult:
         assert result == long_text
         assert cache_id is None
 
-    def test_long_result_mechanical_summary(self):
-        """Long results should be mechanically summarized and cached."""
+    def test_long_result_generic_fallback(self):
+        """Long results should be compressed via generic fallback and cached."""
         agent = FakeAgent()
-        # Create a long read_file result with structure (>2000 chars)
-        lines = ["import os", ""]
-        lines.extend([f"line{i}" for i in range(200)])
-        lines.append("class MyClass:")
-        lines.append("    pass")
-        lines.append("def my_function():")
-        lines.append("    pass")
-        lines.extend([f"trailing{i}" for i in range(200)])
-        content = "\n".join(lines)
+        # Create a long read_file result (>2000 chars)
+        # read_file uses generic fallback (no tool-specific compressor)
+        content = "\n".join(f"this is line number {i} with some content" for i in range(200))
         assert len(content) > 2000
 
         result, cache_id = summarize_result("read_file", content, agent)

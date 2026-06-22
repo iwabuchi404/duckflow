@@ -3,69 +3,9 @@
 import pytest
 from companion.tool_history_policy import (
     compress_for_history,
-    _compress_read_file,
     _compress_list_symbols,
     _compress_generic,
 )
-
-
-class TestCompressReadFile:
-    def test_short_file_passthrough(self):
-        """Short files should not be compressed."""
-        content = "\n".join(f"line{i}" for i in range(1, 30))
-        result = _compress_read_file(content)
-        assert result == content
-
-    def test_long_file_compressed(self):
-        """Long files should be compressed with structure + head."""
-        lines = []
-        lines.append("import os")
-        lines.append("")
-        for i in range(100):
-            lines.append(f"line{i}")
-        lines.append("class MyClass:")
-        lines.append("    pass")
-        lines.append("def my_function():")
-        lines.append("    pass")
-        for i in range(100):
-            lines.append(f"trailing{i}")
-        content = "\n".join(lines)
-
-        result = _compress_read_file(content)
-        assert len(result) < len(content)
-        assert "File:" in result
-        assert "lines" in result
-        assert "Structure" in result
-        assert "class MyClass" in result
-        assert "def my_function" in result
-        assert "omitted" in result
-
-    def test_no_structure_still_compresses(self):
-        """Files without class/def should still get head + line count."""
-        content = "\n".join(f"data line {i}" for i in range(100))
-        result = _compress_read_file(content)
-        assert len(result) < len(content)
-        assert "File:" in result
-        assert "100 lines" in result
-        assert "omitted" in result
-
-    def test_python_class_and_def_extracted(self):
-        """Python class and def headers should be extracted with line numbers."""
-        lines = ["import os", "", "class Foo:", "    pass", "", "def bar():", "    pass"]
-        lines.extend([f"# line {i}" for i in range(100)])
-        content = "\n".join(lines)
-        result = _compress_read_file(content)
-        assert "L3: class Foo:" in result
-        assert "L6: def bar():" in result
-
-    def test_js_function_extracted(self):
-        """JS/TS function/class headers should be extracted."""
-        lines = ['import { x } from "y";', "", "export class MyComponent {", "  render() {}", "}", "", "function helper() {", "  return 1;", "}"]
-        lines.extend([f"// line {i}" for i in range(100)])
-        content = "\n".join(lines)
-        result = _compress_read_file(content)
-        assert "MyComponent" in result
-        assert "helper" in result
 
 
 class TestCompressListSymbols:
@@ -130,14 +70,14 @@ class TestCompressGeneric:
 
 
 class TestCompressForHistoryDispatch:
-    def test_read_file_dispatched(self):
-        """compress_for_history should dispatch read_file correctly."""
-        lines = [f"line{i}" for i in range(100)]
-        lines.insert(5, "class Foo:")
-        content = "\n".join(lines)
+    def test_read_file_generic_fallback(self):
+        """read_file should use generic fallback (no tool-specific compressor)."""
+        content = "\n".join(f"this is a longer line number {i} with extra text" for i in range(100))
         result = compress_for_history("read_file", content)
+        # Should use generic fallback, not a read_file-specific compressor
         assert len(result) < len(content)
-        assert "class Foo" in result
+        assert "lines" in result
+        assert "Structure" not in result  # no structure extraction
 
     def test_list_symbols_dispatched(self):
         """compress_for_history should dispatch list_symbols correctly."""

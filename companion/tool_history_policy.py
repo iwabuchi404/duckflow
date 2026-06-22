@@ -9,7 +9,6 @@ Policy targets:
 - grep_files: keep top 10 matches + file-level summary + re-search hint
 - get_project_tree: keep top-level entries + counts, omit deep nesting
 - run_command (success): keep head/tail 20 lines of stdout/stderr
-- read_file: structure extraction (class/function headers) + head + line count
 - list_symbols: symbol-type aggregation + top N entries
 - generic: head/tail + line/char count
 
@@ -26,8 +25,6 @@ _GREP_MAX_EXCERPTS = 10
 _PROJECT_TREE_MAX_LINES = 30
 _RUN_CMD_HEAD_TAIL_LINES = 20
 _RUN_CMD_COMPRESS_THRESHOLD = 60  # only compress if output exceeds this many lines
-_READ_FILE_HEAD_LINES = 15
-_READ_FILE_MAX_HEADERS = 20
 _LIST_SYMBOLS_MAX_ENTRIES = 20
 _GENERIC_HEAD_TAIL_LINES = 20
 _GENERIC_COMPRESS_THRESHOLD = 60  # only compress if output exceeds this many lines
@@ -51,7 +48,6 @@ def compress_for_history(action_name: str, result: str) -> str:
         "grep_files": _compress_grep,
         "get_project_tree": _compress_project_tree,
         "run_command": _compress_run_command,
-        "read_file": _compress_read_file,
         "list_symbols": _compress_list_symbols,
     }
 
@@ -211,61 +207,6 @@ def _compress_run_command(result: str) -> str:
         f"\n[... {omitted} lines omitted ...]\n",
         *tail,
     ]
-
-    return "\n".join(parts)
-
-
-# --- read_file ---
-
-# Patterns for structure extraction (Python, JS/TS, and generic)
-_STRUCT_PATTERNS = [
-    re.compile(r"^(\s*(?:class|def|async def)\s+\w+.*)$", re.MULTILINE),  # Python
-    re.compile(r"^(\s*(?:export\s+)?(?:class|function|interface|type|enum)\s+\w+.*)$", re.MULTILINE),  # JS/TS
-    re.compile(r"^(\s*(?:pub(?:lic)?|priv(?:ate)?|fn|struct|impl|trait)\s+\w+.*)$", re.MULTILINE),  # Rust
-]
-
-
-def _compress_read_file(result: str) -> str:
-    """Compress read_file output to structure headers + head + line count.
-
-    Keeps:
-    - Class/function/type definition headers (with line numbers if present)
-    - First N lines of the file
-    - Total line count and file size
-
-    Drops:
-    - Full file body (headers + head give enough context for navigation)
-    """
-    lines = result.split("\n")
-    if len(lines) <= _GENERIC_COMPRESS_THRESHOLD:
-        return result  # short enough
-
-    # Extract structure headers
-    headers: list[str] = []
-    for i, line in enumerate(lines, 1):
-        for pattern in _STRUCT_PATTERNS:
-            if pattern.match(line):
-                headers.append(f"L{i}: {line.strip()}")
-                break
-        if len(headers) >= _READ_FILE_MAX_HEADERS:
-            break
-
-    head = lines[:_READ_FILE_HEAD_LINES]
-
-    parts: list[str] = [
-        f"File: {len(lines)} lines, {len(result)} chars",
-    ]
-
-    if headers:
-        parts.append(f"\nStructure ({len(headers)} definitions):")
-        parts.extend(headers)
-        if len(headers) >= _READ_FILE_MAX_HEADERS:
-            parts.append("  ... (more definitions exist)")
-
-    parts.append(f"\nFirst {_READ_FILE_HEAD_LINES} lines:")
-    parts.extend(head)
-    parts.append(f"\n[... {len(lines) - _READ_FILE_HEAD_LINES} lines omitted. "
-                 f"Use retrieve_result with line range to access specific sections.]")
 
     return "\n".join(parts)
 
