@@ -6,6 +6,7 @@ fail-fast, and conversation history injection.
 """
 
 import logging
+import time
 
 from companion.core_action_pipeline import (
     action_list_safety_score,
@@ -31,6 +32,7 @@ from companion.core_action_results import (
 from companion.core_action_invocation import invoke_tool
 from companion.tool_history_policy import compress_for_history
 from companion.modules.repo_map import get_repo_map_generator
+from companion.modules.event_logger import event_logger
 from companion.tools.file_ops import file_ops
 from pathlib import Path
 from companion.tools.results import (
@@ -150,10 +152,14 @@ async def execute_actions(agent, action_list) -> list:
                 try:
                     func = agent.tools[action.name]
                     logger.info(f"Calling tool: {action.name}")
+                    event_logger.log_action_start(action.name, action.parameters)
 
+                    _t0 = time.monotonic()
                     result, dropped_params = await invoke_tool(
                         func, action.parameters
                     )
+                    _t1 = time.monotonic()
+                    _is_err = False
                     if dropped_params:
                         logger.warning(
                             f"Tool '{action.name}': dropping unexpected params: {dropped_params}"
@@ -204,6 +210,20 @@ async def execute_actions(agent, action_list) -> list:
                     agent.pacemaker.update_vitals(action, result, is_error=False)
                     consecutive_errors = 0
 
+                    _dur_ms = (_t1 - _t0) * 1000
+                    _result_str = str(result)
+                    agent.timeline.record(
+                        action_name=action.name,
+                        start_ts=_t0,
+                        end_ts=_t1,
+                        is_error=False,
+                        result_summary=_result_str,
+                    )
+                    event_logger.log_action_end(
+                        action.name, _dur_ms, is_error=False,
+                        result_len=len(_result_str),
+                    )
+
                 except Exception as e:
                     error_msg = f"Action '{action.name}' failed: {str(e)}"
                     logger.error(error_msg, exc_info=True)
@@ -224,6 +244,19 @@ async def execute_actions(agent, action_list) -> list:
                     results.append(error_msg)
 
                     agent.pacemaker.update_vitals(action, error_msg, is_error=True)
+
+                    _dur_ms_err = (time.monotonic() - _t0) * 1000
+                    agent.timeline.record(
+                        action_name=action.name,
+                        start_ts=_t0,
+                        end_ts=time.monotonic(),
+                        is_error=True,
+                        result_summary=error_msg,
+                    )
+                    event_logger.log_action_end(
+                        action.name, _dur_ms_err, is_error=True,
+                        result_len=len(error_msg),
+                    )
 
                     consecutive_errors += 1
                     if should_fail_fast(consecutive_errors):

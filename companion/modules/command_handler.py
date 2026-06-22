@@ -28,6 +28,7 @@ class CommandHandler:
             "/log": self.handle_log,
             "/prompt": self.handle_prompt,
             "/tokens": self.handle_tokens,
+            "/timeline": self.handle_timeline,
         }
 
     def is_command(self, input_text: str) -> bool:
@@ -312,6 +313,7 @@ class CommandHandler:
         [cyan]/prompt raw[/cyan]       - Dump current messages as JSON
         [cyan]/prompt file [path][/cyan] - Write current messages to a file
         [cyan]/tokens[/cyan]           - Show token usage and memory budget
+        [cyan]/timeline[/cyan]         - Show action execution timeline
         [cyan]/config[/cyan]           - Show/set configuration or run setup wizard
         [cyan]/help[/cyan]               - Show this help
 
@@ -881,6 +883,31 @@ class CommandHandler:
             "Cost estimate",
             f"${stats.get('cost_estimate', 0.0):.4f}",
         )
+        table.add_row("--- API reliability ---", "")
+        table.add_row(
+            "Retry count",
+            f"{stats.get('retry_count', 0):,}",
+        )
+        table.add_row(
+            "Retry successes",
+            f"{stats.get('retry_successes', 0):,}",
+        )
+        # Timeline latency summary
+        tl = self.agent.timeline
+        if tl.total_actions > 0:
+            table.add_row("--- Action latency ---", "")
+            table.add_row(
+                "Actions executed",
+                f"{tl.total_actions:,}",
+            )
+            table.add_row(
+                "Avg action duration",
+                f"{tl.avg_duration_ms:.0f}ms",
+            )
+            table.add_row(
+                "Total action time",
+                f"{tl.total_duration_ms:.0f}ms",
+            )
 
         if hasattr(ui, "console"):
             ui.console.print(
@@ -889,6 +916,71 @@ class CommandHandler:
                     title="[bold]Token Usage[/bold]",
                     subtitle="est. = chars×0.5 (heuristic, matches pruning logic)",
                     border_style="yellow",
+                    expand=False,
+                )
+            )
+        else:
+            print(table)
+
+    # ------------------------------------------------------------------
+    # /timeline: action execution timeline (S3-11)
+    # ------------------------------------------------------------------
+    async def handle_timeline(self, args: List[str]):
+        """Show recent action execution timeline with durations."""
+        timeline = self.agent.timeline
+        entries = timeline.entries
+
+        if not entries:
+            ui.print_info("No actions recorded yet in this session.")
+            return
+
+        table = Table(
+            title="Action Timeline",
+            show_header=True,
+            header_style="bold cyan",
+            box=None,
+        )
+        table.add_column("#", style="dim", justify="right")
+        table.add_column("Time", style="dim")
+        table.add_column("Action", style="cyan")
+        table.add_column("Duration", style="yellow", justify="right")
+        table.add_column("Status", style="green")
+        table.add_column("Result (truncated)", style="white", no_wrap=False)
+
+        for i, e in enumerate(entries, 1):
+            status = "❌ error" if e.is_error else "✓ ok"
+            duration = f"{e.duration_ms:.0f}ms"
+            if e.duration_ms >= 1000:
+                duration = f"{e.duration_ms / 1000:.2f}s"
+            table.add_row(
+                str(i),
+                e.timestamp_str,
+                e.action_name,
+                duration,
+                status,
+                e.result_summary[:80],
+            )
+
+        # Summary row
+        table.add_row("", "", "", "", "", "")
+        table.add_row(
+            "",
+            "",
+            f"Total: {timeline.total_actions}",
+            f"{timeline.total_duration_ms:.0f}ms",
+            f"Errors: {timeline.error_count}",
+            f"Avg: {timeline.avg_duration_ms:.0f}ms",
+        )
+
+        if hasattr(ui, "console"):
+            ui.console.print(
+                Panel(
+                    table,
+                    title="[bold]Action Timeline[/bold]",
+                    subtitle=f"{timeline.total_actions} actions | "
+                    f"avg {timeline.avg_duration_ms:.0f}ms | "
+                    f"{timeline.error_count} errors",
+                    border_style="cyan",
                     expand=False,
                 )
             )
