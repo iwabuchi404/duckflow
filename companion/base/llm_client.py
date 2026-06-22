@@ -574,21 +574,26 @@ class LLMClient:
             # Build reasoning parameter for OpenRouter reasoning models
             # (Qwen3, DeepSeek-R1, Kimi K2, GLM, etc.) to prevent infinite
             # reasoning loops by capping reasoning tokens at the API level.
+            # NOTE: effort and max_tokens are mutually exclusive per OpenRouter API.
             reasoning_param = None
             reasoning_cfg = config.get("llm.reasoning", {})
             if reasoning_cfg and reasoning_cfg.get("enabled", False) and self.provider == "openrouter":
-                reasoning_param = {}
                 effort = reasoning_cfg.get("effort")
                 rmax = reasoning_cfg.get("max_tokens")
-                if effort:
-                    reasoning_param["effort"] = effort
-                if rmax:
-                    reasoning_param["max_tokens"] = int(rmax)
-                if not reasoning_param:
-                    reasoning_param = None
-                else:
+                if effort and rmax:
+                    logger.warning(
+                        f"reasoning.effort='{effort}' and reasoning.max_tokens={rmax} "
+                        f"are mutually exclusive. Using max_tokens (ignoring effort)."
+                    )
+                    reasoning_param = {"max_tokens": int(rmax)}
+                elif effort:
+                    reasoning_param = {"effort": effort}
+                elif rmax:
+                    reasoning_param = {"max_tokens": int(rmax)}
+
+                if reasoning_param:
                     logger.info(
-                        f"🧠 Reasoning control: effort={effort}, max_tokens={rmax}"
+                        f"🧠 Reasoning control: {reasoning_param}"
                     )
 
             content = None

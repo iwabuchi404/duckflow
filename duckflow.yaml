@@ -58,7 +58,6 @@ llm:
   reasoning:
     enabled: true
     max_tokens: 2000
-    effort: low
 agent:
   max_loops: 10
   language: japanese

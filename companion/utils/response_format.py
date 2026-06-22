@@ -89,18 +89,25 @@ def calc(data: str) -> str:
     - `syntax`: Are you using `<<<` and `>>>` correctly? No Markdown code fences (```) inside blocks.
     - `completeness`: No `...` or `TODO` left in the generated code.
 
-2. **Block Syntax**: Content inside `<<< >>>` blocks is always raw text/code. Markdown formatting (including code fences) is NOT used.
-3. **Symbol Syntax Only**: All actions use Sym-Ops v3.2 symbol syntax exclusively (`::action @path`).
-4. **Batch separators**: In `::execute_batch`, use `%%%` to separate actions.
-5. **Block end `>>>`**: Recognized ONLY at **column 0** (start of line). Indented `>>>` (e.g. doctests) is safe.
-6. **Short messages**: Use `@` inline for short text. Use `<<< >>>` content block for long text.
+2. **Reasoning Efficiency**: Match your thinking depth to task complexity:
+    - **Simple** (greetings, confirmations, status checks, yes/no): 1-3 lines of thought. Do not over-analyze.
+    - **Moderate** (single file edit, straightforward question): 3-8 lines. State your reasoning and act.
+    - **Complex** (multi-file changes, debugging, architecture, investigation): Reason thoroughly. Explore alternatives.
+    - NEVER re-derive the same conclusion. Once you decide, commit and move to action.
+    - NEVER draft a response multiple times. Write it once, then output it.
 
-7. **After `::investigate`**: Your IMMEDIATELY NEXT action MUST be an observation action
+3. **Block Syntax**: Content inside `<<< >>>` blocks is always raw text/code. Markdown formatting (including code fences) is NOT used.
+4. **Symbol Syntax Only**: All actions use Sym-Ops v3.2 symbol syntax exclusively (`::action @path`).
+5. **Batch separators**: In `::execute_batch`, use `%%%` to separate actions.
+6. **Block end `>>>`**: Recognized ONLY at **column 0** (start of line). Indented `>>>` (e.g. doctests) is safe.
+7. **Short messages**: Use `@` inline for short text. Use `<<< >>>` content block for long text.
+
+8. **After `::investigate`**: Your IMMEDIATELY NEXT action MUST be an observation action
    (`read_file`, `grep_files`, `list_directory`, or `run_command`).
    Do NOT call `::response` or `::duck_call` until you have gathered evidence.
    Empty `::response` (no message) is treated as a no-op — the loop will continue.
 
-8. **After `::submit_hypothesis`**: Choose exactly one:
+9. **After `::submit_hypothesis`**: Choose exactly one:
    - Not confirmed yet → verify with `read_file` / `grep_files` / `run_command`.
    - Confirmed → call `::finish_investigation @<conclusion>` **immediately**.
    Do NOT call `::edit_file`, `::write_file`, or `::response` until investigation is closed.
