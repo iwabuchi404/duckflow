@@ -8,6 +8,18 @@
 
 ## 📅 更新履歴
 
+### 2026-06-28: ツールエラー時の LLM 返答フォーマット検証と修正
+- 目的: ツール失敗時に LLM に返されるメッセージが正しい `[TOOL_RESULT]` / `::status error` 形式になっているか、また二重ラッピングや無言スキップなどの不具合がないかを検証。
+- 修正:
+  - `companion/core_action_results.py`: `normalize_tool_result()` を追加。`file_ops`/`sub_llm_tools` が返す事前整形 Sym-Ops 文字列と `task_tool` が返す `ToolResult` から実際の status/body を抽出し、executor が 1 回だけ `[TOOL_RESULT]` で包むようにした。`build_tool_result_message()` も `ToolResult` オブジェクトを直接扱えるように修正。
+  - `companion/core_action_executor.py`: 無言で必須パラメータ欠損アクションをスキップしていた処理を削除。`invoke_tool()` の明示的なエラーメッセージを LLM 履歴に返すようにした。共有ヘルパ `_handle_error()` を導入し、ツールエラー・例外・未知ツールの 3 経路で一貫したエラー履歴注入と fail-fast 制御を行うようにした。`invoke_tool()` 経由の `::status error` 結果を `::status ok` で誤包みしないようにした。
+  - `companion/tools/shell_tool.py`: タイムアウト・実行例外時に `::status error` 形式の文字列を返すように変更。
+  - `companion/tools/sub_llm_tools.py`: `analyze_structure` のファイル読み込み失敗・解析失敗時に `::status error` 形式を返すように変更。
+  - `companion/core_actions.py`: `action_run_command` でユーザー拒否時に `::status error` 形式を返すように変更。
+  - `tests/test_core_action_results.py`: `normalize_tool_result` と `build_tool_result_message` の回帰テストを追加。`build_action_summary` のテストを実装（reasoning 除外）に合わせて修正。
+  - `tests/test_core_execute_actions_minimal.py`: ツールエラー文字列の正しい包みと、必須パラメータ欠損時のフィードバックを検証するテストを追加。
+- 検証: `uv run python -X utf8 -m pytest tests/` → 540 passed / 2 skipped / 1 failed（失敗 1 件は pacemaker stagnation 検知の既存問題）。
+
 ### 2026-06-21: プロンプト・ツール・state 整合性検証と修正
 - 目的: LLM へ渡すプロンプト（templates.py / few_shot.py）と実際のツール登録・パラメータ・state モデルが一致しているかを詳細に検証。
 - 修正:

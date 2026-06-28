@@ -2,6 +2,7 @@
 Approval and tool-result formatting helpers for DuckAgent action execution.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -117,14 +118,25 @@ def build_tool_result_message(
     Returns:
         Enveloped message suitable for role="user" history injection.
     """
-    # Use history_content for the envelope if provided, otherwise raw content
-    envelope_content = history_content if history_content is not None else content
-    tool_res = ToolResult(
-        status=status,
-        tool_name=action.name,
-        target=action_target(action),
-        content=envelope_content,
-    )
+    if isinstance(content, ToolResult):
+        # Tool already formatted its own result; use it directly.
+        tool_res = content
+        if history_content is not None:
+            tool_res = ToolResult(
+                status=tool_res.status,
+                tool_name=tool_res.tool_name,
+                target=tool_res.target,
+                content=history_content,
+            )
+    else:
+        # Use history_content for the envelope if provided, otherwise raw content
+        envelope_content = history_content if history_content is not None else content
+        tool_res = ToolResult(
+            status=status,
+            tool_name=action.name,
+            target=action_target(action),
+            content=envelope_content,
+        )
     formatted_res = wrap_tool_result(format_symops_response(tool_res))
     if not approved:
         return formatted_res
@@ -135,9 +147,58 @@ def build_tool_result_message(
     )
 
 
+def normalize_tool_result(
+    result: Any, default_status: ToolStatus = ToolStatus.OK
+) -> tuple[ToolStatus, Any]:
+    """
+    Normalize a tool result that may already be formatted as Sym-Ops.
+
+    Some tools (file_ops, sub_llm_tools) return pre-formatted strings like
+    ``::status error\n::tool @target\n<<< body >>>``.  Some tools (task_tool)
+    return ``ToolResult`` dataclasses directly.  This helper extracts the
+    real status and body so the executor can wrap it once in the canonical
+    [TOOL_RESULT] envelope without double-formatting.
+
+    Args:
+        result: Raw tool return value.
+        default_status: Status to use when the result is not pre-formatted.
+
+    Returns:
+        A tuple of (status, content) suitable for conversation history.
+    """
+    if isinstance(result, ToolResult):
+        return result.status, result.content
+
+    if not isinstance(result, str) or not result.strip().startswith("::status "):
+        return default_status, result
+
+    first_line = result.splitlines()[0]
+    status_value = first_line[len("::status "):].strip().lower()
+    if status_value == "error":
+        status = ToolStatus.ERROR
+    elif status_value == "cancelled":
+        status = ToolStatus.ERROR
+    else:
+        status = ToolStatus.OK
+
+    # Extract the body between <<< and >>> if present, otherwise strip the status line
+    match = re.search(r"<<<\n?(.*?)\n?>>>", result, re.DOTALL)
+    if match:
+        body = match.group(1).strip()
+        return status, body
+
+    body = re.sub(r"^::status \w+\n?", "", result, count=1).strip()
+    return status, body
+
+
 def build_action_summary(action_list: Any) -> str:
     """
-    Format model reasoning and executed action names for assistant history.
+    Format executed action names for assistant history.
+
+    Reasoning is excluded from the summary to avoid bloating conversation
+    history with potentially large reasoning text from reasoning models.
+    Reasoning is displayed to the user via ui.print_thinking() but does
+    not need to be persisted in conversation history.
 
     Args:
         action_list: ActionList-like object with reasoning and actions.
@@ -146,8 +207,6 @@ def build_action_summary(action_list: Any) -> str:
         Assistant-role summary text, or an empty string.
     """
     lines = []
-    if action_list.reasoning:
-        lines.append(f">> {action_list.reasoning}")
     for action in action_list.actions:
         target = action.parameters.get("path", action.parameters.get("command", ""))
         lines.append(f":: {action.name} @{target}" if target else f":: {action.name}")

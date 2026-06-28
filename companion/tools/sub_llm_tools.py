@@ -48,12 +48,18 @@ class SubLLMTools:
             # Read entire file (for initial analysis)
             res = await file_ops.read_file(path, start=1, end=5000)
             if "error" in res:
-                return f"Error reading file: {res['error']}"
-            
+                return (
+                    f"::status error\n"
+                    f"Reason: Error reading file: {res['error']}"
+                )
+
             code = res["content"]
             return await self.manager.analyze_structure(code)
         except Exception as e:
-            return f"Error analyzing structure: {str(e)}"
+            return (
+                f"::status error\n"
+                f"Reason: Error analyzing structure: {str(e)}"
+            )
 
     async def generate_code(self, path: str, content: str) -> str:
         """

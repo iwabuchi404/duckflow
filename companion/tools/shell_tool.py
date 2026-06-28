@@ -35,17 +35,23 @@ class ShellTool:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-                return f"Error: Command timed out after {timeout} seconds: {command}"
-            
+                return (
+                    f"::status error\n"
+                    f"Reason: Command timed out after {timeout} seconds: {command}"
+                )
+
             output = ""
             if stdout:
                 output += stdout.decode('utf-8', errors='replace')
             if stderr:
                 output += f"\nstderr:\n{stderr.decode('utf-8', errors='replace')}"
-                
+
             return output.strip()
-            
+
         except Exception as e:
             error_msg = f"Error executing command '{command}': {str(e)}"
             logger.error(error_msg)
-            return error_msg
+            return (
+                f"::status error\n"
+                f"Reason: {error_msg}"
+            )

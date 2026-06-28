@@ -5,7 +5,6 @@ Handles the per-action loop: approval checks, tool invocation, error handling,
 fail-fast, and conversation history injection.
 """
 
-import inspect
 import logging
 import time
 
@@ -26,6 +25,7 @@ from companion.core_action_results import (
     build_denial_context,
     build_tool_result_message,
     get_approval_request,
+    normalize_tool_result,
 )
 from companion.core_action_invocation import invoke_tool
 from companion.tool_history_policy import compress_for_history
@@ -84,32 +84,62 @@ async def execute_actions(agent, action_list) -> list:
     # Move terminal actions to the end
     move_terminal_actions_to_end(action_list)
 
+    def _handle_error(action, error_content, t0, t1):
+        """Record a tool/action error, update history, and check fail-fast."""
+        nonlocal consecutive_errors
+        error_msg = f"Action '{action.name}' failed: {error_content}"
+        logger.error(error_msg)
+        agent.state.last_action_result = error_msg
+        ui.print_result(str(error_content), is_error=True)
+
+        agent.state.add_message(
+            "user",
+            build_tool_result_message(
+                action, error_content, status=ToolStatus.ERROR
+            ),
+        )
+
+        results.append(error_msg)
+
+        agent.pacemaker.update_vitals(action, error_msg, is_error=True)
+
+        dur_ms = (t1 - t0) * 1000
+        agent.timeline.record(
+            action_name=action.name,
+            start_ts=t0,
+            end_ts=t1,
+            is_error=True,
+            result_summary=error_msg,
+        )
+        event_logger.log_action_end(
+            action.name, dur_ms, is_error=True,
+            result_len=len(error_msg),
+        )
+
+        consecutive_errors += 1
+        if should_fail_fast(consecutive_errors):
+            remaining = remaining_actions_after(action_list, action)
+            if remaining > 0:
+                logger.warning(
+                    f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions"
+                )
+                ui.print_warning(
+                    build_fail_fast_warning(
+                        consecutive_errors, remaining
+                    )
+                )
+                agent.state.add_message(
+                    "user",
+                    build_fail_fast_history_message(
+                        consecutive_errors, remaining
+                    ),
+                )
+            return True
+        return False
+
     try:
         for action in action_list.actions:
             ui.print_action(action.name, action.parameters, action.thought)
-
-            # --- Skip actions with missing required parameters ---
-            # LLM sometimes calls tools without providing required params
-            # (e.g. ::propose_plan without goal, ::investigate without reason).
-            # Skip silently to avoid stagnation loops and pacemaker escalation.
-            if action.name in agent.tools:
-                _func = agent.tools[action.name]
-                try:
-                    _sig = inspect.signature(_func)
-                    _missing = False
-                    for _pname, _param in _sig.parameters.items():
-                        if _param.kind == inspect.Parameter.VAR_KEYWORD:
-                            continue
-                        if _param.default is inspect.Parameter.empty:
-                            if _pname not in action.parameters or action.parameters.get(_pname) is None:
-                                _missing = True
-                                break
-                    if _missing:
-                        logger.warning(f"Skipping {action.name}: missing required parameter '{_pname}'")
-                        ui.print_warning(f"{action.name}: 必須パラメータ '{_pname}' がないためスキップしました")
-                        continue
-                except (ValueError, TypeError):
-                    pass
 
             # --- Skip redundant mode-switch actions ---
             # If already in the target mode, skip the mode-switch action
@@ -166,26 +196,36 @@ async def execute_actions(agent, action_list) -> list:
                     was_approved = True
                     logger.info(f"User approved action: {action.name}")
 
+            _t0 = time.monotonic()
+
             if action.name in agent.tools:
                 try:
                     func = agent.tools[action.name]
                     logger.info(f"Calling tool: {action.name}")
                     event_logger.log_action_start(action.name, action.parameters)
 
-                    _t0 = time.monotonic()
-                    result, dropped_params = await invoke_tool(
+                    raw_result, dropped_params = await invoke_tool(
                         func, action.parameters
                     )
                     _t1 = time.monotonic()
-                    _is_err = False
+
                     if dropped_params:
                         logger.warning(
                             f"Tool '{action.name}': dropping unexpected params: {dropped_params}"
                         )
 
+                    # Normalize pre-formatted Sym-Ops results (e.g. from file_ops,
+                    # sub_llm_tools) so we wrap them once in the canonical envelope.
+                    result_status, result = normalize_tool_result(raw_result)
+
                     logger.info(
-                        f"Tool {action.name} returned. Result length: {len(str(result))}"
+                        f"Tool {action.name} returned. status={result_status.value}, length={len(str(result))}"
                     )
+
+                    if result_status == ToolStatus.ERROR:
+                        if _handle_error(action, result, _t0, _t1):
+                            break
+                        continue
 
                     agent.state.last_action_result = (
                         f"Action '{action.name}' succeeded: {result}"
@@ -245,57 +285,13 @@ async def execute_actions(agent, action_list) -> list:
                     )
 
                 except Exception as e:
-                    error_msg = f"Action '{action.name}' failed: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
-                    agent.state.last_action_result = error_msg
-                    ui.print_result(str(e), is_error=True)
+                    logger.error(f"Action '{action.name}' failed: {e}", exc_info=True)
 
                     syntax_error = build_action_exception_syntax_error(action, e)
                     if syntax_error is not None:
                         agent.state.last_syntax_errors.append(syntax_error)
 
-                    agent.state.add_message(
-                        "user",
-                        build_tool_result_message(
-                            action, e, status=ToolStatus.ERROR
-                        ),
-                    )
-
-                    results.append(error_msg)
-
-                    agent.pacemaker.update_vitals(action, error_msg, is_error=True)
-
-                    _dur_ms_err = (time.monotonic() - _t0) * 1000
-                    agent.timeline.record(
-                        action_name=action.name,
-                        start_ts=_t0,
-                        end_ts=time.monotonic(),
-                        is_error=True,
-                        result_summary=error_msg,
-                    )
-                    event_logger.log_action_end(
-                        action.name, _dur_ms_err, is_error=True,
-                        result_len=len(error_msg),
-                    )
-
-                    consecutive_errors += 1
-                    if should_fail_fast(consecutive_errors):
-                        remaining = remaining_actions_after(action_list, action)
-                        if remaining > 0:
-                            logger.warning(
-                                f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions"
-                            )
-                            ui.print_warning(
-                                build_fail_fast_warning(
-                                    consecutive_errors, remaining
-                                )
-                            )
-                            agent.state.add_message(
-                                "user",
-                                build_fail_fast_history_message(
-                                    consecutive_errors, remaining
-                                ),
-                            )
+                    if _handle_error(action, e, _t0, time.monotonic()):
                         break
             else:
                 msg = f"Unknown tool: {action.name}"
@@ -304,16 +300,13 @@ async def execute_actions(agent, action_list) -> list:
                 ui.print_result(msg, is_error=True)
 
                 available_tools = ", ".join(agent.tools.keys())
-                agent.state.add_message(
-                    "user",
-                    f"[Error] Tool '{action.name}' does not exist. "
+                error_content = (
+                    f"Tool '{action.name}' does not exist. "
                     f"Available tools: {available_tools}. "
-                    f"Please use one of the available tools.",
+                    f"Please use one of the available tools."
                 )
-
-                results.append(msg)
-
-                agent.pacemaker.update_vitals(action, msg, is_error=True)
+                if _handle_error(action, error_content, _t0, time.monotonic()):
+                    break
     except KeyboardInterrupt:
         ui.print_warning("Execution interrupted by user.")
         agent.state.add_message(

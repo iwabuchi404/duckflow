@@ -96,7 +96,8 @@ class CoreActions:
         else:
             ui.print_error("Command execution denied by user.")
             return (
-                f"Execution denied by user. "
+                f"::status error\n"
+                f"Reason: Execution denied by user. "
                 f"The user refused to run the command: '{command}'. "
                 f"Do not retry the same command without modification or explanation."
             )
@@ -168,6 +169,14 @@ class CoreActions:
         Returns:
             モード遷移の確認メッセージ
         """
+        # Already in investigation mode — don't re-enter, guide to observe
+        if self.state.get_context_mode() == "investigation":
+            return (
+                "You are ALREADY in Investigation Mode. "
+                "Do NOT call ::investigate again. "
+                "Observe first: ::read_file, ::grep_files, ::list_directory, or ::run_command. "
+                "Then ::submit_hypothesis."
+            )
         self.state.enter_investigation_mode()
         ui.print_system(f"🔍 Investigation Mode に切り替えました。理由: {reason}")
         logger.info(f"Entering Investigation Mode: {reason}")

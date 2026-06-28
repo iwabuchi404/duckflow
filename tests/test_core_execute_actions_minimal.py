@@ -199,3 +199,71 @@ async def test_execute_actions_moves_terminal_actions_to_the_end() -> None:
     assert calls == ["ping"]
     assert results == ["pong", "Responded to user."]
     assert [action.name for action in action_list.actions] == ["ping", "response"]
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_wraps_tool_error_with_error_status() -> None:
+    """
+    When a tool returns a pre-formatted Sym-Ops error string, the executor must
+    wrap it in a [TOOL_RESULT] envelope with ::status error, not ::status ok.
+    """
+    agent = _agent()
+
+    def failing_tool() -> str:
+        return (
+            "::status error\n"
+            "::failing_tool @task\n"
+            "<<<\n"
+            "Something went wrong\n"
+            ">>>"
+        )
+
+    agent.register_tool("failing_tool", failing_tool)
+    action_list = ActionList(
+        reasoning="tool will fail",
+        actions=[Action(name="failing_tool", parameters={})],
+    )
+
+    results = await agent.execute_actions(action_list)
+
+    assert len(results) == 1
+    assert "Something went wrong" in results[0]
+    assert "failed" in results[0]
+
+    tool_msg = agent.state.conversation_history[-2]
+    assert tool_msg["role"] == "user"
+    assert is_tool_result_message(tool_msg["content"])
+    assert "::status error" in tool_msg["content"]
+    assert "::failing_tool" in tool_msg["content"]
+    assert "Something went wrong" in tool_msg["content"]
+    assert "::status ok" not in tool_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_reports_missing_required_parameter() -> None:
+    """
+    Missing required parameters must produce explicit feedback to the LLM
+    instead of silently skipping the action.
+    """
+    agent = _agent()
+
+    def ping(index: int) -> str:
+        return f"pong-{index}"
+
+    agent.register_tool("ping", ping)
+    action_list = ActionList(
+        reasoning="missing required param",
+        actions=[Action(name="ping", parameters={})],
+    )
+
+    results = await agent.execute_actions(action_list)
+
+    assert len(results) == 1
+    assert "Required parameter 'index' is missing" in results[0]
+    assert "failed" in results[0]
+
+    tool_msg = agent.state.conversation_history[-2]
+    assert tool_msg["role"] == "user"
+    assert is_tool_result_message(tool_msg["content"])
+    assert "::status error" in tool_msg["content"]
+    assert "::ping" in tool_msg["content"]
