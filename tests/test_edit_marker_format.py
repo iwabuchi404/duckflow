@@ -9,6 +9,7 @@ import pytest
 from pathlib import Path
 
 from companion.tools.file_ops import FileOps
+from companion.tools.results import ToolResult, ToolStatus
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +187,9 @@ async def test_コンフリクトファイルへのマーカー編集は拒否�
 
     result = await file_ops.edit_file("conflict.py", content=content)
 
-    assert "conflict_markers_in_target" in result, (
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "conflict_markers_in_target" in result.content, (
         f"コンフリクトファイルへの編集がエラーにならなかった: {result}"
     )
     # ファイルは変更されていないこと
@@ -225,7 +228,9 @@ async def test_区切りのないブロックはパース失敗エラーにな�
 
     result = await file_ops.edit_file("nosep.py", content=content)
 
-    assert "marker_parse_failed" in result, (
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "marker_parse_failed" in result.content, (
         f"区切りなしブロックがエラーにならなかった: {result}"
     )
     assert target.read_text(encoding="utf-8") == original, (
@@ -334,6 +339,8 @@ async def test_存在しないテキストのSEARCHはfind_not_matchedエラー�
 
     result = await file_ops.edit_file("notfound.py", content=content)
 
-    assert "find_not_matched" in result, (
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "find_not_matched" in result.content, (
         f"存在しないテキストの SEARCH でエラーにならなかった: {result}"
     )

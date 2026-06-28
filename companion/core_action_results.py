@@ -2,7 +2,6 @@
 Approval and tool-result formatting helpers for DuckAgent action execution.
 """
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -145,50 +144,6 @@ def build_tool_result_message(
         f"{formatted_res}\n\n"
         "[System: User approved action. Proceed with next steps.]"
     )
-
-
-def normalize_tool_result(
-    result: Any, default_status: ToolStatus = ToolStatus.OK
-) -> tuple[ToolStatus, Any]:
-    """
-    Normalize a tool result that may already be formatted as Sym-Ops.
-
-    Some tools (file_ops, sub_llm_tools) return pre-formatted strings like
-    ``::status error\n::tool @target\n<<< body >>>``.  Some tools (task_tool)
-    return ``ToolResult`` dataclasses directly.  This helper extracts the
-    real status and body so the executor can wrap it once in the canonical
-    [TOOL_RESULT] envelope without double-formatting.
-
-    Args:
-        result: Raw tool return value.
-        default_status: Status to use when the result is not pre-formatted.
-
-    Returns:
-        A tuple of (status, content) suitable for conversation history.
-    """
-    if isinstance(result, ToolResult):
-        return result.status, result.content
-
-    if not isinstance(result, str) or not result.strip().startswith("::status "):
-        return default_status, result
-
-    first_line = result.splitlines()[0]
-    status_value = first_line[len("::status "):].strip().lower()
-    if status_value == "error":
-        status = ToolStatus.ERROR
-    elif status_value == "cancelled":
-        status = ToolStatus.ERROR
-    else:
-        status = ToolStatus.OK
-
-    # Extract the body between <<< and >>> if present, otherwise strip the status line
-    match = re.search(r"<<<\n?(.*?)\n?>>>", result, re.DOTALL)
-    if match:
-        body = match.group(1).strip()
-        return status, body
-
-    body = re.sub(r"^::status \w+\n?", "", result, count=1).strip()
-    return status, body
 
 
 def build_action_summary(action_list: Any) -> str:

@@ -6,6 +6,7 @@ import logging
 from typing import Optional, List, Dict, Any
 from companion.modules.sub_llm_manager import SubLLMManager
 from companion.tools.file_ops import file_ops
+from companion.tools.results import ToolResult
 from companion.ui import ui
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ class SubLLMTools:
         logger.info("Tool summarize_context called")
         return await self.manager.summarize(content)
 
-    async def analyze_structure(self, path: str) -> str:
+    async def analyze_structure(self, path: str) -> str | ToolResult:
         """
         Generate a structural outline (Code Map) of a file.
         Includes classes, functions, and their signatures without bodies.
@@ -48,20 +49,18 @@ class SubLLMTools:
             # Read entire file (for initial analysis)
             res = await file_ops.read_file(path, start=1, end=5000)
             if "error" in res:
-                return (
-                    f"::status error\n"
-                    f"Reason: Error reading file: {res['error']}"
+                return ToolResult.error(
+                    "analyze_structure", path, f"Error reading file: {res['error']}"
                 )
 
             code = res["content"]
             return await self.manager.analyze_structure(code)
         except Exception as e:
-            return (
-                f"::status error\n"
-                f"Reason: Error analyzing structure: {str(e)}"
+            return ToolResult.error(
+                "analyze_structure", path, f"Error analyzing structure: {str(e)}"
             )
 
-    async def generate_code(self, path: str, content: str) -> str:
+    async def generate_code(self, path: str, content: str) -> str | ToolResult:
         """
         Generate code using a specialized Sub-LLM worker.
         Returns a Sym-Ops formatted response summary without code body.
@@ -113,12 +112,8 @@ class SubLLMTools:
             context = ctx_match.group(1).strip()
 
         if not instruction:
-            return (
-                f"::status error\n"
-                f"::generate_code @{path}\n"
-                f"<<<\n"
-                f"Error: No [Instruction] section found.\n"
-                f">>>"
+            return ToolResult.error(
+                "generate_code", path, "Error: No [Instruction] section found."
             )
 
         try:
@@ -143,13 +138,7 @@ class SubLLMTools:
 
             if generated_code.startswith("Error:"):
                 logger.error(f"Sub-LLM returned error: {generated_code}")
-                return (
-                    f"::status error\n"
-                    f"::generate_code @{path}\n"
-                    f"<<<\n"
-                    f"{generated_code}\n"
-                    f">>>"
-                )
+                return ToolResult.error("generate_code", path, generated_code)
 
             logger.info(f"Code generated successfully (length: {len(generated_code)} chars)")
 
@@ -169,42 +158,27 @@ class SubLLMTools:
                     logger.info(f"File written successfully: {lines_count} lines")
 
                     # Success Response: コード本体は返さず、結果概要のみ返す
-                    return (
-                        f"::status ok\n"
-                        f"::generate_code @{path}\n"
-                        f"<<<\n"
-                        f"Success: Code saved.\n"
-                        f"Lines: {lines_count}\n"
-                        f">>>"
+                    return ToolResult.ok(
+                        "generate_code",
+                        path,
+                        f"Success: Code saved.\nLines: {lines_count}",
                     )
                 except Exception as e:
                     logger.error(f"Error saving generated code: {e}", exc_info=True)
-                    return (
-                        f"::status error\n"
-                        f"::generate_code @{path}\n"
-                        f"<<<\n"
-                        f"File Write Error: {str(e)}\n"
-                        f">>>"
+                    return ToolResult.error(
+                        "generate_code", path, f"File Write Error: {str(e)}"
                     )
             else:
                 # Cancelled Response
                 logger.info("User cancelled code generation")
-                return (
-                    f"::status cancelled\n"
-                    f"::generate_code @{path}\n"
-                    f"<<<\n"
-                    f"User cancelled. No changes made.\n"
-                    f">>>"
+                return ToolResult.error(
+                    "generate_code", path, "User cancelled. No changes made."
                 )
 
         except Exception as e:
             logger.error(f"Error in generate_code: {e}", exc_info=True)
-            return (
-                f"::status error\n"
-                f"::generate_code @{path}\n"
-                f"<<<\n"
-                f"Internal Error: {str(e)}\n"
-                f">>>"
+            return ToolResult.error(
+                "generate_code", path, f"Internal Error: {str(e)}"
             )
 
     async def _fetch_all_context(self, refs: List[str]) -> str:

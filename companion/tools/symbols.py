@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .results import ToolResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -125,7 +127,7 @@ def _extract_symbols(file_path: Path, source_lines: list[str]) -> List[SymbolInf
     return symbols
 
 
-async def list_symbols(path: str, workspace_root: str = ".") -> str:
+async def list_symbols(path: str, workspace_root: str = ".") -> str | ToolResult:
     """List all functions and classes in a Python file.
 
     Shows name, signature, line range, and docstring first line for each symbol.
@@ -150,15 +152,15 @@ async def list_symbols(path: str, workspace_root: str = ".") -> str:
     file_path = (root / path).resolve()
 
     if not file_path.exists():
-        return f"::status error\nReason: File not found: {path}"
+        return ToolResult.error("list_symbols", path, f"File not found: {path}")
 
     if file_path.suffix != ".py":
-        return f"::status error\nReason: Not a Python file: {path}"
+        return ToolResult.error("list_symbols", path, f"Not a Python file: {path}")
 
     try:
         source_lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError as e:
-        return f"::status error\nReason: Cannot read file: {e}"
+        return ToolResult.error("list_symbols", path, f"Cannot read file: {e}")
 
     symbols = _extract_symbols(file_path, source_lines)
 
@@ -176,7 +178,7 @@ async def find_definition(
     name: str,
     scope: str = ".",
     workspace_root: str = ".",
-) -> str:
+) -> str | ToolResult:
     """Find where a symbol (function/class) is defined.
 
     Searches all Python files under `scope` using ast. Returns the file path,
@@ -204,7 +206,7 @@ async def find_definition(
     search_dir = (root / scope).resolve()
 
     if not search_dir.exists():
-        return f"::status error\nReason: Path not found: {scope}"
+        return ToolResult.error("find_definition", name, f"Path not found: {scope}")
 
     # Collect all Python files
     py_files: List[Path] = []
@@ -246,7 +248,7 @@ async def replace_function(
     name: str,
     body: str,
     workspace_root: str = ".",
-) -> str:
+) -> str | ToolResult:
     r'''Replace a function or class definition in a Python file by name.
 
     Uses ast to locate the target symbol by name, then replaces its source
@@ -281,25 +283,24 @@ async def replace_function(
     file_path = (root / path).resolve()
 
     if not file_path.exists():
-        return f"::status error\nReason: File not found: {path}"
+        return ToolResult.error("replace_function", path, f"File not found: {path}")
 
     if file_path.suffix != ".py":
-        return f"::status error\nReason: Not a Python file: {path}"
+        return ToolResult.error("replace_function", path, f"Not a Python file: {path}")
 
     # Validate new body syntax
     try:
         ast.parse(body)
     except SyntaxError as e:
-        return (
-            f"::status error\n"
-            f"Reason: New body has syntax error: {e}"
+        return ToolResult.error(
+            "replace_function", path, f"New body has syntax error: {e}"
         )
 
     # Read source
     try:
         source = file_path.read_text(encoding="utf-8")
     except OSError as e:
-        return f"::status error\nReason: Cannot read file: {e}"
+        return ToolResult.error("replace_function", path, f"Cannot read file: {e}")
 
     source_lines = source.splitlines(keepends=True)
 
@@ -307,7 +308,7 @@ async def replace_function(
     try:
         tree = ast.parse(source, filename=str(file_path))
     except SyntaxError as e:
-        return f"::status error\nReason: File has syntax error: {e}"
+        return ToolResult.error("replace_function", path, f"File has syntax error: {e}")
 
     candidates: List[Tuple[int, int, str]] = []  # (lineno, end_lineno, kind)
 
@@ -320,16 +321,21 @@ async def replace_function(
                 candidates.append((node.lineno, end_line, kind))
 
     if not candidates:
-        return f"::status error\nReason: Symbol '{name}' not found in {path}"
+        return ToolResult.error(
+            "replace_function", path, f"Symbol '{name}' not found in {path}"
+        )
 
     if len(candidates) > 1:
         locs = "\n".join(
             f"  line {ln}-{end} ({kind})" for ln, end, kind in candidates
         )
-        return (
-            f"::status error\n"
-            f"Reason: Multiple definitions of '{name}' found:\n{locs}\n"
-            f"Use edit_file with SEARCH/REPLACE for ambiguous targets."
+        return ToolResult.error(
+            "replace_function",
+            path,
+            (
+                f"Multiple definitions of '{name}' found:\n{locs}\n"
+                f"Use edit_file with SEARCH/REPLACE for ambiguous targets."
+            ),
         )
 
     start_line, end_line, kind = candidates[0]
@@ -347,16 +353,15 @@ async def replace_function(
     try:
         ast.parse(new_source)
     except SyntaxError as e:
-        return (
-            f"::status error\n"
-            f"Reason: Replacement produces invalid syntax in file: {e}"
+        return ToolResult.error(
+            "replace_function", path, f"Replacement produces invalid syntax in file: {e}"
         )
 
     # Write the file
     try:
         file_path.write_text(new_source, encoding="utf-8")
     except OSError as e:
-        return f"::status error\nReason: Cannot write file: {e}"
+        return ToolResult.error("replace_function", path, f"Cannot write file: {e}")
 
     # Invalidate repo map cache
     try:

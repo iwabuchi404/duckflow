@@ -13,6 +13,7 @@ import pytest
 
 from companion.tools.file_ops import FileOps
 from companion.tools.hashline import HashlineHelper
+from companion.tools.results import ToolResult, ToolStatus
 
 
 class TestHashlineHelper:
@@ -309,8 +310,9 @@ class TestFileOpsCurrentBehavior:
         )
         result = await file_ops.edit_file("test.py", content=content)
 
-        assert "::status error" in result
-        assert "find_not_matched" in result
+        assert isinstance(result, ToolResult)
+        assert result.status == ToolStatus.ERROR
+        assert "find_not_matched" in result.content
         assert target.read_text(encoding="utf-8") == "line 1\nline 2\nline 3"
 
     @pytest.mark.asyncio
@@ -471,8 +473,9 @@ class TestDeleteLinesCurrentBehavior:
             ),
         )
 
-        assert "::status error" in result
-        assert "delete_lines_replace_not_empty" in result
+        assert isinstance(result, ToolResult)
+        assert result.status == ToolStatus.ERROR
+        assert "delete_lines_replace_not_empty" in result.content
         assert target.read_text(encoding="utf-8") == "keep 1\ndelete me\nkeep 2"
 
     @pytest.mark.asyncio
@@ -494,8 +497,9 @@ class TestDeleteLinesCurrentBehavior:
 
         result = await file_ops.delete_lines("test.py", find="line 2 changed")
 
-        assert "::status error" in result
-        assert "find_not_matched" in result
+        assert isinstance(result, ToolResult)
+        assert result.status == ToolStatus.ERROR
+        assert "find_not_matched" in result.content
 
     @pytest.mark.asyncio
     async def test_delete_lines_missing_find_reports_error(
@@ -516,8 +520,9 @@ class TestDeleteLinesCurrentBehavior:
 
         result = await file_ops.delete_lines("test.py", content="no frontmatter here")
 
-        assert "::status error" in result
-        assert "No 'find' snippet" in result
+        assert isinstance(result, ToolResult)
+        assert result.status == ToolStatus.ERROR
+        assert "No 'find' snippet" in result.content
 
     @pytest.mark.asyncio
     async def test_delete_lines_file_not_found(self, file_ops: FileOps) -> None:
@@ -532,5 +537,6 @@ class TestDeleteLinesCurrentBehavior:
         """
         result = await file_ops.delete_lines("nonexistent.py", find="line")
 
-        assert "::status error" in result
-        assert "File not found" in result
+        assert isinstance(result, ToolResult)
+        assert result.status == ToolStatus.ERROR
+        assert "File not found" in result.content

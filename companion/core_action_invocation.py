@@ -8,6 +8,7 @@ import logging
 from typing import Any, Callable
 
 from companion.config.config_loader import config
+from companion.tools.results import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,9 @@ def filter_call_parameters(
 
 
 async def invoke_tool(
-    func: Callable[..., Any], parameters: dict[str, Any]
+    func: Callable[..., Any],
+    parameters: dict[str, Any],
+    tool_name: str | None = None,
 ) -> tuple[Any, set[str]]:
     """
     Invoke a sync or async tool with filtered parameters and unified timeout.
@@ -51,11 +54,14 @@ async def invoke_tool(
     Args:
         func: Callable tool implementation.
         parameters: Raw action parameters emitted by the model.
+        tool_name: Registered tool name (defaults to ``func.__name__``).
 
     Returns:
         A tuple of tool result and dropped parameter names.
     """
     call_params, dropped = filter_call_parameters(func, parameters)
+    resolved_tool_name = tool_name or getattr(func, "__name__", str(func))
+    target = call_params.get("path", call_params.get("command", "task"))
 
     # Check for missing required parameters
     sig = inspect.signature(func)
@@ -65,30 +71,36 @@ async def invoke_tool(
         if param.default is inspect.Parameter.empty:
             # Required parameter
             value = call_params.get(name)
-            tool_name = getattr(func, "__name__", str(func))
             is_missing = value is None or (
-                tool_name == "propose_plan" and value == ""
+                resolved_tool_name == "propose_plan" and value == ""
             )
             if is_missing:
                 # Soft skip for propose_plan without goal — the LLM often
                 # calls it repeatedly without content after a plan exists.
                 # Return a non-error hint so the pacemaker doesn't escalate.
-                if tool_name == "propose_plan":
-                    missing_msg = (
-                        f"::status skip\n"
-                        f"propose_plan was called without a goal. "
-                        f"If a plan already exists, continue with ::note or "
-                        f"::mark_step_complete. If you need a new plan, "
-                        f"provide the plan content in a <<<...>>> block."
+                if resolved_tool_name == "propose_plan":
+                    return (
+                        ToolResult.ok(
+                            resolved_tool_name,
+                            target,
+                            "propose_plan was called without a goal. "
+                            "If a plan already exists, continue with ::note or "
+                            "::mark_step_complete. If you need a new plan, "
+                            "provide the plan content in a <<<...>>> block.",
+                        ),
+                        dropped,
                     )
-                else:
-                    missing_msg = (
-                        f"::status error\n"
-                        f"Reason: Required parameter '{name}' is missing for tool '{tool_name}'. "
-                        f"Provide the parameter in your action."
-                    )
-                logger.warning(f"Tool '{tool_name}' missing required param '{name}'")
-                return missing_msg, dropped
+                return (
+                    ToolResult.error(
+                        resolved_tool_name,
+                        target,
+                        (
+                            f"Required parameter '{name}' is missing for tool "
+                            f"'{resolved_tool_name}'. Provide the parameter in your action."
+                        ),
+                    ),
+                    dropped,
+                )
 
     if asyncio.iscoroutinefunction(func):
         timeout = config.get("tool.timeout", 120)
@@ -96,7 +108,13 @@ async def invoke_tool(
             result = await asyncio.wait_for(func(**call_params), timeout=timeout)
             return result, dropped
         except asyncio.TimeoutError:
-            tool_name = getattr(func, "__name__", str(func))
-            logger.warning(f"Tool '{tool_name}' timed out after {timeout}s")
-            return f"::status error\nReason: Tool timed out after {timeout}s", dropped
+            logger.warning(f"Tool '{resolved_tool_name}' timed out after {timeout}s")
+            return (
+                ToolResult.error(
+                    resolved_tool_name,
+                    target,
+                    f"Tool timed out after {timeout}s",
+                ),
+                dropped,
+            )
     return func(**call_params), dropped

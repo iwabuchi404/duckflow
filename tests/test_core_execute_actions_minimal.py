@@ -2,7 +2,7 @@ import pytest
 
 from companion.core import DuckAgent
 from companion.state.agent_state import Action, ActionList
-from companion.tools.results import is_tool_result_message
+from companion.tools.results import ToolResult, is_tool_result_message
 
 
 class DummyLLM:
@@ -209,14 +209,8 @@ async def test_execute_actions_wraps_tool_error_with_error_status() -> None:
     """
     agent = _agent()
 
-    def failing_tool() -> str:
-        return (
-            "::status error\n"
-            "::failing_tool @task\n"
-            "<<<\n"
-            "Something went wrong\n"
-            ">>>"
-        )
+    def failing_tool() -> ToolResult:
+        return ToolResult.error("failing_tool", "task", "Something went wrong")
 
     agent.register_tool("failing_tool", failing_tool)
     action_list = ActionList(

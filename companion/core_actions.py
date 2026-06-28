@@ -10,6 +10,7 @@ from companion.state.agent_state import (
     TaskStatus,
     MAX_HYPOTHESIS_ATTEMPTS,
 )
+from companion.tools.results import ToolResult
 from companion.tools.shell_tool import ShellTool
 from companion.ui import ui
 
@@ -75,7 +76,7 @@ class CoreActions:
         ui.print_conversation_message(message, speaker="assistant")
         return "Responded to user."
 
-    async def action_run_command(self, command: str) -> str:
+    async def action_run_command(self, command: str) -> str | ToolResult:
         """
         Execute a shell command with mandatory user approval.
         実行前に必ずユーザーに確認ダイアログを表示する。
@@ -95,11 +96,14 @@ class CoreActions:
             return await ShellTool.run_command(command)
         else:
             ui.print_error("Command execution denied by user.")
-            return (
-                f"::status error\n"
-                f"Reason: Execution denied by user. "
-                f"The user refused to run the command: '{command}'. "
-                f"Do not retry the same command without modification or explanation."
+            return ToolResult.error(
+                "run_command",
+                command,
+                (
+                    f"Execution denied by user. "
+                    f"The user refused to run the command: '{command}'. "
+                    f"Do not retry the same command without modification or explanation."
+                ),
             )
 
     async def action_exit(self) -> str:

@@ -4,6 +4,7 @@ import asyncio
 from typing import Tuple
 
 from companion.config.config_loader import config
+from companion.tools.results import ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,7 @@ class ShellTool:
     """
     
     @staticmethod
-    async def run_command(command: str) -> str:
+    async def run_command(command: str) -> str | ToolResult:
         """
         Execute a shell command.
         ⚑ BEFORE CALLING: set ::s0.3 or lower for destructive commands (rm, drop, reset).
@@ -35,9 +36,8 @@ class ShellTool:
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
-                return (
-                    f"::status error\n"
-                    f"Reason: Command timed out after {timeout} seconds: {command}"
+                return ToolResult.error(
+                    "run_command", command, f"Command timed out after {timeout} seconds: {command}"
                 )
 
             output = ""
@@ -51,7 +51,4 @@ class ShellTool:
         except Exception as e:
             error_msg = f"Error executing command '{command}': {str(e)}"
             logger.error(error_msg)
-            return (
-                f"::status error\n"
-                f"Reason: {error_msg}"
-            )
+            return ToolResult.error("run_command", command, error_msg)

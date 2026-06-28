@@ -11,6 +11,7 @@ import pytest
 from pathlib import Path
 
 from companion.tools.file_ops import FileOps
+from companion.tools.results import ToolResult, ToolStatus
 from companion.tools.symbols import list_symbols, find_definition, _extract_symbols
 
 
@@ -170,14 +171,18 @@ async def test_list_symbols_non_python(workspace):
     """list_symbols should reject non-Python files."""
     (workspace / "test.txt").write_text("not python")
     result = await list_symbols("test.txt", workspace_root=str(workspace))
-    assert "error" in result.lower()
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "not a python file" in result.content.lower()
 
 
 @pytest.mark.asyncio
 async def test_list_symbols_not_found(workspace):
     """list_symbols should handle missing files."""
     result = await list_symbols("nonexistent.py", workspace_root=str(workspace))
-    assert "error" in result.lower() or "not found" in result.lower()
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "not found" in result.content.lower()
 
 
 # --- symbols.py: find_definition ---

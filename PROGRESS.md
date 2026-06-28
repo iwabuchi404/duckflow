@@ -1,3 +1,17 @@
+### 2026-06-28: ツール返り値の統一（ToolResult 化）
+- 目的: プロンプト・ツール回りの改善案「1. ツール返り値の統一」に対応。`file_ops`/`symbols`/`sub_llm_tools`/`shell_tool`/`core_actions` が返していた `::status error` 形式の事前整形文字列を廃止し、すべて `ToolResult` オブジェクトで返すようにした。`normalize_tool_result()` という事後正規化を削除。
+- 修正:
+  - `companion/tools/file_ops.py`: `edit_file`/`_apply_edits`/`grep_files`/`delete_lines` のエラーを `ToolResult.error` に変更。`ToolResult` インポートと返り値型注釈を追加。
+  - `companion/tools/symbols.py`: `list_symbols`/`find_definition`/`replace_function` のエラーを `ToolResult.error` に変更。返り値型注釈を追加。
+  - `companion/tools/sub_llm_tools.py`: `analyze_structure`/`generate_code` の成功・エラー・キャンセルを `ToolResult` に変更。返り値型注釈を追加。
+  - `companion/tools/shell_tool.py`: タイムアウト・実行例外時を `ToolResult.error` に変更。返り値型注釈を追加。
+  - `companion/core_actions.py`: `action_run_command` のユーザー拒否時を `ToolResult.error` に変更。返り値型注釈を追加。
+  - `companion/core_action_invocation.py`: `invoke_tool` に `tool_name` 引数を追加。必須パラメータ欠損・タイムアウト時も `ToolResult` を返すように変更。
+  - `companion/core_action_executor.py`: `normalize_tool_result` インポートを削除。`invoke_tool` に登録ツール名を渡し、戻り値が `ToolResult` の場合はその `status`/`content` を直接使用するよう変更。
+  - `companion/core_action_results.py`: `normalize_tool_result()` を削除。未使用の `re` インポートを削除。
+  - `tests/`: 上記変更に伴い `test_tool_timeout.py`/`test_symbols.py`/`test_replace_function.py`/`test_hashline.py`/`test_edit_marker_format.py`/`test_core_action_results.py`/`test_core_execute_actions_minimal.py` を更新。`normalize_tool_result` 関連テストを削除。
+- 検証: `uv run python -X utf8 -m pytest tests/` → 534 passed / 2 skipped / 1 failed（失敗 1 件は pacemaker stagnation 検知の既存問題）。
+
 # Duckflow 開発進捗記録 (PROGRESS.md)
 
 ## 🎯 プロジェクト現状

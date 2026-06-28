@@ -3,6 +3,7 @@
 import pytest
 from pathlib import Path
 
+from companion.tools.results import ToolResult, ToolStatus
 from companion.tools.symbols import replace_function
 
 
@@ -96,8 +97,9 @@ async def test_replace_function_not_found(workspace):
         body="def nonexistent(): pass",
         workspace_root=str(workspace),
     )
-    assert "error" in result.lower()
-    assert "not found" in result.lower()
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "not found" in result.content.lower()
 
 
 @pytest.mark.asyncio
@@ -109,8 +111,9 @@ async def test_replace_function_file_not_found(workspace):
         body="def greet(): pass",
         workspace_root=str(workspace),
     )
-    assert "error" in result.lower()
-    assert "not found" in result.lower()
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "not found" in result.content.lower()
 
 
 @pytest.mark.asyncio
@@ -122,8 +125,9 @@ async def test_replace_function_syntax_error_in_body(workspace):
         body="def greet(:\n  pass",
         workspace_root=str(workspace),
     )
-    assert "error" in result.lower()
-    assert "syntax" in result.lower()
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "syntax" in result.content.lower()
 
     # File should be unchanged
     content = (workspace / "mod.py").read_text()
@@ -167,8 +171,9 @@ class Handler:
         body="def process():\n    return 3",
         workspace_root=str(workspace),
     )
-    assert "error" in result.lower()
-    assert "Multiple" in result or "ambiguous" in result.lower()
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "Multiple" in result.content or "ambiguous" in result.content.lower()
 
 
 @pytest.mark.asyncio
@@ -202,8 +207,9 @@ async def test_replace_function_non_python(workspace):
         body="def foo(): return 1",
         workspace_root=str(workspace),
     )
-    assert "error" in result.lower()
-    assert "Python" in result
+    assert isinstance(result, ToolResult)
+    assert result.status == ToolStatus.ERROR
+    assert "Python" in result.content
 
 
 @pytest.mark.asyncio

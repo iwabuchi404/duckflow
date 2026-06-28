@@ -6,6 +6,7 @@ from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 import yaml
 from .hashline import HashlineHelper
+from .results import ToolResult
 
 # find_files / grep_files のディレクトリ走査で除外するノイズディレクトリ。
 # ドット始まり（.git, .venv 等）以外にも、ビルド成果物やキャッシュ等
@@ -356,7 +357,18 @@ class FileOps:
         Write or overwrite a file with the provided content.
         ⚑ BEFORE CALLING: content must be complete — no '...' or 'TODO' placeholders.
         Creates parent directories automatically.
+        For large files that exceed token limits, use append_file instead:
+        call append_file with start=true first, then append_file to add more.
         """
+        # Detect truncated content (likely from token exhaustion)
+        stripped = content.rstrip() if content else ""
+        if stripped.endswith("...") or stripped.endswith("…"):
+            return (
+                f"⚠️ Content appears truncated (ends with '...'). "
+                f"File NOT written. Use ::append_file with start=true to write "
+                f"in chunks, or provide complete content."
+            )
+
         # Sanitize content before writing
         clean_content = self._sanitize_content(content)
 
@@ -365,6 +377,46 @@ class FileOps:
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(clean_content)
         return f"Successfully wrote to {path}"
+
+    async def append_file(self, path: str, content: str, start: bool = False) -> str:
+        """
+        Append content to a file, or start a new file with start=true.
+        Use this when a file is too large for a single write_file call
+        (i.e. when content would exceed output token limits).
+
+        Usage pattern for large files:
+        1. ::append_file @path start=true    (creates/overwrites file)
+        2. ::append_file @path               (appends more content)
+        3. ::append_file @path               (appends more content)
+        4. ::response @Done.                 (finish)
+
+        Args:
+            path: File path to write/append to.
+            content: Content to write or append.
+            start: If true, creates/overwrites the file (like write_file).
+                   If false, appends to existing file.
+        """
+        clean_content = self._sanitize_content(content)
+
+        full_path = self._get_full_path(path)
+        if start:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            mode = "w"
+        else:
+            if not full_path.exists():
+                return (
+                    f"Error: File {path} does not exist. "
+                    "Call append_file with start=true first."
+                )
+            mode = "a"
+
+        with open(full_path, mode, encoding="utf-8") as f:
+            f.write(clean_content)
+            if not clean_content.endswith("\n"):
+                f.write("\n")
+
+        action = "wrote" if start else "appended to"
+        return f"Successfully {action} {path} ({len(clean_content)} chars)"
 
     # --- SEARCH/REPLACE マーカー形式（aider 型）のサポート ---
     # 設計: docs/edit_format_search_replace_design.md
@@ -489,7 +541,7 @@ class FileOps:
         replace: str = "",
         occurrence: int = 1,
         content: str = "",
-    ) -> str:
+    ) -> str | ToolResult:
         '''
         Context Match (Fuzzy) based file editing with search-and-replace.
         Whitespace differences (tabs/spaces) are ignored during matching.
@@ -550,9 +602,9 @@ class FileOps:
         '''
         full_path = self._get_full_path(path)
         if not full_path.exists():
-            return f"::status error\nReason: File not found: {path}"
+            return ToolResult.error("edit_file", path, f"File not found: {path}")
         if not full_path.is_file():
-            return f"::status error\nReason: Path is a directory: {path}"
+            return ToolResult.error("edit_file", path, f"Path is a directory: {path}")
 
         import re as _re
 
@@ -573,24 +625,30 @@ class FileOps:
             except UnicodeDecodeError:
                 _existing = full_path.read_text(encoding="latin-1")
             if self._has_git_conflict_markers(_existing):
-                return (
-                    f"::status error\n"
-                    f"Reason: conflict_markers_in_target\n"
-                    f"Message: {path} contains unresolved git conflict markers. "
-                    f"SEARCH/REPLACE marker editing is unsafe here because '=======' cannot be "
-                    f"disambiguated from the protocol separator.\n"
-                    f"Fix: Use ::write_file to rewrite the conflicted region as a whole."
+                return ToolResult.error(
+                    "edit_file",
+                    path,
+                    (
+                        f"Reason: conflict_markers_in_target\n"
+                        f"Message: {path} contains unresolved git conflict markers. "
+                        f"SEARCH/REPLACE marker editing is unsafe here because '=======' cannot be "
+                        f"disambiguated from the protocol separator.\n"
+                        f"Fix: Use ::write_file to rewrite the conflicted region as a whole."
+                    ),
                 )
 
             marker_pairs = self._parse_search_replace_markers(content)
             if not marker_pairs:
-                return (
-                    f"::status error\n"
-                    f"Reason: marker_parse_failed\n"
-                    f"Message: Found a SEARCH marker but could not extract a valid "
-                    f"SEARCH/REPLACE pair (missing '=======' separator?).\n"
-                    f"Fix: Use the exact form:\n"
-                    f"<<<<<<< SEARCH\n(old code)\n=======\n(new code)\n>>>>>>> REPLACE"
+                return ToolResult.error(
+                    "edit_file",
+                    path,
+                    (
+                        f"Reason: marker_parse_failed\n"
+                        f"Message: Found a SEARCH marker but could not extract a valid "
+                        f"SEARCH/REPLACE pair (missing '=======' separator?).\n"
+                        f"Fix: Use the exact form:\n"
+                        f"<<<<<<< SEARCH\n(old code)\n=======\n(new code)\n>>>>>>> REPLACE"
+                    ),
                 )
 
             # 健全性チェック: REPLACE 側に git マーカーが残る → 誤パースの疑い。適用拒否
@@ -598,12 +656,15 @@ class FileOps:
                 if self._has_git_conflict_markers(mp["replace"]) or mp[
                     "replace"
                 ].lstrip().startswith(("<<<<<<<", ">>>>>>>")):
-                    return (
-                        f"::status error\n"
-                        f"Reason: marker_leak_in_replace\n"
-                        f"Message: The REPLACE content still contains conflict/marker lines, "
-                        f"which usually means the markers were mis-parsed.\n"
-                        f"Fix: Re-issue the edit, or use ::write_file for whole-region rewrites."
+                    return ToolResult.error(
+                        "edit_file",
+                        path,
+                        (
+                            f"Reason: marker_leak_in_replace\n"
+                            f"Message: The REPLACE content still contains conflict/marker lines, "
+                            f"which usually means the markers were mis-parsed.\n"
+                            f"Fix: Re-issue the edit, or use ::write_file for whole-region rewrites."
+                        ),
                     )
 
             edits_params.extend(marker_pairs)
@@ -658,7 +719,7 @@ class FileOps:
 
     async def _apply_edits(
         self, path: str, full_path: Path, edits_params: List[dict], content: str
-    ) -> str:
+    ) -> str | ToolResult:
         """
         収集済みの find/replace ペアを対象ファイルに適用する共通処理。
 
@@ -677,16 +738,19 @@ class FileOps:
         """
         if not edits_params:
             snippet = content[:100] + "..." if len(content) > 100 else content
-            return (
-                f"::status error\n"
-                f"Reason: No find/replace details found in content block.\n"
-                f"Received Content Snippet: [ {snippet} ]\n"
-                f"Fix: Ensure 'find:' and 'replace:' keys are clearly defined. Use | for multi-line blocks.\n"
-                f"Example:\n"
-                f"find: |\n"
-                f"    old code\n"
-                f"replace: |\n"
-                f"    new code"
+            return ToolResult.error(
+                "edit_file",
+                path,
+                (
+                    f"Reason: No find/replace details found in content block.\n"
+                    f"Received Content Snippet: [ {snippet} ]\n"
+                    f"Fix: Ensure 'find:' and 'replace:' keys are clearly defined. Use | for multi-line blocks.\n"
+                    f"Example:\n"
+                    f"find: |\n"
+                    f"    old code\n"
+                    f"replace: |\n"
+                    f"    new code"
+                ),
             )
 
         # ファイルを読み込み
@@ -723,13 +787,16 @@ class FileOps:
 
                 cand_str = "\n".join([f'  - line {l}: "{c}"' for l, c in candidates])
 
-                return (
-                    f"::status error\n"
-                    f"Reason: find_not_matched (Edit {i+1})\n"
-                    f"Message: The specified find snippet was not found in {path}.\n"
-                    f"Candidates near the first line of 'find':\n{cand_str}\n"
-                    f"{diff_hint}\n"
-                    f"Hint: Ensure the 'find' block exactly matches the characters in the file, including spaces and punctuation."
+                return ToolResult.error(
+                    "edit_file",
+                    path,
+                    (
+                        f"Reason: find_not_matched (Edit {i+1})\n"
+                        f"Message: The specified find snippet was not found in {path}.\n"
+                        f"Candidates near the first line of 'find':\n{cand_str}\n"
+                        f"{diff_hint}\n"
+                        f"Hint: Ensure the 'find' block exactly matches the characters in the file, including spaces and punctuation."
+                    ),
                 )
             resolved.append((match[0], match[1], r))
 
@@ -1158,7 +1225,7 @@ class FileOps:
         recursive: bool = True,
         max_results: int = 50,
         case_sensitive: bool = True,
-    ) -> str:
+    ) -> str | ToolResult:
         """
         Search file contents with a regex pattern (ripgrep-style).
 
@@ -1197,12 +1264,12 @@ class FileOps:
         try:
             regex = _re.compile(pattern, flags)
         except _re.error as e:
-            return f"::status error\nReason: Invalid regex pattern '{pattern}': {e}"
+            return ToolResult.error("grep_files", path, f"Invalid regex pattern '{pattern}': {e}")
 
         # Search directory
         start_dir = (self.workspace_root / path).resolve()
         if not start_dir.exists():
-            return f"::status error\nReason: Path not found: {path}"
+            return ToolResult.error("grep_files", path, f"Path not found: {path}")
 
         # Collect files
         if start_dir.is_file():
@@ -1292,7 +1359,7 @@ class FileOps:
 
     async def delete_lines(
         self, path: str, find: str = "", occurrence: int = 1, content: str = ""
-    ) -> str:
+    ) -> str | ToolResult:
         """
         Context Match (Fuzzy) based line deletion.
         指定したスニペットにマッチする行範囲をファイルから削除する。
@@ -1329,7 +1396,7 @@ class FileOps:
 
         full_path = self._get_full_path(path)
         if not full_path.exists():
-            return f"::status error\nReason: File not found: {path}"
+            return ToolResult.error("delete_lines", path, f"File not found: {path}")
 
         # 引数またはコンテンツ内から find を取得
         f_text = find
@@ -1338,32 +1405,41 @@ class FileOps:
         if content and self._content_uses_markers(content):
             marker_pairs = self._parse_search_replace_markers(content)
             if not marker_pairs:
-                return (
-                    f"::status error\n"
-                    f"Reason: marker_parse_failed\n"
-                    f"Message: Found a SEARCH marker but could not extract a valid "
-                    f"SEARCH/REPLACE deletion pair (missing '=======' separator?).\n"
-                    f"Fix: Use an empty REPLACE section:\n"
-                    f"<<<<<<< SEARCH\n(code to delete)\n=======\n>>>>>>> REPLACE"
+                return ToolResult.error(
+                    "delete_lines",
+                    path,
+                    (
+                        f"Reason: marker_parse_failed\n"
+                        f"Message: Found a SEARCH marker but could not extract a valid "
+                        f"SEARCH/REPLACE deletion pair (missing '=======' separator?).\n"
+                        f"Fix: Use an empty REPLACE section:\n"
+                        f"<<<<<<< SEARCH\n(code to delete)\n=======\n>>>>>>> REPLACE"
+                    ),
                 )
 
             if len(marker_pairs) != 1:
-                return (
-                    f"::status error\n"
-                    f"Reason: multiple_delete_markers_not_supported\n"
-                    f"Message: delete_lines accepts one SEARCH/REPLACE block per action.\n"
-                    f"Fix: Use one delete_lines action per deleted region, or use edit_file "
-                    f"for coordinated multi-region changes."
+                return ToolResult.error(
+                    "delete_lines",
+                    path,
+                    (
+                        f"Reason: multiple_delete_markers_not_supported\n"
+                        f"Message: delete_lines accepts one SEARCH/REPLACE block per action.\n"
+                        f"Fix: Use one delete_lines action per deleted region, or use edit_file "
+                        f"for coordinated multi-region changes."
+                    ),
                 )
 
             marker_pair = marker_pairs[0]
             if marker_pair.get("replace", "").strip():
-                return (
-                    f"::status error\n"
-                    f"Reason: delete_lines_replace_not_empty\n"
-                    f"Message: delete_lines only deletes the SEARCH block; the REPLACE "
-                    f"section must be empty.\n"
-                    f"Fix: Use edit_file when you want to replace text instead of deleting it."
+                return ToolResult.error(
+                    "delete_lines",
+                    path,
+                    (
+                        f"Reason: delete_lines_replace_not_empty\n"
+                        f"Message: delete_lines only deletes the SEARCH block; the REPLACE "
+                        f"section must be empty.\n"
+                        f"Fix: Use edit_file when you want to replace text instead of deleting it."
+                    ),
                 )
 
             f_text = marker_pair.get("find", "")
@@ -1379,10 +1455,13 @@ class FileOps:
                 pass
 
         if not f_text:
-            return (
-                f"::status error\n"
-                f"Reason: No 'find' snippet specified for deletion.\n"
-                f"Fix: Use 'find:' key in content block."
+            return ToolResult.error(
+                "delete_lines",
+                path,
+                (
+                    f"Reason: No 'find' snippet specified for deletion.\n"
+                    f"Fix: Use 'find:' key in content block."
+                ),
             )
 
         # ファイル読み込み
@@ -1399,10 +1478,13 @@ class FileOps:
             first_line = f_text.splitlines()[0] if f_text.strip() else ""
             candidates = self._find_similar_lines(file_lines, first_line)
             cand_str = "\n".join([f'  - line {l}: "{c}"' for l, c in candidates])
-            return (
-                f"::status error\n"
-                f"Reason: find_not_matched\n"
-                f"Candidates:\n{cand_str}"
+            return ToolResult.error(
+                "delete_lines",
+                path,
+                (
+                    f"Reason: find_not_matched\n"
+                    f"Candidates:\n{cand_str}"
+                ),
             )
 
         start_idx, end_idx = match

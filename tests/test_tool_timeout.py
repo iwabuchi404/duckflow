@@ -4,6 +4,7 @@ import asyncio
 import pytest
 
 from companion.core_action_invocation import invoke_tool, filter_call_parameters
+from companion.tools.results import ToolResult, ToolStatus
 
 
 @pytest.mark.asyncio
@@ -57,8 +58,10 @@ async def test_invoke_tool_timeout_returns_error():
 
     try:
         result, dropped = await invoke_tool(slow_tool, {})
-        assert "timed out" in result.lower()
-        assert "0.1" in result
+        assert isinstance(result, ToolResult)
+        assert result.status == ToolStatus.ERROR
+        assert "timed out" in result.content.lower()
+        assert "0.1" in result.content
     finally:
         if original is not None:
             config._config["tool"]["timeout"] = original
