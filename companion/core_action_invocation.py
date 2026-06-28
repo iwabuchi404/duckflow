@@ -56,6 +56,40 @@ async def invoke_tool(
         A tuple of tool result and dropped parameter names.
     """
     call_params, dropped = filter_call_parameters(func, parameters)
+
+    # Check for missing required parameters
+    sig = inspect.signature(func)
+    for name, param in sig.parameters.items():
+        if param.kind == inspect.Parameter.VAR_KEYWORD:
+            continue
+        if param.default is inspect.Parameter.empty:
+            # Required parameter
+            value = call_params.get(name)
+            tool_name = getattr(func, "__name__", str(func))
+            is_missing = value is None or (
+                tool_name == "propose_plan" and value == ""
+            )
+            if is_missing:
+                # Soft skip for propose_plan without goal — the LLM often
+                # calls it repeatedly without content after a plan exists.
+                # Return a non-error hint so the pacemaker doesn't escalate.
+                if tool_name == "propose_plan":
+                    missing_msg = (
+                        f"::status skip\n"
+                        f"propose_plan was called without a goal. "
+                        f"If a plan already exists, continue with ::note or "
+                        f"::mark_step_complete. If you need a new plan, "
+                        f"provide the plan content in a <<<...>>> block."
+                    )
+                else:
+                    missing_msg = (
+                        f"::status error\n"
+                        f"Reason: Required parameter '{name}' is missing for tool '{tool_name}'. "
+                        f"Provide the parameter in your action."
+                    )
+                logger.warning(f"Tool '{tool_name}' missing required param '{name}'")
+                return missing_msg, dropped
+
     if asyncio.iscoroutinefunction(func):
         timeout = config.get("tool.timeout", 120)
         try:

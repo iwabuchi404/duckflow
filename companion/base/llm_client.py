@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple
 from openai import OpenAI, AsyncOpenAI, APIError
@@ -7,9 +8,42 @@ from companion.state.agent_state import ActionList, Action
 from companion.config.config_loader import config
 from companion.base.response_preprocessor import default_preprocessor
 from companion.utils.sym_ops import SymOpsProcessor
-from companion.utils.preprocessor import reasoning_to_thought
+from companion.utils.preprocessor import reasoning_to_thought, extract_reasoning_actions, truncate_reasoning_loop
 
 logger = logging.getLogger(__name__)
+
+
+def _get_model_max_tokens(cfg, model_name: str, provider: str = None) -> Optional[int]:
+    """Look up model-specific max_output_tokens from config.
+
+    Priority: available_models entry > provider-specific config > None
+
+    Args:
+        cfg: Config object with get() method.
+        model_name: Model identifier (e.g. "z-ai/glm-4.7-flash").
+        provider: Provider name (e.g. "openrouter", "openai").
+
+    Returns:
+        max_output_tokens for the model if found, otherwise None.
+    """
+    # 1. Check available_models for an exact model match
+    models = cfg.get("llm.available_models", [])
+    if models:
+        for m in models:
+            if m.get("model") == model_name:
+                val = m.get("max_output_tokens")
+                if val:
+                    return int(val)
+
+    # 2. Check provider-specific config (llm.{provider}.max_output_tokens)
+    if provider:
+        provider_cfg = cfg.get(f"llm.{provider}", {})
+        if provider_cfg and isinstance(provider_cfg, dict):
+            val = provider_cfg.get("max_output_tokens")
+            if val:
+                return int(val)
+
+    return None
 
 
 def _extract_reasoning(message) -> str | None:
@@ -104,6 +138,14 @@ CONTEXT_LENGTH_FALLBACK: Dict[str, int] = {
     # DeepSeek
     "deepseek-chat": 128_000,
     "deepseek-r1": 128_000,
+    # Cloudflare Workers AI
+    "@cf/meta/llama-3.3-70b": 128_000,
+    "@cf/meta/llama-3.1-8b": 128_000,
+    "@cf/meta/llama-3.1-70b": 128_000,
+    "@cf/qwen/qwq-32b": 32_768,
+    "@cf/qwen/qwen2.5-coder-32b": 32_768,
+    "@cf/moonshotai/kimi-k2.7-code": 262_144,
+    "@cf/zai-org/glm-5.2": 262_144,
 }
 
 # API取得もフォールバックも失敗した場合のデフォルト
@@ -153,6 +195,9 @@ class LLMClient:
         elif self.provider == "google":
             api_key_env_var = "GOOGLE_API_KEY"
             self.api_key = os.getenv("GOOGLE_API_KEY")
+        elif self.provider == "cloudflare":
+            api_key_env_var = "CLOUDFLARE_API_TOKEN"
+            self.api_key = os.getenv("CLOUDFLARE_API_TOKEN")
         else:
             # Fallback: try common keys
             api_key_env_var = "OPENAI_API_KEY or GROQ_API_KEY"
@@ -189,6 +234,15 @@ class LLMClient:
             )
         elif self.provider == "openai":
             self.base_url = os.getenv("OPENAI_BASE_URL")  # None is OK, uses default
+        elif self.provider == "cloudflare":
+            account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+            if account_id:
+                self.base_url = (
+                    os.getenv("CLOUDFLARE_BASE_URL")
+                    or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+                )
+            else:
+                self.base_url = os.getenv("CLOUDFLARE_BASE_URL")
         else:
             self.base_url = os.getenv("OPENAI_BASE_URL")
 
@@ -287,6 +341,9 @@ class LLMClient:
             elif self.provider == "google":
                 api_key_env_var = "GOOGLE_API_KEY"
                 self.api_key = os.getenv("GOOGLE_API_KEY")
+            elif self.provider == "cloudflare":
+                api_key_env_var = "CLOUDFLARE_API_TOKEN"
+                self.api_key = os.getenv("CLOUDFLARE_API_TOKEN")
             else:
                 self.api_key = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY")
 
@@ -319,6 +376,15 @@ class LLMClient:
                 )
             elif self.provider == "openai":
                 self.base_url = os.getenv("OPENAI_BASE_URL")
+            elif self.provider == "cloudflare":
+                account_id = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+                if account_id:
+                    self.base_url = (
+                        os.getenv("CLOUDFLARE_BASE_URL")
+                        or f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
+                    )
+                else:
+                    self.base_url = os.getenv("CLOUDFLARE_BASE_URL")
             else:
                 self.base_url = os.getenv("OPENAI_BASE_URL")
 
@@ -565,8 +631,10 @@ class LLMClient:
             presence_penalty = config.get("llm.presence_penalty", 0.1)
 
             # Ensure max_tokens is pulled reliably, default to 8192 for long code generation
+            # Priority: explicit arg > model-specific config > llm.max_output_tokens > default
             max_tokens = (
                 max_tokens
+                or _get_model_max_tokens(config, self.model, self.provider)
                 or config.get("llm.max_output_tokens")
                 or config.get("max_output_tokens", 8192)
             )
@@ -577,19 +645,26 @@ class LLMClient:
             # NOTE: effort and max_tokens are mutually exclusive per OpenRouter API.
             reasoning_param = None
             reasoning_cfg = config.get("llm.reasoning", {})
-            if reasoning_cfg and reasoning_cfg.get("enabled", False) and self.provider == "openrouter":
-                effort = reasoning_cfg.get("effort")
-                rmax = reasoning_cfg.get("max_tokens")
-                if effort and rmax:
-                    logger.warning(
-                        f"reasoning.effort='{effort}' and reasoning.max_tokens={rmax} "
-                        f"are mutually exclusive. Using max_tokens (ignoring effort)."
-                    )
-                    reasoning_param = {"max_tokens": int(rmax)}
-                elif effort:
-                    reasoning_param = {"effort": effort}
-                elif rmax:
-                    reasoning_param = {"max_tokens": int(rmax)}
+            if reasoning_cfg and self.provider == "openrouter":
+                if reasoning_cfg.get("enabled", False):
+                    effort = reasoning_cfg.get("effort")
+                    rmax = reasoning_cfg.get("max_tokens")
+                    if effort and rmax:
+                        logger.warning(
+                            f"reasoning.effort='{effort}' and reasoning.max_tokens={rmax} "
+                            f"are mutually exclusive. Using max_tokens (ignoring effort)."
+                        )
+                        reasoning_param = {"max_tokens": int(rmax)}
+                    elif effort:
+                        reasoning_param = {"effort": effort}
+                    elif rmax:
+                        reasoning_param = {"max_tokens": int(rmax)}
+                    else:
+                        reasoning_param = {"enabled": True}
+                else:
+                    # Explicitly disable reasoning for thinking models
+                    # that have it ON by default (Qwen3, DeepSeek-R1, etc.)
+                    reasoning_param = {"enabled": False}
 
                 if reasoning_param:
                     logger.info(
@@ -644,11 +719,28 @@ class LLMClient:
                 reasoning_text = _extract_reasoning(response.choices[0].message)
                 if reasoning_text:
                     logger.info(
-                        f"🧠 Extracted reasoning ({len(reasoning_text)} chars), "
-                        f"prepending as >> Thought"
+                        f"🧠 Extracted reasoning ({len(reasoning_text)} chars)"
                     )
+                    # Truncate degenerate reasoning loops before processing
+                    reasoning_text = truncate_reasoning_loop(reasoning_text)
                     thought_block = reasoning_to_thought(reasoning_text)
-                    content = f"{thought_block}\n\n{content}" if content else thought_block
+                    reasoning_actions = extract_reasoning_actions(reasoning_text)
+
+                    # If body is empty but reasoning has :: actions, use them as body
+                    if not content and reasoning_actions:
+                        logger.info(
+                            f"🧠 Body empty, extracting {len(reasoning_actions)} chars "
+                            f"of :: actions from reasoning as body"
+                        )
+                        content = reasoning_actions
+
+                    # Prepend reasoning thoughts as context (marked, not parsed as actions)
+                    if thought_block:
+                        content = (
+                            f"<!--reasoning-start-->\n{thought_block}\n<!--reasoning-end-->\n\n{content}"
+                            if content
+                            else f"<!--reasoning-start-->\n{thought_block}\n<!--reasoning-end-->"
+                        )
 
                 if content:
                     break  # 正常なレスポンスを取得
@@ -855,6 +947,21 @@ class LLMClient:
 
         processor = SymOpsProcessor()
 
+        # Extract reasoning block (added by chat() or process()) so that
+        # reasoning-derived >> Thought lines are not mixed into result.thoughts.
+        # This prevents the Thought-only fallback from firing when the LLM body
+        # is empty but reasoning was present (common with reasoning models that
+        # hit max_tokens during reasoning).
+        reasoning_thoughts_text = ""
+        _REASONING_BLOCK_RE = re.compile(
+            r"<!--reasoning-start-->.*?<!--reasoning-end-->",
+            re.DOTALL,
+        )
+        reasoning_match = _REASONING_BLOCK_RE.search(content)
+        if reasoning_match:
+            reasoning_thoughts_text = reasoning_match.group(0)
+            content = _REASONING_BLOCK_RE.sub("", content).strip()
+
         try:
             # Process with Sym-Ops (Auto-Repair -> Fuzzy Parse)
             result = processor.process(content)
@@ -890,6 +997,9 @@ class LLMClient:
                     "submit_hypothesis": "hypothesis",
                     "finish_investigation": "conclusion",
                     "search_archives": "query",
+                    "find_definition": "name",
+                    "mark_task_complete": "task_index",
+                    "retrieve_result": "cache_id",
                     "note": "message",
                     "response": "message",
                     "duck_call": "message",
@@ -912,12 +1022,18 @@ class LLMClient:
                 if action.path:
                     if tool_name == "read_file":
                         # 拡張構文: "path 1 500" → path, start=1, end=500
-                        parts = action.path.split()
-                        params["path"] = parts[0]
-                        if len(parts) >= 2 and parts[1].isdigit():
+                        # But paths may contain spaces (e.g. "docs/Sym-Ops v2.md")
+                        # Only treat as pagination if the last 1-2 parts are pure digits
+                        parts = action.path.rsplit(None, 2)  # split from right, max 3 parts
+                        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+                            params["path"] = parts[0]
                             params["start"] = int(parts[1])
-                        if len(parts) >= 3 and parts[2].isdigit():
                             params["end"] = int(parts[2])
+                        elif len(parts) == 2 and parts[1].isdigit():
+                            params["path"] = parts[0]
+                            params["start"] = int(parts[1])
+                        else:
+                            params["path"] = action.path
                     elif tool_name == "mark_task_complete":
                         # @0, @1 などを task_index に変換
                         try:
@@ -967,10 +1083,18 @@ class LLMClient:
                 )
 
             # Construct ActionList
-            # Join thoughts for reasoning
+            # Join thoughts for reasoning (include reasoning-derived thoughts)
+            all_thoughts = []
+            if reasoning_thoughts_text:
+                # Extract >> Thought lines from the reasoning block
+                for line in reasoning_thoughts_text.split("\n"):
+                    stripped = line.strip()
+                    if stripped.startswith(">>"):
+                        all_thoughts.append(stripped[2:].strip())
+            all_thoughts.extend(result.thoughts)
             reasoning = (
-                "\n".join(result.thoughts)
-                if result.thoughts
+                "\n".join(all_thoughts)
+                if all_thoughts
                 else "No reasoning provided."
             )
 
@@ -979,9 +1103,14 @@ class LLMClient:
             # it likely got stuck in analysis paralysis or hit max_tokens.
             # Convert the thoughts into a response action so the user sees
             # the content and the loop terminates gracefully.
+            #
+            # IMPORTANT: Only count body-derived thoughts (result.thoughts),
+            # not reasoning-derived thoughts. Reasoning models that hit
+            # max_tokens during reasoning produce no body content, and
+            # surfacing raw reasoning as a response is not useful.
             if not actions and result.thoughts:
                 logger.warning(
-                    f"Thought-only response: {len(result.thoughts)} thoughts, "
+                    f"Thought-only response: {len(result.thoughts)} body thoughts, "
                     f"0 actions. Converting thoughts to response action."
                 )
                 thought_text = "\n".join(result.thoughts)
@@ -990,6 +1119,22 @@ class LLMClient:
                         name="response",
                         parameters={"message": thought_text},
                         thought="Auto-converted from thought-only output (analysis paralysis guard)",
+                    )
+                )
+            elif not actions and not result.thoughts and reasoning_thoughts_text:
+                # Reasoning was present but body was empty (no thoughts, no actions)
+                # This means reasoning consumed all tokens but no :: actions were
+                # found in reasoning either. Ask user to continue.
+                logger.warning(
+                    "Empty body response with reasoning only. "
+                    "LLM likely hit max_tokens during reasoning. "
+                    "No actions found in reasoning either."
+                )
+                actions.append(
+                    Action(
+                        name="response",
+                        parameters={"message": "推論でトークンを使い切りました。続けてください。"},
+                        thought="Empty body — reasoning consumed all tokens, no actions in reasoning",
                     )
                 )
 

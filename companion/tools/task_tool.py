@@ -60,7 +60,7 @@ class TaskTool:
         
         [Explicit Action Binding]
         If a task involves a deterministic tool call, provide an 'action' object.
-        Available Tools: write_file, run_command, read_file, edit_lines
+        Available Tools: write_file, run_command, read_file, edit_file
         
         Action Schema: {{ "name": "tool_name", "parameters": {{ ... }} }}
         

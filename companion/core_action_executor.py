@@ -5,6 +5,7 @@ Handles the per-action loop: approval checks, tool invocation, error handling,
 fail-fast, and conversation history injection.
 """
 
+import inspect
 import logging
 import time
 
@@ -87,30 +88,59 @@ async def execute_actions(agent, action_list) -> list:
         for action in action_list.actions:
             ui.print_action(action.name, action.parameters, action.thought)
 
+            # --- Skip actions with missing required parameters ---
+            # LLM sometimes calls tools without providing required params
+            # (e.g. ::propose_plan without goal, ::investigate without reason).
+            # Skip silently to avoid stagnation loops and pacemaker escalation.
+            if action.name in agent.tools:
+                _func = agent.tools[action.name]
+                try:
+                    _sig = inspect.signature(_func)
+                    _missing = False
+                    for _pname, _param in _sig.parameters.items():
+                        if _param.kind == inspect.Parameter.VAR_KEYWORD:
+                            continue
+                        if _param.default is inspect.Parameter.empty:
+                            if _pname not in action.parameters or action.parameters.get(_pname) is None:
+                                _missing = True
+                                break
+                    if _missing:
+                        logger.warning(f"Skipping {action.name}: missing required parameter '{_pname}'")
+                        ui.print_warning(f"{action.name}: 必須パラメータ '{_pname}' がないためスキップしました")
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+            # --- Skip redundant mode-switch actions ---
+            # If already in the target mode, skip the mode-switch action
+            # to prevent loops where LLM repeatedly calls ::investigate.
+            _current_mode = agent.state.get_context_mode()
+            if action.name == "investigate" and _current_mode == "investigation":
+                logger.warning("Skipping investigate: already in investigation mode")
+                ui.print_warning("investigate: 既にInvestigation Modeです。::read_file等で観察してください")
+                continue
+
             # --- Investigation Mode Guard ---
+            # Investigation mode is read-only. File mutations are blocked and
+            # reported as syntax feedback so the agent explicitly closes
+            # investigation with ::finish_investigation before editing.
             if should_block_investigation_edit(
                 action, agent.state.get_context_mode()
             ):
-                investigation_block = build_investigation_edit_block(action)
-                ui.print_warning(
-                    f"Investigation Mode中のファイル変更をブロック: {action.name}"
+                logger.info(
+                    f"Blocking {action.name}: file mutations are not allowed "
+                    f"during Investigation Mode"
                 )
-                logger.warning(
-                    f"Blocked edit action in Investigation Mode: {action.name}"
-                )
-                agent.state.last_action_result = investigation_block.message
-                agent.state.last_syntax_errors.append(
-                    investigation_block.syntax_error
-                )
+                block = build_investigation_edit_block(action)
+                agent.state.last_syntax_errors.append(block.syntax_error)
                 agent.state.add_message(
                     "user",
                     build_tool_result_message(
-                        action,
-                        investigation_block.message,
-                        status=ToolStatus.ERROR,
+                        action, block.message, status=ToolStatus.ERROR
                     ),
                 )
-                results.append(investigation_block.message)
+                agent.pacemaker.update_vitals(action, block.message, is_error=True)
+                results.append(block.message)
                 continue
 
             # --- Approval Check ---

@@ -202,7 +202,7 @@ Choose ONE of the following:
   [Not confirmed yet] Verify with: read_file / grep_files / run_command
   [Confirmed]         Close with:  ::finish_investigation @<conclusion>
 Do NOT call ::edit_file, ::write_file, or ::response until investigation is closed.
-Remaining hypothesis attempts before duck_call: 1"""},
+Remaining hypothesis attempts before duck_call: 4"""},
     # Turn 4: Hypothesis is confirmed — close investigation immediately
     {"role": "assistant", "content": """\
 >> Evidence is clear: auth.py:42 dereferences user without None check. Root cause confirmed.

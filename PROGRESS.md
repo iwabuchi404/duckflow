@@ -8,6 +8,19 @@
 
 ## 📅 更新履歴
 
+### 2026-06-21: プロンプト・ツール・state 整合性検証と修正
+- 目的: LLM へ渡すプロンプト（templates.py / few_shot.py）と実際のツール登録・パラメータ・state モデルが一致しているかを詳細に検証。
+- 修正:
+  - `companion/core_tools.py`: モード別公開ツールマッピングを整備。Investigation Mode に `run_command` を追加し、Planning Mode から `submit_hypothesis`/`finish_investigation` を削除、Investigation Mode から `propose_plan`/`generate_tasks` を削除。
+  - `companion/core_tools.py`: ツール説明生成で content-block パラメータ（edit_file の find/replace/occurrence 等）と `**kwargs` をインライン表示から除外。`@target` 対象パラメータに `query`/`task_index`/`name`/`conclusion`/`cache_id` を追加。
+  - `companion/base/llm_client.py`: `@target` 特殊マッピングに `find_definition`→`name`、`mark_task_complete`→`task_index`、`retrieve_result`→`cache_id` を追加。
+  - `companion/prompts/templates.py`: Investigation Mode の仮説上限を 2 回表記から 5 回（`MAX_HYPOTHESIS_ATTEMPTS`）へ修正。
+  - `companion/prompts/few_shot.py`: 仮説例の残り試行回数を 1 回から 4 回へ修正。
+  - `companion/tools/task_tool.py`: サブ LLM タスク生成プロンプトで存在しない `edit_lines` を `edit_file` に修正。
+  - `companion/core_action_executor.py`: Investigation Mode 中の編集アクションを自動終了ではなくブロックするよう修正（プロンプト「Investigation Mode は read-only」と整合）。
+  - `companion/core_action_executor.py` / `companion/core_action_invocation.py`: 必須パラメータ判定で 0 など falsy 値を「欠損」と誤判定しないよう修正。
+- 検証: `uv run python -X utf8 -m pytest tests/` → 531 passed / 2 skipped / 2 failed（失敗 2 件は本件と無関係な既存問題: action_summary の reasoning 出力方針・pacemaker stagnation 検知）。
+
 ### 2026-06-21: Sprint 2 完了 (S2-3 core.py 詳細分割)
 - companion/core_actions.py (新規): action_* メソッド群（note/response/run_command/exit/execute_tasks/investigate/submit_hypothesis/finish_investigation/execute_batch/noop）を CoreActions クラスとして抽出。DuckAgent は self._actions で保持。
 - companion/core_action_executor.py (新規): execute_actions() をスタンドアロン関数として抽出。DuckAgent.execute_actions は薄い委譲メソッドのみ残置。

@@ -32,14 +32,14 @@ MODE_TOOL_MAPPING = {
         "grep_files",
         "edit_file",
         "write_file",
+        "append_file",
         "delete_lines",
         "delete_file",
         "analyze_structure",
         "run_command",
         "generate_code",
         "investigate",
-        "submit_hypothesis",
-        "finish_investigation",
+        "propose_plan",
         "replace_function",
     },
     "investigation": {
@@ -48,9 +48,7 @@ MODE_TOOL_MAPPING = {
         "find_files",
         "grep_files",
         "analyze_structure",
-        "propose_plan",
-        "generate_tasks",
-        "investigate",
+        "run_command",
         "submit_hypothesis",
         "finish_investigation",
     },
@@ -61,6 +59,7 @@ MODE_TOOL_MAPPING = {
         "grep_files",
         "edit_file",
         "write_file",
+        "append_file",
         "delete_lines",
         "delete_file",
         "analyze_structure",
@@ -93,6 +92,7 @@ def register_default_tools(agent: Any) -> None:
 
     agent.register_tool("read_file", file_ops.read_file)
     agent.register_tool("write_file", file_ops.write_file)
+    agent.register_tool("append_file", file_ops.append_file)
     agent.register_tool("list_directory", file_ops.list_files)
     agent.register_tool("edit_file", file_ops.edit_file)
     agent.register_tool("find_files", file_ops.find_files)
@@ -167,22 +167,38 @@ def get_tool_descriptions(
             # Params that are passed inside the <<<>>> content block,
             # not as inline key=value arguments
             _CONTENT_BLOCK_PARAMS = {
-                "content", "body", "code", "plan_data",
+                "content", "body", "code", "plan_data", "goal",
                 "find", "replace", "occurrence",  # edit_file: SEARCH/REPLACE in block
             }
 
-            for p_name in sig.parameters:
+            for p_name, p in sig.parameters.items():
+                # **kwargs はツール説明に出さない
+                if p.kind == inspect.Parameter.VAR_KEYWORD:
+                    continue
                 if (
                     p_name
-                    in ["path", "command", "reason", "hypothesis", "message", "result"]
+                    in [
+                        "path",
+                        "command",
+                        "reason",
+                        "hypothesis",
+                        "message",
+                        "result",
+                        "query",
+                        "task_index",
+                        "name",
+                        "conclusion",
+                        "cache_id",
+                    ]
                     and not target_param
                 ):
                     target_param = p_name
-                elif (
-                    p_name in _CONTENT_BLOCK_PARAMS
-                    and not content_param
-                ):
-                    content_param = p_name
+                elif p_name in _CONTENT_BLOCK_PARAMS:
+                    # 最初の content-block パラメータだけ「ブロックあり」を示す。
+                    # 残り（edit_file の find/replace/occurrence 等）は
+                    # SEARCH/REPLACE マーカー内に含まれるためインライン表示しない。
+                    if not content_param:
+                        content_param = p_name
                 else:
                     params_list.append(f"{p_name}=val")
 

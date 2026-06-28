@@ -64,6 +64,17 @@ not just the output.
 - All sensitive values (API keys, secrets, tokens) must remain redacted in output.
 </memory_and_context>
 
+<reasoning_guidance>
+## Reasoning Model Guidance
+If you are a reasoning model (your output includes a reasoning/thinking field):
+- Keep reasoning concise. Aim for 3-5 key points, not exhaustive analysis.
+- ALWAYS write your Sym-Ops actions (::action) in the response body, NOT in the reasoning field.
+- The reasoning field is for thinking. The body is for action.
+- If you write :: actions in reasoning, they will be extracted and executed,
+  but it is more reliable to write them directly in the body.
+- Do NOT repeat the same action if it was already executed. Check the conversation history.
+</reasoning_guidance>
+
 <tools>
 ## Tool Usage & Schema
 
@@ -166,8 +177,11 @@ Path to goal is unclear. Follow the OODA Loop:
 4. Validate  — Test the theory
 
 - Proven: `::finish_investigation`
-- Stuck after two attempts: `::duck_call` with your best hypothesis and what's blocking you
+- Stuck after 5 failed hypotheses: `::duck_call` with your best hypothesis and what's blocking you
 - Keep ::s HIGH (≥ 0.7) — Do not modify files during investigation
+- **Do NOT call ::investigate if already in Investigation Mode.**
+  Check the Mode: field in your context. If it says investigation,
+  go straight to observing (::read_file, ::grep_files, etc.).
 </mode_investigation>
 """
 
