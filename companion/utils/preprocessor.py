@@ -3,8 +3,11 @@ Sym-Ops v2 Preprocessor
 Converts various LLM output formats to valid Sym-Ops v2
 """
 import re
+import logging
 from typing import Tuple, List
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 class SymOpsPreprocessor:
@@ -370,6 +373,13 @@ def strip_reasoning_tags(text: str) -> Tuple[str, bool, "str | None"]:
 def reasoning_to_thought(reasoning: str) -> str:
     """Convert reasoning text to Sym-Ops >> Thought lines.
 
+    Lines that look like Sym-Ops actions (starting with ::) are skipped
+    because they are the model's internal planning, not actual thoughts.
+    Converting them to >> would make the parser ignore them as thoughts,
+    preventing the intended action from ever executing.
+
+    Use extract_reasoning_actions() to get the skipped :: lines.
+
     Args:
         reasoning: Raw reasoning text from imd blocks or API reasoning field.
 
@@ -377,4 +387,94 @@ def reasoning_to_thought(reasoning: str) -> str:
         Sym-Ops formatted thought block (each non-empty line prefixed with >>).
     """
     lines = reasoning.strip().split("\n")
-    return "\n".join(f">> {line.strip()}" for line in lines if line.strip())
+    thought_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("::"):
+            continue
+        thought_lines.append(f">> {stripped}")
+    return "\n".join(thought_lines)
+
+
+def extract_reasoning_actions(reasoning: str) -> str:
+    """Extract :: action lines from reasoning text.
+
+    Reasoning models sometimes write their intended Sym-Ops actions inside
+    the reasoning field instead of the response body. This function extracts
+    those lines so they can be appended to the body content for parsing.
+
+    Only lines that START with :: are extracted. Inline or backtick-quoted
+    :: patterns are NOT extracted because reasoning text often mentions
+    actions in explanatory context, which would create false positives.
+
+    Args:
+        reasoning: Raw reasoning text from imd blocks or API reasoning field.
+
+    Returns:
+        Newline-joined action lines (e.g. "::read_file @path"), or empty string.
+    """
+    lines = reasoning.strip().split("\n")
+    action_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("::"):
+            # Normalize ":: " to "::" (remove space after ::)
+            normalized = "::" + stripped[2:].lstrip()
+            action_lines.append(normalized)
+    return "\n".join(action_lines)
+
+
+def truncate_reasoning_loop(reasoning: str, min_block: int = 3, max_repeats: int = 2) -> str:
+    """Detect and truncate repeated multi-line blocks in reasoning text.
+
+    Reasoning models (Qwen3, DeepSeek-R1, etc.) can enter degenerate loops
+    where the same multi-line block is repeated dozens of times, consuming
+    all output tokens. This function detects such loops and keeps only
+    the first `max_repeats` occurrences.
+
+    Args:
+        reasoning: Raw reasoning text from API reasoning field or think blocks.
+        min_block: Minimum block size (in lines) to consider for repetition.
+        max_repeats: Maximum number of times a block may appear before truncation.
+
+    Returns:
+        Reasoning text with repeated blocks truncated.
+    """
+    lines = reasoning.split("\n")
+    if len(lines) < min_block * max_repeats * 2:
+        return reasoning
+
+    # Try block sizes from larger to smaller
+    for block_size in range(min(len(lines) // 2, 20), min_block - 1, -1):
+        for start in range(len(lines) - block_size * max_repeats):
+            block = lines[start:start + block_size]
+            block_text = "\n".join(block)
+
+            # Count how many times this block appears consecutively
+            repeat_count = 1
+            pos = start + block_size
+            while pos + block_size <= len(lines):
+                next_block = lines[pos:pos + block_size]
+                if "\n".join(next_block) == block_text:
+                    repeat_count += 1
+                    pos += block_size
+                else:
+                    break
+
+            if repeat_count > max_repeats:
+                # Keep first max_repeats copies, truncate the rest
+                kept = lines[:start + block_size * max_repeats]
+                removed = len(lines) - len(kept)
+                kept.append(
+                    f"\n[SYSTEM] Reasoning loop detected: {removed} lines "
+                    f"truncated (block of {block_size} lines repeated {repeat_count} times)"
+                )
+                logger.warning(
+                    f"Reasoning loop: block of {block_size} lines repeated "
+                    f"{repeat_count} times, truncated {removed} lines"
+                )
+                return "\n".join(kept)
+
+    return reasoning

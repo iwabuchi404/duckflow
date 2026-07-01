@@ -70,7 +70,7 @@ def summarize_result(
         # Still cache the original if it was significantly compressed
         if len(mechanical) < len(result):
             cache_id = agent.result_cache.put(action_name, {}, result)
-            hint = f"\n[Full data: retrieve_result @{cache_id}]"
+            hint = f"\n[Full data: ::retrieve_result cache_id={cache_id}]"
             return mechanical + hint, cache_id
         return mechanical, None
 
@@ -81,12 +81,12 @@ def summarize_result(
             summarized = sub_llm.summarize(mechanical)
             if summarized and len(summarized) < len(mechanical):
                 cache_id = agent.result_cache.put(action_name, {}, result)
-                hint = f"\n[Full data: retrieve_result @{cache_id}]"
+                hint = f"\n[Full data: ::retrieve_result cache_id={cache_id}]"
                 return summarized + hint, cache_id
         except Exception as e:
             logger.warning(f"SubLLM summarization failed for {action_name}: {e}")
 
     # Fallback: use mechanical summary + cache the original
     cache_id = agent.result_cache.put(action_name, {}, result)
-    hint = f"\n[Full data: retrieve_result @{cache_id}]"
+    hint = f"\n[Full data: ::retrieve_result cache_id={cache_id}]"
     return mechanical + hint, cache_id

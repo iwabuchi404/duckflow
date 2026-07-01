@@ -25,7 +25,6 @@ from companion.core_action_results import (
     build_denial_context,
     build_tool_result_message,
     get_approval_request,
-    normalize_tool_result,
 )
 from companion.core_action_invocation import invoke_tool
 from companion.tool_history_policy import compress_for_history
@@ -35,6 +34,7 @@ from companion.modules.event_logger import event_logger
 from companion.tools.file_ops import file_ops
 from pathlib import Path
 from companion.tools.results import (
+    ToolResult,
     ToolStatus,
     serialize_to_text,
 )
@@ -205,7 +205,7 @@ async def execute_actions(agent, action_list) -> list:
                     event_logger.log_action_start(action.name, action.parameters)
 
                     raw_result, dropped_params = await invoke_tool(
-                        func, action.parameters
+                        func, action.parameters, tool_name=action.name
                     )
                     _t1 = time.monotonic()
 
@@ -214,9 +214,14 @@ async def execute_actions(agent, action_list) -> list:
                             f"Tool '{action.name}': dropping unexpected params: {dropped_params}"
                         )
 
-                    # Normalize pre-formatted Sym-Ops results (e.g. from file_ops,
-                    # sub_llm_tools) so we wrap them once in the canonical envelope.
-                    result_status, result = normalize_tool_result(raw_result)
+                    # Tool implementations may return ToolResult objects directly. Plain
+                    # strings / dicts are treated as successful results.
+                    if isinstance(raw_result, ToolResult):
+                        result_status = raw_result.status
+                        result = raw_result.content
+                    else:
+                        result_status = ToolStatus.OK
+                        result = raw_result
 
                     logger.info(
                         f"Tool {action.name} returned. status={result_status.value}, length={len(str(result))}"

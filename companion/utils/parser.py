@@ -25,7 +25,7 @@ class DuckflowParser:
     # Section patterns
     REASONING_PATTERN = re.compile(r'^>>\s*(.*)$')
     VITAL_PATTERN = re.compile(r'^::c([0-1]\.[0-9])\s+::s([0-1]\.[0-9])\s+::m([0-1]\.[0-9])\s+::f([0-1]\.[0-9])$')
-    ACTION_PATTERN = re.compile(r'^::([a-zA-Z_]+)\s+(@[^\s]+)(.*)$')
+    ACTION_PATTERN = re.compile(r'^::([a-zA-Z_]+)\s+@(.+)$')
     BATCH_START_PATTERN = re.compile(r'^::execute_batch$')
     BATCH_SEPARATOR = re.compile(r'^%%%(?:\s*|$)')
     CONTENT_START = re.compile(r'^<<<$')
@@ -127,8 +127,17 @@ class DuckflowParser:
                 action_match = self.ACTION_PATTERN.match(line.strip())
                 if action_match:
                     action_name = action_match.group(1)
-                    target = action_match.group(2)
-                    params_str = action_match.group(3) or ''
+                    target_raw = action_match.group(2)
+                    
+                    # Split target into path and key=value params
+                    # Path is everything before the first " key=" pattern
+                    param_start = re.search(r'\s+(\w+)=', target_raw)
+                    if param_start:
+                        target = target_raw[:param_start.start()].strip()
+                        params_str = target_raw[param_start.start():].strip()
+                    else:
+                        target = target_raw.strip()
+                        params_str = ''
                     
                     # Parse params
                     params = {}

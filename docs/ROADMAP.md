@@ -100,31 +100,42 @@
 ## Sprint 4 — 中長期の大きな価値
 
 > 設計合意済みの大規模変更と、プロダクト中核の新機能。サブタスクまで具体化済み。
-> 推奨着手順: **T-1（tier 整備）→ V-A → V-B → L-a/L-b → V-C → L-c → L-d/L-e → P系 → V-D**
+> 推奨着手順: **T-1（tier 整備）→ V-A → PC-1（Proactive Continuation）→ V-B → L-a/L-b → V-C → L-c → L-d/L-e → P系 → V-D**
 
 ### #9 モデル tier 整備（V系・edit §7 の共通前提）
 
-| ID | 項目 | 重要度 | 優先度 | 内容 |
-|---|---|:-:|:-:|---|
-| **T-1** | `available_models` に tier（高/中/低）追加 ＋ `/model` tier 選択 | 中 | 中 | ユーザーが UI でモデルを高/中/低 で選べる。tier 概念は **V-B（repair_load×tier）・edit_format §7（tier別フォーマット）・V-D（モデル別較正）の共通前提**。これらの前に整備する |
+| ID | 項目 | 重要度 | 優先度 | 状態 | 内容 |
+|---|---|:-:|:-:|:-:|---|
+| **T-1** | `available_models` に tier（高/中/低）追加 ＋ `/model` tier 選択 | 中 | 中 | ❌ 未着手 | ユーザーが UI でモデルを高/中/低 で選べる。tier 概念は **V-B（repair_load×tier）・edit_format §7（tier別フォーマット）・V-D（モデル別較正）の共通前提**。これらの前に整備する |
 
 ### #10 Vitals 再設計（`docs/vitals_redesign_design.md` 準拠）
 
+| ID | 項目 | 重要度 | 優先度 | 状態 | 内容 |
+|---|---|:-:|:-:|:-:|---|
+| **V-A1** | Safety Score Interceptor 削除 | 高 | 高 | ✅ 完了 | 2026-06-22 対応。`action_list_safety_score` / `requires_safety_confirmation` / `build_safety_cancel_message` を `core_action_pipeline.py` から削除。`core_action_executor.py` の Safety Score Interceptor ブロックを削除。破壊的操作の承認は既存の `get_approval_request` 機構に一本化。`SAFETY_CONFIRMATION_THRESHOLD` 定数も削除 |
+| **V-A2** | Pacemaker を実測値ベース化 | 高 | 高 | ✅ 完了 | 2026-06-22 対応。`calculate_max_loops` を execution_history 由来の `_calculate_measured_factor` へ置換（申告 vitals 係数廃止）。`check_health` から `SAFETY_DEPLETED` / `FOCUS_LOST` / `CONFIDENCE_LOW` を削除。`update_vitals` から vitals 操作（safety/focus 加減算・`decay()` 呼び出し）を削除。`reset()` から `vitals.recover()` を削除。`Vitals.decay()` / `Vitals.recover()` メソッドと `AgentState.update_vitals()` を削除。`InterventionReason.type` から申告由来の3種を削除 |
+| **V-A3** | 申告頻度ルール変更 | 中 | 高 | ✅ 完了 | 2026-06-22 対応。システムプロンプト §2 を「全アクション前の申告」から `::response` / `::duck_call` / 破壊的編集提案時のみに変更。内部アクション（read_file, grep等）には申告不要と明記。`::s` によるゲートが廃止されたことをプロンプトに明示 |
+| **V-B1** | MeasuredVitals / ReportedVitals 再編 | 高 | 高 | ❌ 未着手 | 実測（success_rate/error_rate/repair_load/progress）と申告（confidence/risk_note）に分離 |
+| **V-B2** | 実測算出ロジック | 高 | 高 | ❌ 未着手 | 移動窓 N=10。repair_load は SymOpsProcessor の warnings を集計 |
+| **V-B3** | 二重表示 UI | 中 | 中 | ❌ 未着手 | 申告/実績を並置、乖離時に注記（「自信過剰気味」等） |
+| **V-B4** | warnings → repair_load 配線 | 中 | 中 | ❌ 未着手 | `ParsedResult.warnings` を core 経由で Pacemaker へ |
+| **V-C1** | ルーブリック繋留をプロンプトへ | 中 | 中 | ❌ 未着手 | 「read_file していない編集は confidence ≤0.6」等の申告規則 |
+| **V-C2** | 低confidence + risk_note の few-shot 例 | 中 | 中 | ❌ 未着手 | 弱モデルは例がないと低値を申告しないため必須 |
+| **V-D1** | 較正学習モジュール | 低 | 低 | ❌ 未着手 | モデル別 JSON で申告バケット×実成功を記録、自信過剰係数を算出 |
+| **V-D2** | 実績側表示へ較正係数反映 | 低 | 低 | ❌ 未着手 | 二重表示の実績値を較正で補正 |
+
+> 依存: **A → PC-1 → B → C → D**。A/B は safety ゲート形骸の実害解消なので最優先。PC-1（Proactive Continuation）は V-A3 の直後に挟む: プロンプト領域が新鮮なうちに実装し、V-B2 の実測算出ロジックに進捗判定を統合できる。
+
+### #10.5 Proactive Continuation（`docs/design/proactive-continuation.md` 準拠）
+
+> エージェントが「指示待ち」を脱し、自律的にタスクを継続実行する機能。
+> V-A3（申告頻度ルール変更）の直後に実装する。設計は `docs/design/proactive-continuation.md` に確定済み。
+
 | ID | 項目 | 重要度 | 優先度 | 内容 |
 |---|---|:-:|:-:|---|
-| **V-A1** | Safety Score Interceptor 削除 | 高 | 高 | 2026-06-22 対応。`action_list_safety_score` / `requires_safety_confirmation` / `build_safety_cancel_message` を `core_action_pipeline.py` から削除。`core_action_executor.py` の Safety Score Interceptor ブロックを削除。破壊的操作の承認は既存の `get_approval_request` 機構に一本化。`SAFETY_CONFIRMATION_THRESHOLD` 定数も削除 |
-| **V-A2** | Pacemaker を実測値ベース化 | 高 | 高 | 2026-06-22 対応。`calculate_max_loops` を execution_history 由来の `_calculate_measured_factor` へ置換（申告 vitals 係数廃止）。`check_health` から `SAFETY_DEPLETED` / `FOCUS_LOST` / `CONFIDENCE_LOW` を削除。`update_vitals` から vitals 操作（safety/focus 加減算・`decay()` 呼び出し）を削除。`reset()` から `vitals.recover()` を削除。`Vitals.decay()` / `Vitals.recover()` メソッドと `AgentState.update_vitals()` を削除。`InterventionReason.type` から申告由来の3種を削除 |
-| **V-A3** | 申告頻度ルール変更 | 中 | 高 | 2026-06-22 対応。システムプロンプト §2 を「全アクション前の申告」から `::response` / `::duck_call` / 破壊的編集提案時のみに変更。内部アクション（read_file, grep等）には申告不要と明記。`::s` によるゲートが廃止されたことをプロンプトに明示 |
-| **V-B1** | MeasuredVitals / ReportedVitals 再編 | 高 | 高 | 実測（success_rate/error_rate/repair_load/progress）と申告（confidence/risk_note）に分離 |
-| **V-B2** | 実測算出ロジック | 高 | 高 | 移動窓 N=10。repair_load は SymOpsProcessor の warnings を集計 |
-| **V-B3** | 二重表示 UI | 中 | 中 | 申告/実績を並置、乖離時に注記（「自信過剰気味」等） |
-| **V-B4** | warnings → repair_load 配線 | 中 | 中 | `ParsedResult.warnings` を core 経由で Pacemaker へ |
-| **V-C1** | ルーブリック繋留をプロンプトへ | 中 | 中 | 「read_file していない編集は confidence ≤0.6」等の申告規則 |
-| **V-C2** | 低confidence + risk_note の few-shot 例 | 中 | 中 | 弱モデルは例がないと低値を申告しないため必須 |
-| **V-D1** | 較正学習モジュール | 低 | 低 | モデル別 JSON で申告バケット×実成功を記録、自信過剰係数を算出 |
-| **V-D2** | 実績側表示へ較正係数反映 | 低 | 低 | 二重表示の実績値を較正で補正 |
+| **PC-1** | Proactive Continuation 実装 | 高 | 高 | `/proactive on/off` コマンドで切り替え。ON時: LLMが `::note` で次ステップを宣言して継続、`::response` は完了時のみ。安全弁1: 進捗判定ベースの `no_progress_count` 改修（無条件+1 → 実際の進捗判定）。安全弁2: `max_loops` を proactive ON時は50に切替。`AgentState` フラグ・`duckflow.yaml` 設定・プロンプト注入・`core.py` ループ制御改修。既に `AgentState` フラグ追加と `duckflow.yaml` 設定セクション追加は完了済 |
 
-> 依存: **A → B → C → D**。A/B は safety ゲート形骸の実害解消なので最優先。
+> 依存: **V-A3 → PC-1 → V-B2**。V-A3（プロンプト調整）の後に実装することでプロンプト変更の衝突を回避。PC-1 の進捗判定ロジックは V-B2（実測算出ロジック）に統合可能。
 
 ### #11 Phase 2 長期記憶（PROPOSAL-004 を現行アーキテクチャに翻訳）
 
@@ -180,6 +191,7 @@ S1-4（テスト）─┐
               │                          ↑
               ├─→ S3-3（ツール結果履歴管理）
 Sprint 4 V系 ←─┘（core 分割後に着手しやすい）─┘
+              V-A3（申告頻度）→ PC-1（Proactive Continuation）→ V-B2（実測算出）
 ```
 
 - **S2-3**（core 分割）は S1-4（テスト）が安全網。テスト無しの大規模リファクタは禁止。

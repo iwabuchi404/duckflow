@@ -434,7 +434,7 @@ class CommandHandler:
                 current_model = self.agent.llm.model
                 
                 # List models from config
-                providers = ["openai", "anthropic", "groq", "openrouter", "google"]
+                providers = ["openai", "anthropic", "groq", "openrouter", "google", "cloudflare"]
                 for provider in providers:
                     model = config.get(f"llm.{provider}.model", "N/A")
                     if model != "N/A":

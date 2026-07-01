@@ -187,6 +187,14 @@ class AgentState(BaseModel):
     # 直前ターンの構文エラー（次ターンのプロンプトに注入後クリアされる）
     last_syntax_errors: List[SyntaxErrorInfo] = Field(default_factory=list)
 
+    # Proactive Continuation
+    proactive_continuation_enabled: bool = Field(
+        False, description="Proactive Continuationモードの有効/無効"
+    )
+    steps_since_last_checkin: int = Field(
+        0, description="最後のL3チェックインからのステップ数"
+    )
+
     # セッション管理
     session_id: str = Field(
         default_factory=lambda: datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -278,6 +286,11 @@ class AgentState(BaseModel):
 
         if self.last_action_result:
             context.append(f"\nLast Result:\n{self.last_action_result}")
+
+        if self.proactive_continuation_enabled:
+            context.append(
+                f"Proactive Continuation: ON (steps since checkin: {self.steps_since_last_checkin})"
+            )
 
         return "\n".join(context)
 

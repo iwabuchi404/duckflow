@@ -157,6 +157,21 @@ class DuckPacemaker:
 
         return None
 
+    # Tools that are read-only/investigative — repeating them is normal
+    # during investigation and should not trigger stagnation.
+    _READ_ONLY_TOOLS = frozenset({
+        "read_file",
+        "list_directory",
+        "find_files",
+        "grep_files",
+        "analyze_structure",
+        "get_project_tree",
+        "list_symbols",
+        "find_definition",
+        "search_archives",
+        "retrieve_result",
+    })
+
     def _detect_stagnation(self) -> bool:
         """停滞検知：同じアクションや結果の繰り返し"""
         if len(self.execution_history) < 4:
@@ -169,22 +184,29 @@ class DuckPacemaker:
         action_names = [a.name for a in actions]
 
         if len(set(action_names)) == 1:
+            action_name = action_names[0]
             # 提案ツール（propose_plan）は除外（内容が異なるため）
-            if action_names[0] != "propose_plan":
+            # 読み取り系ツールも除外（調査中の再読は正常）
+            if action_name != "propose_plan" and action_name not in self._READ_ONLY_TOOLS:
                 # パラメータもチェック
                 # Action.parameters は Dict なので文字列化して比較
                 params = [str(a.parameters) for a in actions]
                 if len(set(params)) == 1:
                     logger.warning(
-                        "Stagnation: Same action and params repeated 3 times"
+                        f"Stagnation: Same action '{action_name}' and params repeated 3 times"
                     )
                     return True
 
-        # 2. 同じ結果の繰り返し
-        results = [item["result_summary"] for item in recent]
-        if len(set(results)) == 1:
-            logger.warning("Stagnation: Same result repeated 3 times")
-            return True
+        # 2. 同じ結果の繰り返し（読み取り系ツールは除外）
+        recent_actions = [item["action"].name for item in recent]
+        if len(set(recent_actions)) == 1 and recent_actions[0] in self._READ_ONLY_TOOLS:
+            # 読み取り系ツールの同じ結果は停滞ではない
+            pass
+        else:
+            results = [item["result_summary"] for item in recent]
+            if len(set(results)) == 1:
+                logger.warning("Stagnation: Same result repeated 3 times")
+                return True
 
         return False
 

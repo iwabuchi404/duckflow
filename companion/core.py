@@ -400,7 +400,12 @@ class DuckAgent:
                                 break
 
                             # --- No-progress counter ---
-                            no_progress_count += 1
+                            # Only count as "no progress" when actions failed.
+                            # Successful reads/writes during investigation are progress.
+                            if self.pacemaker.consecutive_errors > 0:
+                                no_progress_count += 1
+                            else:
+                                no_progress_count = 0
                             if no_progress_count >= MAX_NO_PROGRESS:
                                 logger.warning(
                                     f"Autonomous loop: {no_progress_count} consecutive "

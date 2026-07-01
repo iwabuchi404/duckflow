@@ -3,7 +3,7 @@ import yaml
 import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
-from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter, strip_reasoning_tags, reasoning_to_thought
+from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter, strip_reasoning_tags, reasoning_to_thought, extract_reasoning_actions, truncate_reasoning_loop
 
 logger = logging.getLogger(__name__)
 
@@ -1053,9 +1053,22 @@ class SymOpsProcessor:
 
         # If reasoning was extracted from imd blocks, prepend as >> Thought lines
         if reasoning_content:
+            # Truncate degenerate reasoning loops before processing
+            reasoning_content = truncate_reasoning_loop(reasoning_content)
             thought_block = reasoning_to_thought(reasoning_content)
-            raw_output = f"{thought_block}\n\n{raw_output}"
-            logger.info(f"Extracted reasoning from imd blocks ({len(reasoning_content)} chars), prepended as >> Thought")
+            reasoning_actions = extract_reasoning_actions(reasoning_content)
+
+            # If body is empty but reasoning has :: actions, use them as body
+            if not raw_output.strip() and reasoning_actions:
+                logger.info(
+                    f"Body empty after stripping think tags, "
+                    f"extracting {len(reasoning_actions)} chars of :: actions from reasoning"
+                )
+                raw_output = reasoning_actions
+
+            if thought_block:
+                raw_output = f"<!--reasoning-start-->\n{thought_block}\n<!--reasoning-end-->\n\n{raw_output}"
+                logger.info(f"Extracted reasoning from imd blocks ({len(reasoning_content)} chars), prepended as >> Thought")
 
         # Phase -0.5: Repetition detection — LLMが同じ行を異常に繰り返している場合、
         # 最初の数回だけ保持して残りを切り詰める（パーサーの負荷と無意味なアクション実行を防ぐ）
