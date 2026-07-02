@@ -22,7 +22,65 @@
 
 ## 📅 更新履歴
 
-### 2026-06-28: ツールエラー時の LLM 返答フォーマット検証と修正
+### 2026-07-02: Phase 1残タスク（TierProfile の実配線）実装完了
+- 背景: `docs/agent_surface_redesign_design.md` §8 Phase 1 の残課題。TierProfile 自体（tier別デフォルト・`resolve_tier_profile()`・`LLMClient.tier_profile`）は Phase 1 で骨格のみ実装済みだったが、`unknown_model_context_length` 以外の数値は実際の挙動に反映されていなかった。今回、Pacemaker・repo map・履歴圧縮の3箇所を配線し、tier ごとの数値が実際にコードパスへ効くようにした。数値そのもの（10/18/35 等）の較正は §7 ベンチ待ちのため変更していない。
+- 配線内容:
+  - `companion/modules/pacemaker.py`: `calculate_max_loops()` に `tier_profile: Optional[TierProfile] = None` を追加。ハードコードされていた上限 35 を `tier_profile.max_loops`（省略時は従来どおり35）に置き換え、base_loops の算出（プラン有無・タスク数に応じた値）もこの ceiling でクランプするよう変更。`companion/core.py` の呼び出し箇所で `self.llm.tier_profile` を渡すよう変更。
+  - `companion/modules/repo_map.py`: `generate_repo_map_text()` に `token_budget: Optional[int] = None` を追加し、渡された場合はシングルトン `RepoMapGenerator` の `token_budget` を上書きしてから生成する。
+  - `companion/prompts/builder.py`: `PromptBuilder.__init__` に `tier_profile: Optional[TierProfile] = None` を追加し、repo map 生成時に `tier_profile.repo_map_token_budget` を渡すよう変更。呼び出し箇所（`core.py`、`command_handler.py` の `_build_current_messages`/`_build_mode_messages`、`dump_prompt.py`）を `self.llm.tier_profile` を渡す形に更新。
+  - `companion/tool_history_policy.py`: モード別定数（`_GREP_MAX_EXCERPTS` 等）を廃止し、`_COMPRESSION_PROFILES = {"standard": {...}, "strong": {...}}` の辞書に置き換え。`compress_for_history()` に `strength: str = "standard"` を追加し、各内部コンプレッサー（grep/project_tree/run_command/list_symbols/generic）にプロファイル辞書を渡す形に変更。未知の strength は "standard" にフォールバック。`companion/execution/result_pipeline.py::summarize_result()` から `agent.llm.tier_profile.history_compression` を渡すよう配線。
+  - 上記いずれも「tier を知るのはプロファイル解決の1箇所だけ」の原則（設計 §2-8）を維持: 各モジュールは tier 文字列を知らず、`TierProfile` の具体値または `strength`/`token_budget` 等の文字列・数値のみを受け取る。
+- テスト: `tests/test_pacemaker_minimal.py`（tier 別 ceiling の効果・省略時の後方互換）、`tests/test_repo_map.py`（`token_budget` 上書き・0 での抑制)、`tests/test_tool_history_policy.py`（strong/standard の圧縮強度差・未知 strength のフォールバック）に追加。既存 `tests/test_history_policy_ext.py`・`tests/test_result_pipeline.py` は新シグネチャに合わせて更新（`FakeAgent` に `llm.tier_profile.history_compression` のスタブを追加）。
+- 検証: `python -X utf8 -m pytest tests/ -q` → **578 passed / 2 skipped**（Phase 2 完了時の572から6件追加）。
+- 未実施（Phase 5 で対応予定）: プロファイル数値自体の較正（§7 ベンチ後）、`checkin_interval`/`escalation_threshold` の実配線（Phase 4/5 の機能自体が未実装のため配線先がまだない）。
+
+### 2026-07-02: Phase 2（ツール面縮小 + 説明強化）実装完了
+- 背景: `docs/agent_surface_redesign_design.md` §8 Phase 2。25個のツールから14/15/11個（task/planning/investigation）へ縮小し、選択の曖昧さ・幻覚ツール呼び出しのリスクを削減。
+- 新規統合ツール:
+  - `list_files`（`companion/tools/file_ops.py`）: `list_directory`/`find_files`/`get_project_tree` を統合。`glob` 未指定時はツリー表示（内部で `get_project_tree()` に委譲）、指定時は再帰検索（内部で既存 `find_files()` に委譲）。旧 `FileOps.list_files`（フラット単層リスト、他に直接呼び出し箇所なしと確認済み）は新シグネチャで置き換え。
+  - `find_symbol`（`companion/tools/symbols.py`）: `list_symbols`/`find_definition` を統合。`name` 指定時は `find_definition` に、`path` 指定時は `list_symbols` に委譲。両方未指定はエラー。既存の `list_symbols`/`find_definition` 関数自体は変更せず内部実装として維持（直接呼び出す既存テスト群はそのまま通過）。
+  - `complete_step`（`companion/tools/plan_tool.py`）: `mark_step_complete`/`mark_task_complete` を統合。現在のステップに未完了タスクがあれば先頭の1件を完了（残数を報告）、全タスク完了または元々タスクがなければ即座にステップを閉じる（`mark_step_complete()` に委譲、同一呼び出し内でステップ完了まで進む）。カーソル位置（どのタスク/ステップが対象か）はハーネス側が判定し、モデルはパラメータ不要。
+- ツール面からの撤去（`core_tools.py` の `UNIVERSAL_TOOLS`/`MODE_TOOL_MAPPING` から除外）:
+  - **統合により完全に登録解除**（`register_default_tools()` から旧アクション名を削除、代わりに新ツール名で登録）: `list_directory`, `find_files`, `get_project_tree`, `list_symbols`, `find_definition`, `mark_step_complete`, `mark_task_complete`。`/scan` コマンドは `get_project_tree()` 関数を直接インポートして使用しており影響なし。
+  - **登録は維持したままモード面のみ非表示**（内部的には引き続き呼び出し可能。安全判定セット `EDIT_ACTIONS`/`MUTATING_ACTIONS` 等は登録維持のため変更不要と確認）: `note`, `delete_lines`, `append_file`, `search_archives`, `analyze_structure`, `generate_code`, `generate_tasks`, `execute_tasks`, `execute_batch`。
+- **スコープの判断（意図的、設計ドキュメントの厳密な対象外）**: `generate_tasks`/`execute_tasks` は設計の最終形（14ツール表）では完全撤去対象だが、Phase 4（ハーネス駆動タスク分解）が未実装のため今回はモード面から外すのみとし、Sub-LLMベースのタスク自動生成・バッチ実行というFast Pathの手動起動能力が失われることを許容した（`complete_step` はタスク階層の有無に関わらず動作するため、Step完了という中核機能に欠落はない）。
+- 型・必須/任意情報の付加（§4.3）: `core_tools.py::get_tool_descriptions()` を拡張し、各パラメータに型（`inspect.Parameter.annotation` 由来）と、任意パラメータには `[name:type=default]` 形式でデフォルト値を表示するよう変更（例: `pattern:str`（必須） vs `[include:str="*"]`（任意））。`Optional[X]`/`X | None` は Python 3.10+ で `__name__` が `"Union"` という非直感的な文字列になるため、`typing.get_origin`/`get_args` でアンラップして内側の型 `X` のみを表示する変換を追加。
+- プロンプト・文書更新: `companion/prompts/templates.py`（Edit/Search/Communicationツール節・TASK_MODE_INSTRUCTIONS を新ツール面に全面書き換え）、`companion/utils/response_format.py`（静的Sym-Opsプロトコルから execute_batch の `%%%` 教材セクションを削除、セクション番号を振り直し、`delete_lines`/`list_directory` の例示を更新）、`companion/prompts/few_shot.py`（`list_directory`→`list_files`）、`companion/utils/sym_ops.py`（`ACTION_VERBS` の `list_directory`/`get_project_tree`→`list_files`）、`companion/base/llm_client.py`（`_TARGET_PARAM` に `find_symbol`→`name` を追加、`mark_task_complete` 専用の `@index`→`task_index` 変換ロジックを削除）、`companion/tool_history_policy.py`（履歴圧縮ディスパッチキーを `get_project_tree`→`list_files`、`list_symbols`→`find_symbol` にリネーム）、`companion/tools/plan_tool.py`/`companion/core_action_invocation.py`/`companion/core_actions.py`（`::note` を勧める旧ガイダンス文言を `>>` Thought ベースの案内に更新）。
+- テスト: 既存テスト13ファイルを新ツール面に合わせて更新（`test_core_mode_mapping.py`: `delete_lines` を edit_tools 期待集合から除外、`test_llm_action_mapping_minimal.py`: `mark_task_complete` の @target テストを `find_symbol` の同等テストに置換、`test_tool_history_policy.py`/`test_history_policy_ext.py`: ディスパッチキー変更に追従、`test_config_status.py`/`test_core_actions.py`: フェイクデータ・アサーション文言を更新）。新規 `tests/test_agent_surface_phase2.py`（20件）: `list_files`/`find_symbol`/`complete_step` の単体テスト、旧アクション名が完全に登録解除されていることの確認、hidden系ツールが登録は維持されつつモード面から漏れていないことの確認、task/planning/investigation 各モードのツール数が設計値（14/15/11）と一致することの確認、型注釈表示の確認。
+- 検証: `python -X utf8 -m pytest tests/ -q` → **572 passed / 2 skipped**（Phase 1 の554から18件追加）。`python -X utf8 -c "import main"` で起動健全性確認。実際の `get_tool_descriptions()` 出力を目視確認し、型注釈・ツール数が意図通りであることを確認。
+- 未実施（Phase 4 で対応予定）: `generate_tasks`/`execute_tasks` の完全撤去とハーネス駆動タスク分解への置き換え、`propose_plan` 承認時の `TaskListProposal` 自動発火。
+
+### 2026-07-02: Phase 1（TierProfile 骨格 + T-1）実装完了
+- 背景: `docs/agent_surface_redesign_design.md` §8 Phase 1。弱いモデル向けの運転プロファイルを配給するための単一解決点を新設。
+- 新規: `companion/config/tier_profile.py`。`TierProfile`（Pydantic, frozen）を新設し、§5.2 のtier別デフォルト値（max_loops/checkin_interval/repo_map_token_budget/escalation_threshold/unknown_model_context_length/history_compression/few_shot_variant/tool_description_variant/edit_format_hint）を low/mid/high で定義。`resolve_tier_profile(model_name, provider, cfg)` が `llm.available_models[].tier` を解決し、未指定・未一致モデルは "low" にフォールバック（DEFAULT_CONTEXT_LENGTH是正と同じ保守的既定の哲学）。`available_models` エントリに `_OVERRIDABLE_FIELDS` の値を直接書けばモデル個別上書きも可能。**設計原則: tierを知るのはこのモジュールだけ。他コンポーネントはif-tier分岐を持たず具体値のみ参照する。**
+- `companion/base/llm_client.py`: `LLMClient.__init__` と `reinitialize()`（モデル切替）成功時に `_refresh_tier_profile()` を呼び出し、`self.tier_profile` を保持するよう変更。`get_context_length()` のステップ3（フォールバックテーブルにも載らない未知モデル）を、固定値 `DEFAULT_CONTEXT_LENGTH` ではなく `self.tier_profile.unknown_model_context_length` を返すよう変更（low tier=16,000、mid/high=32,000）。これに伴い `DEFAULT_CONTEXT_LENGTH` モジュール定数は未使用になったため削除。
+- `companion/modules/command_handler.py`: `/model current` に `Tier: <tier> (未指定は保守的に"low"として扱われます)` を追加。`/model list` のテーブルに Tier 列を追加（`available_models` に `tier` フィールドがなければ "low" 表示）。
+- **スコープの判断（意図的）**: Phase 1 は「既存挙動を変えず配線」が原則だが、Pacemakerのmax_loops・MemoryManagerの予算・repo map注入量など数値に実影響する箇所への配線は見送った。理由: 現状 `duckflow.yaml` の `available_models` には tier が1件も設定されておらず、全モデルが "low" にフォールバックする設計上、もしこれらの数値をこの時点で配線すると Claude Sonnet 等の現行の強いモデルの挙動（max_loops上限35等）が意図せず後退する。これらの較正はロードマップ通りPhase 5（プロファイル較正）に委ねる。今回配線したのは「フォールバックテーブルにない未知モデルのコンテキスト長既定値」のみ — これはPhase 0で導入したばかりの安全機構の自然な精緻化であり、CONTEXT_LENGTH_FALLBACKに載っている既知モデル（Claude/GPT-4o等）は一切影響を受けない。
+- テスト新規: `tests/test_tier_profile.py`（8件: 未指定→low・明示tier解決・tierフィールド欠如時のlow維持・個別フィールド上書き・不正tier値のlowフォールバック・tier間の値の順序整合性・LLMClient初期化時のtier_profile保持・モデル切替時の再解決)。`tests/test_context_length_fallback.py` を新しい tier 連動の既定値に合わせて更新。
+- 検証: `python -X utf8 -m pytest tests/ -q` → **554 passed / 2 skipped**（Phase 0 の546から8件追加）。`python -X utf8 -c "import main"` で起動健全性確認。
+- 未実施（今後）: `available_models` への実際のtier付与はユーザー判断に委ねる（今回は編集していない）。`/model` によるインタラクティブなtier選択UIはT-1の残タスク。
+
+### 2026-07-02: Phase 0 止血（agent_surface_redesign_design.md §6）実装完了
+- 背景: `docs/agent_surface_redesign_design.md` §6 の Phase 0（止血4件）を実装。弱いモデルの思考ループ・幻覚ツール/パラメータ・幻覚の直接原因を修正。
+- 修正:
+  - `companion/modules/pacemaker.py`: `_detect_stagnation()` を全面書き直し。read-only ツール（read_file等10種）を検知対象から除外していた仕組みを廃止し、「同一アクション名＋同一パラメータ（`json.dumps(sort_keys=True)`で正規化）＋同一結果」を統一条件として判定するよう変更。パラメータの辞書順の揺れによる誤判定も解消。失敗し続けていた `test_pacemaker_detects_repeated_action_stagnation` が解消。
+  - `companion/base/llm_client.py`: `DEFAULT_CONTEXT_LENGTH` を128,000→32,000に変更（フォールバックテーブルにない未知モデルを弱いモデルとして保守的に扱う）。`LLMClient.context_length_source`（"api"/"fallback"/"default"）を追加し、`get_context_length()` の各分岐で設定。`companion/core.py` の2箇所の呼び出し元で `context_length_source == "default"` の場合に `ui.print_warning` でユーザーに可視化。
+  - `companion/state/agent_state.py`: `ActionList` に `parse_error_type` / `parse_error_detail` フィールドを追加（Sym-Ops完全パース失敗・空応答をLLMにフィードバックするための輸送経路）。
+  - `companion/base/llm_client.py`: `_parse_response()` の完全パース失敗時（except節）に `parse_error_type="parse_failed"` を設定。actions/thoughts/reasoning が全て空の場合（旧: 無フィードバックで黙って終了）に `parse_error_type="empty_actions"` を新設し記録。
+  - `companion/core_loop_helpers.py`: `record_parse_error_if_any()` を新規追加。`parse_error_type` が設定されていれば `SyntaxErrorInfo` として `last_syntax_errors` に記録し、既存の Correction Guide 経路（builder.py）へ合流させる。`companion/core.py` の自律ループ内2箇所（通常/Pacemaker介入）の `llm.chat()` 呼び出し後に呼び出すよう配線。
+  - `companion/prompts/builder.py`: `_CORRECTION_EXAMPLES` に `unexpected_params` / `parse_failed` / `empty_actions` の修正例を追加。
+  - `companion/core_action_results.py`: `build_dropped_params_syntax_error()` を新規追加。ツールが受け付けないパラメータをモデルが渡した際、従来はログにのみ記録し黙って握りつぶしていたのを `SyntaxErrorInfo`（`unexpected_params`）として次ターンにフィードバックするよう変更。
+  - `companion/core_action_executor.py`: `dropped_params` 検出時に上記関数を呼び出し `agent.state.last_syntax_errors` に追記するよう変更。
+  - `companion/utils/sym_ops.py`: `AutoRepair._fix_missing_symbols_line()` の行頭動詞アクション化を厳格化。`_looks_like_action_target()` を新設し、明示的な `@` がない場合は「文末の `.!?`」「先頭語が冠詞/前置詞等（a/the/of/for等）」「7語超」のいずれかに該当すると自然言語の説明文とみなしてアクション化をスキップするよう変更。"Create a summary of the file structure." のような自然文が存在しないアクション `create` へ誤変換される事故を防止。`@` 明示時は従来通り常に補完（正規表現を `(@)?` で捕捉するよう変更）。
+- テスト新規: `tests/test_context_length_fallback.py`（2件）、`tests/test_parse_error_feedback.py`（4件）、`tests/test_core_execute_actions_minimal.py` に1件追加（dropped params フィードバック）、`tests/test_autorepair_block_protection.py` に4件追加（自然文の誤変換防止・`@`明示時は従来通り・短いコマンド様対象は引き続き補完）。
+- 検証: `python -X utf8 -m pytest tests/ -q` → **546 passed / 2 skipped**（直近ベースライン 2026-06-28: 540 passed / 1 failed から、既知失敗だった pacemaker stagnation テストが解消し、新規19件を追加）。
+- 次: `docs/agent_surface_redesign_design.md` Phase 1（TierProfile 骨格 + T-1）へ。
+
+### 2026-07-02: モデル接触面の再設計ドキュメント作成
+- 背景: 弱いモデル（ローカル/OpenRouter安価、〜30B: Qwen3.6 / GLM4.5-flash / Gemma 4 想定）で自律動作が不安定（思考ループ・幻覚ツール/パラメータ・幻覚）という問題に対し、4系統の並列コード調査（プロンプト構造 / パーサー・フィードバック / ループ制御 / 履歴・コンテキスト管理）を実施。
+- 主な発見: (1) 停滞検知が read-only ツールを除外しており実質無効（失敗中の pacemaker テストの原因）、(2) パラメータドロップ・パース失敗理由・空パースがLLMにフィードバックされない3穴、(3) コンテキスト長のデフォルト128K過大既定と emergency pruning による無通知の文脈喪失、(4) モードあたり16〜18K文字のプロンプト＋25ツール＋型情報なしの説明という認知負荷。症状の主因はプロトコル構文（フレーム）ではなく意味論的負荷と判定。
+- `docs/agent_surface_redesign_design.md` 新規: Sym-Ops v4（フレーム維持・YAMLフロントマター廃止・Vitals記法削除・note統合・execute_batch非表示化）、ツール面縮小（task 25→14: list_files/find_symbol/complete_step 統合、delete_lines/append_file 廃止、計画系ハーネス移管「見せるが操作させない」、Sub-LLM のシステム駆動エスカレーション化）、Tier運転プロファイル（単一オブジェクトでツール説明・few-shot・repo map・max_loops・チェックイン間隔・エスカレーション閾値を tier 別配給、リード型自律制御）を策定。Phase 0（止血4件）〜Phase 5 の実装計画とアクション層ベンチ計画（v3.2 vs v4 vs XML × 実ターゲット3モデル）を収録。
+- 実装は未着手。プロトコル最終形（v4 vs XML）はベンチで決着する方針（edit format と同じ作法）。
 - 目的: ツール失敗時に LLM に返されるメッセージが正しい `[TOOL_RESULT]` / `::status error` 形式になっているか、また二重ラッピングや無言スキップなどの不具合がないかを検証。
 - 修正:
   - `companion/core_action_results.py`: `normalize_tool_result()` を追加。`file_ops`/`sub_llm_tools` が返す事前整形 Sym-Ops 文字列と `task_tool` が返す `ToolResult` から実際の status/body を抽出し、executor が 1 回だけ `[TOOL_RESULT]` で包むようにした。`build_tool_result_message()` も `ToolResult` オブジェクトを直接扱えるように修正。

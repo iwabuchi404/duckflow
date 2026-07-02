@@ -243,6 +243,50 @@ async def find_definition(
     return "\n".join([header] + matches)
 
 
+async def find_symbol(
+    name: Optional[str] = None,
+    path: Optional[str] = None,
+    scope: str = ".",
+    workspace_root: str = ".",
+) -> str | ToolResult:
+    """Find a symbol's definition, or list symbols in a file.
+
+    Unifies the previously separate list_symbols / find_definition tools
+    into one (docs/agent_surface_redesign_design.md §4.1): pass `name` to
+    find where a function/class is defined; pass `path` (without `name`) to
+    list all symbols in that file.
+
+    Sym-Ops format:
+        ::find_symbol
+        <<<
+        ---
+        name: "execute_actions"
+        scope: "companion"
+        ---
+        >>>
+
+    Args:
+        name: 定義位置を検索するシンボル名（関数/クラス名）。指定時は path/scope 配下を検索
+        path: シンボル一覧を取得したい Python ファイルのパス（name 未指定時に使用）
+        scope: name 検索時の検索対象ディレクトリ（デフォルト: "."）
+        workspace_root: ワークスペースルートディレクトリ
+
+    Returns:
+        name 指定時: 定義位置（ファイル:行、シグネチャ）の一覧
+        path のみ指定時: そのファイルのシンボル一覧
+    """
+    if name:
+        return await find_definition(name, scope=scope, workspace_root=workspace_root)
+    if path:
+        return await list_symbols(path, workspace_root=workspace_root)
+    return ToolResult.error(
+        "find_symbol",
+        scope,
+        "find_symbol requires either 'name' (to find a definition) or "
+        "'path' (to list symbols in a file).",
+    )
+
+
 async def replace_function(
     path: str,
     name: str,

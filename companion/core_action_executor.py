@@ -23,6 +23,7 @@ from companion.core_action_results import (
     build_action_summary,
     build_action_exception_syntax_error,
     build_denial_context,
+    build_dropped_params_syntax_error,
     build_tool_result_message,
     get_approval_request,
 )
@@ -212,6 +213,11 @@ async def execute_actions(agent, action_list) -> list:
                     if dropped_params:
                         logger.warning(
                             f"Tool '{action.name}': dropping unexpected params: {dropped_params}"
+                        )
+                        agent.state.last_syntax_errors.append(
+                            build_dropped_params_syntax_error(
+                                action, dropped_params, func
+                            )
                         )
 
                     # Tool implementations may return ToolResult objects directly. Plain

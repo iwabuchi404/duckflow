@@ -189,8 +189,7 @@ class AutoRepair:
         "delete_file",
         "run_command",
         "read_file",
-        "list_directory",
-        "get_project_tree",
+        "list_files",
         "execute_batch",
         "note",
         "search_archives",
@@ -211,6 +210,49 @@ class AutoRepair:
             記号補完後の全文
         """
         return self._apply_outside_blocks(text, self._fix_missing_symbols_line)
+
+    # 自然言語の説明文が誤って行頭一致した際に、アクション化を見送るための
+    # 目印となる先頭語（冠詞・前置詞・接続詞など）。
+    _PROSE_LEAD_WORDS = {
+        "a", "an", "the", "to", "for", "and", "or", "that", "this", "it",
+        "of", "in", "on", "with", "so", "then", "now",
+    }
+    # 「動詞 + 目的語らしき語句」を超える語数は、コマンド/パスではなく
+    # 自然文の可能性が高いとみなす閾値。
+    _PROSE_MAX_WORDS = 6
+
+    def _looks_like_action_target(self, rest: str | None, has_at: bool) -> bool:
+        """アクション行の対象らしき文字列かどうかを判定する。
+
+        自然言語の説明文（例: "Create a summary of the file structure."）が
+        行頭の単語だけ偶然 ACTION_VERBS と一致し、実在しないアクションへ
+        誤変換されるのを防ぐ。明示的な `@` が付いている場合は、モデルが
+        意図的にアクション記法を書こうとした強いシグナルなので判定をスキップする。
+
+        Args:
+            rest: アクション動詞に続く残りの文字列（対象部分）。
+            has_at: 動詞の直後に `@` が書かれていたかどうか。
+
+        Returns:
+            アクション化してよいと判断した場合 True。
+        """
+        if has_at:
+            return True
+        if not rest:
+            return True
+
+        text = rest.strip()
+        if text[-1:] in ".!?":
+            return False
+
+        first_word = text.split(None, 1)[0].lower().strip(".,;:")
+        if first_word in self._PROSE_LEAD_WORDS:
+            return False
+
+        if len(text.split()) > self._PROSE_MAX_WORDS:
+            return False
+
+        return True
 
     def _fix_missing_symbols_line(self, line: str) -> str:
         """
@@ -240,13 +282,17 @@ class AutoRepair:
         # Look for "verb @ path" or "verb path"
         # Support case-insensitive and leading whitespace
         match = re.match(
-            r"^(" + "|".join(self.ACTION_VERBS) + r")\b\s*(?:@\s*)?([^\n]+)?",
+            r"^(" + "|".join(self.ACTION_VERBS) + r")\b\s*(@)?\s*([^\n]+)?",
             stripped,
             re.IGNORECASE,
         )
 
         if match:
-            action, rest = match.groups()
+            action, at_sign, rest = match.groups()
+            if not self._looks_like_action_target(rest, has_at=bool(at_sign)):
+                # 自然言語の説明文らしいので、実在しないアクションへの
+                # 誤変換を避けてそのまま残す。
+                return line
             indent = line[: len(line) - len(line.lstrip())]
             if rest:
                 return f"{indent}:: {action.lower()} @ {rest.strip()}"

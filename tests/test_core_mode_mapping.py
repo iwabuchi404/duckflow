@@ -25,7 +25,7 @@ def test_planning_mode_exposes_edit_tools() -> None:
     Returns:
         None.
     """
-    edit_tools = {"edit_file", "write_file", "delete_lines", "delete_file"}
+    edit_tools = {"edit_file", "write_file", "delete_file"}
 
     assert edit_tools.issubset(DuckAgent.MODE_TOOL_MAPPING["planning"])
 
@@ -40,7 +40,7 @@ def test_task_mode_exposes_edit_tools() -> None:
     Returns:
         None.
     """
-    edit_tools = {"edit_file", "write_file", "delete_lines", "delete_file"}
+    edit_tools = {"edit_file", "write_file", "delete_file"}
 
     assert edit_tools.issubset(DuckAgent.MODE_TOOL_MAPPING["task"])
 

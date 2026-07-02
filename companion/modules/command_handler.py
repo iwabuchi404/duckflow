@@ -384,24 +384,26 @@ class CommandHandler:
                 table.add_column("Name", style="cyan", no_wrap=False)
                 table.add_column("Provider", style="yellow")
                 table.add_column("Model ID", style="white")
+                table.add_column("Tier", style="magenta")
                 table.add_column("Status", style="green")
-                
+
                 current_provider = config.get("llm.provider", "unknown")
                 current_model = self.agent.llm.model
-                
+
                 for model_info in models_config:
                     name = model_info.get("name", "Unknown")
                     provider = model_info.get("provider", "N/A")
                     model = model_info.get("model", "N/A")
                     description = model_info.get("description", "")
-                    
+                    tier = model_info.get("tier", "low")
+
                     # Add description to name if available
                     display_name = name
                     if description:
                         display_name += f"\n[dim]{description}[/dim]"
-                    
+
                     status = "✓ Active" if provider == current_provider and model == current_model else ""
-                    table.add_row(display_name, provider, model, status)
+                    table.add_row(display_name, provider, model, tier, status)
                 
                 if hasattr(ui, 'console'):
                     ui.console.print(Panel(table, title="[bold]Available Models (Config)[/bold]", border_style="green", expand=False))
@@ -454,12 +456,14 @@ class CommandHandler:
             # Show current model
             current_provider = config.get("llm.provider", "unknown")
             current_model = self.agent.llm.model
-            
+            current_tier = self.agent.llm.tier_profile.tier
+
             info_text = f"""
             [bold]Current Model Configuration:[/bold]
             Provider: [cyan]{escape(str(current_provider))}[/cyan]
             Model: [cyan]{escape(str(current_model))}[/cyan]
             Base URL: [cyan]{escape(str(self.agent.llm.base_url or 'default'))}[/cyan]
+            Tier: [cyan]{escape(str(current_tier))}[/cyan] (未指定は保守的に "low" として扱われます)
             """
             
             if hasattr(ui, 'console'):
@@ -686,7 +690,9 @@ class CommandHandler:
         tool_desc = self.agent.get_tool_descriptions(
             self.agent.state.get_context_mode()
         )
-        base = PromptBuilder(self.agent.state).build_messages(tool_desc)
+        base = PromptBuilder(
+            self.agent.state, self.agent.llm.tier_profile
+        ).build_messages(tool_desc)
         return list(base) + list(self.agent.state.conversation_history)
 
     def _build_mode_messages(self, mode: str) -> List[dict]:
@@ -706,7 +712,9 @@ class CommandHandler:
         snapshot = AgentState()
         snapshot.current_mode = AgentMode(mode)
         tool_desc = self.agent.get_tool_descriptions(mode)
-        return PromptBuilder(snapshot).build_messages(tool_desc)
+        return PromptBuilder(snapshot, self.agent.llm.tier_profile).build_messages(
+            tool_desc
+        )
 
     def _preview_content(self, content: str) -> str:
         """

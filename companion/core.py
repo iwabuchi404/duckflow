@@ -69,6 +69,7 @@ from companion.core_loop_helpers import (
     update_vitals_from_response,
     build_intervention_prompt,
     check_and_prune_if_needed,
+    record_parse_error_if_any,
     should_return_to_user,
 )
 
@@ -167,6 +168,12 @@ class DuckAgent:
             try:
                 ctx_len = await self.llm.get_context_length()
                 self.memory_manager.configure_from_context_length(ctx_len)
+                if self.llm.context_length_source == "default":
+                    ui.print_warning(
+                        f"Context length for '{model}' is unknown; assuming a "
+                        f"conservative {ctx_len:,} tokens. If this model supports "
+                        "more, add it to CONTEXT_LENGTH_FALLBACK for a better memory budget."
+                    )
             except Exception as e:
                 logger.warning(
                     f"Failed to update memory budget after model switch: {e}"
@@ -212,6 +219,12 @@ class DuckAgent:
             logger.info(
                 f"Dynamic memory budget: {configured:,} tokens (model context: {context_length:,})"
             )
+            if self.llm.context_length_source == "default":
+                ui.print_warning(
+                    f"Context length for '{self.llm.model}' is unknown; assuming a "
+                    f"conservative {context_length:,} tokens. If this model supports "
+                    "more, add it to CONTEXT_LENGTH_FALLBACK for a better memory budget."
+                )
         except Exception as e:
             logger.warning(f"Failed to configure dynamic memory budget: {e}")
 
@@ -276,7 +289,9 @@ class DuckAgent:
                 self.state.phase = AgentPhase.THINKING
 
                 # Calculate max loops for this session
-                self.pacemaker.max_loops = self.pacemaker.calculate_max_loops()
+                self.pacemaker.max_loops = self.pacemaker.calculate_max_loops(
+                    self.llm.tier_profile
+                )
                 self.pacemaker.loop_count = 0
 
                 ui.print_vitals(
@@ -305,7 +320,7 @@ class DuckAgent:
                         # 2. Think & Decide Phase
                         self.state.phase = AgentPhase.THINKING
 
-                        prompt_builder = PromptBuilder(self.state)
+                        prompt_builder = PromptBuilder(self.state, self.llm.tier_profile)
                         base_messages = prompt_builder.build_messages(
                             self.get_tool_descriptions(self.state.current_mode.value)
                         )
@@ -332,6 +347,7 @@ class DuckAgent:
                                     action_list = await self.llm.chat(
                                         messages, response_model=ActionList
                                     )
+                                record_parse_error_if_any(self.state, action_list)
                             except Exception as e:
                                 logger.warning(
                                     f"Intervention LLM call failed: {e}, using fallback"
@@ -355,6 +371,7 @@ class DuckAgent:
                                 action_list = await self.llm.chat(
                                     messages, response_model=ActionList
                                 )
+                            record_parse_error_if_any(self.state, action_list)
 
                             logger.info(
                                 f"Agent proposed actions: {[a.name for a in action_list.actions]}"

@@ -1,6 +1,6 @@
 import re
 from typing import List, Dict
-from companion.state.agent_state import AgentState, Plan
+from companion.state.agent_state import AgentState, Plan, TaskStatus
 
 class PlanTool:
     """
@@ -46,7 +46,7 @@ class PlanTool:
         result = (
             f"✅ Plan created with {len(new_plan.steps)} steps.\n"
             f"計画が保存されました。状況に応じて適切なアクションを選択してください：\n"
-            f"  進捗を共有しつつ実行を続けるなら ::note\n"
+            f"  進捗を共有しつつ実行を続けるなら >> (Thought) に書いてから次のアクションへ\n"
             f"  ユーザーとの対話が必要（不明点・確認・共有など）なら ::response"
         )
         logger.info(f"propose_plan completed: {result}")
@@ -128,3 +128,46 @@ class PlanTool:
                 return f"Step '{current_step.title}' completed. All steps finished! 🎉"
         
         return "No current step."
+
+    async def complete_step(self) -> str:
+        """
+        Advance the plan by one unit of work: complete the next pending task
+        within the current step, or complete the step itself once all tasks
+        (if any) are done. NO PARAMETERS NEEDED — cursor position is tracked
+        by the harness, not the model.
+
+        Unifies the previously separate mark_step_complete / mark_task_complete
+        tools into one (docs/agent_surface_redesign_design.md §4.4: the
+        Plan/Step/Task hierarchy is shown to the model but not directly
+        manipulated by it).
+
+        Returns:
+            タスク完了時: "Task '{title}' completed. {N} task(s) remaining in step '{title}'."
+            ステップ完了時（タスクなし、または全タスク完了時）: mark_step_complete() と同じメッセージ
+            プランなしの場合: エラーメッセージ
+        """
+        if not self.state.current_plan:
+            return "No active plan."
+
+        current_step = self.state.current_plan.get_current_step()
+        if not current_step:
+            return "No current step."
+
+        if current_step.tasks:
+            next_task = next(
+                (t for t in current_step.tasks if t.status != TaskStatus.COMPLETED),
+                None,
+            )
+            if next_task:
+                next_task.status = TaskStatus.COMPLETED
+                remaining = sum(
+                    1 for t in current_step.tasks if t.status != TaskStatus.COMPLETED
+                )
+                if remaining:
+                    return (
+                        f"Task '{next_task.title}' completed. "
+                        f"{remaining} task(s) remaining in step '{current_step.title}'."
+                    )
+                # All tasks in this step are done — fall through to close the step.
+
+        return await self.mark_step_complete()

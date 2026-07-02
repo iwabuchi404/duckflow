@@ -3,6 +3,7 @@ Duck Pacemaker - エージェントの健康状態と実行状況を監視し、
 """
 
 from typing import List, Optional, Any, Dict
+import json
 import logging
 from companion.state.agent_state import (
     AgentState,
@@ -11,6 +12,7 @@ from companion.state.agent_state import (
     MAX_HYPOTHESIS_ATTEMPTS,
 )
 from companion.config.config_loader import config
+from companion.config.tier_profile import TierProfile
 
 logger = logging.getLogger(__name__)
 
@@ -35,32 +37,41 @@ class DuckPacemaker:
         )  # {action, result_summary, is_error}
         self.consecutive_errors = 0
 
-    def calculate_max_loops(self) -> int:
+    def calculate_max_loops(self, tier_profile: Optional[TierProfile] = None) -> int:
         """
         タスクの種類と実測バイタルに応じて最大ループ回数を計算する。
         申告バイタル（confidence/safety）は制御に使用しない（V-A2）。
         実測値（success_rate, progress）ベースで算出する。
+
+        Args:
+            tier_profile: 現在のモデルの TierProfile。渡された場合、
+                `tier_profile.max_loops` が暴走許容量の上限（ceiling）になる
+                （docs/agent_surface_redesign_design.md §5.2）。省略時は
+                従来どおり 35 を上限とする（呼び出し側が tier を意識しない
+                既存コード・テストとの後方互換）。
         """
+        ceiling = tier_profile.max_loops if tier_profile is not None else 35
+
         # ベース値の決定
         if self.state.current_plan:
             current_step = self.state.current_plan.get_current_step()
             if current_step and current_step.tasks:
-                base_loops = min(15 + len(current_step.tasks) // 2, 35)
+                base_loops = min(15 + len(current_step.tasks) // 2, ceiling)
             else:
-                base_loops = 20
+                base_loops = min(20, ceiling)
         else:
-            base_loops = 10
+            base_loops = min(10, ceiling)
 
         # 実測係数の計算（execution_history ベース）
         vitals_factor = self._calculate_measured_factor()
 
         # 最終計算
         calculated = int(base_loops * vitals_factor)
-        final_loops = max(3, min(calculated, 35))
+        final_loops = max(3, min(calculated, ceiling))
 
         logger.info(
             f"Pacemaker: max_loops={final_loops} "
-            f"(base={base_loops}, measured_factor={vitals_factor:.2f})"
+            f"(base={base_loops}, ceiling={ceiling}, measured_factor={vitals_factor:.2f})"
         )
 
         return final_loops
@@ -157,56 +168,52 @@ class DuckPacemaker:
 
         return None
 
-    # Tools that are read-only/investigative — repeating them is normal
-    # during investigation and should not trigger stagnation.
-    _READ_ONLY_TOOLS = frozenset({
-        "read_file",
-        "list_directory",
-        "find_files",
-        "grep_files",
-        "analyze_structure",
-        "get_project_tree",
-        "list_symbols",
-        "find_definition",
-        "search_archives",
-        "retrieve_result",
-    })
+    @staticmethod
+    def _normalize_params(parameters: Dict[str, Any]) -> str:
+        """パラメータ辞書をキー順に依存しない形で正規化する。
+
+        Args:
+            parameters: Action.parameters の辞書。
+
+        Returns:
+            キー順序の揺れを吸収した比較用文字列。
+        """
+        try:
+            return json.dumps(parameters, sort_keys=True, default=str)
+        except TypeError:
+            return str(sorted(parameters.items(), key=lambda kv: kv[0]))
 
     def _detect_stagnation(self) -> bool:
-        """停滞検知：同じアクションや結果の繰り返し"""
+        """停滞検知：同じアクション・同じパラメータ・同じ結果の繰り返し。
+
+        読み取り系ツール（read_file等）も対象に含める。同じファイルを
+        同じ引数で読み続けて同じ内容しか返らないなら、それは調査の進展
+        ではなく停滞であるため。パラメータが異なる場合（別ファイルを読む
+        等）は探索として扱い、停滞とはみなさない。
+        """
         if len(self.execution_history) < 4:
             return False
 
         recent = self.execution_history[-4:]
-
-        # 1. 完全一致アクションの繰り返し
         actions = [item["action"] for item in recent]
         action_names = [a.name for a in actions]
 
-        if len(set(action_names)) == 1:
-            action_name = action_names[0]
-            # 提案ツール（propose_plan）は除外（内容が異なるため）
-            # 読み取り系ツールも除外（調査中の再読は正常）
-            if action_name != "propose_plan" and action_name not in self._READ_ONLY_TOOLS:
-                # パラメータもチェック
-                # Action.parameters は Dict なので文字列化して比較
-                params = [str(a.parameters) for a in actions]
-                if len(set(params)) == 1:
-                    logger.warning(
-                        f"Stagnation: Same action '{action_name}' and params repeated 3 times"
-                    )
-                    return True
+        if len(set(action_names)) != 1:
+            return False
 
-        # 2. 同じ結果の繰り返し（読み取り系ツールは除外）
-        recent_actions = [item["action"].name for item in recent]
-        if len(set(recent_actions)) == 1 and recent_actions[0] in self._READ_ONLY_TOOLS:
-            # 読み取り系ツールの同じ結果は停滞ではない
-            pass
-        else:
-            results = [item["result_summary"] for item in recent]
-            if len(set(results)) == 1:
-                logger.warning("Stagnation: Same result repeated 3 times")
-                return True
+        action_name = action_names[0]
+        # 提案ツール（propose_plan）は内容が毎回異なりうるため除外
+        if action_name == "propose_plan":
+            return False
+
+        normalized_params = [self._normalize_params(a.parameters) for a in actions]
+        results = [item["result_summary"] for item in recent]
+
+        if len(set(normalized_params)) == 1 and len(set(results)) == 1:
+            logger.warning(
+                f"Stagnation: '{action_name}' repeated with identical params and result"
+            )
+            return True
 
         return False
 

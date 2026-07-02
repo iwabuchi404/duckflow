@@ -6,13 +6,14 @@ AgentState を受け取り、動的にシステムプロンプトを組み立て
 動的な部分を後半に配置する階層構造を持つ。
 """
 
-from typing import List
+from typing import List, Optional
 
 from companion.state.agent_state import AgentState
 from companion.prompts.templates import SYSTEM_PROMPT_TEMPLATE, MODE_MAP
 from companion.prompts.few_shot import get_examples_for_mode
 from companion.utils.response_format import SYMOPS_SYSTEM_PROMPT
 from companion.modules.repo_map import generate_repo_map_text
+from companion.config.tier_profile import TierProfile
 
 
 class PromptBuilder:
@@ -20,8 +21,19 @@ class PromptBuilder:
     AgentState からシステムプロンプトを組み立てるビルダー。
     """
 
-    def __init__(self, state: AgentState) -> None:
+    def __init__(
+        self, state: AgentState, tier_profile: Optional[TierProfile] = None
+    ) -> None:
+        """
+        Args:
+            state: プロンプト構築元の AgentState。
+            tier_profile: 現在のモデルの TierProfile。渡された場合、
+                repo map のトークン予算を `tier_profile.repo_map_token_budget`
+                で配給する（docs/agent_surface_redesign_design.md §5.2）。
+                省略時は repo_map モジュールの既定予算を使う。
+        """
         self.state = state
+        self.tier_profile = tier_profile
 
     def build_messages(self, tool_descriptions: str) -> List[dict]:
         """
@@ -54,7 +66,14 @@ class PromptBuilder:
         
         # 4. 動的なコンテキスト（ここから毎ターン確実に変動する）
         # 4a. Repo Map (先回りコンテキスト: ast-based symbol map)
-        repo_map_text = generate_repo_map_text(self.state.working_directory)
+        repo_map_budget = (
+            self.tier_profile.repo_map_token_budget
+            if self.tier_profile is not None
+            else None
+        )
+        repo_map_text = generate_repo_map_text(
+            self.state.working_directory, token_budget=repo_map_budget
+        )
 
         # 4b. 動的コンテキスト組み立て
         dynamic_parts = [
@@ -121,6 +140,22 @@ class PromptBuilder:
             '  You are in Investigation Mode — file edits are blocked.\n'
             '  Step 1: `::finish_investigation @<root cause conclusion>`\n'
             '  Step 2: After switching to Planning/Task mode, apply edits.'
+        ),
+        'unexpected_params': (
+            '  Remove the unsupported parameter(s) and only pass the ones\n'
+            '  listed for this tool. Extra parameters are silently dropped,\n'
+            '  not applied — repeating them will not change the outcome.'
+        ),
+        'parse_failed': (
+            '  Your last output could not be parsed as Sym-Ops.\n'
+            '  Use `::action_name @target key=value` for actions and\n'
+            '  `<<< ... >>>` blocks only for large content (code, file text).\n'
+            '  Do not wrap actions in markdown code fences.'
+        ),
+        'empty_actions': (
+            '  Your last output produced no action and no response.\n'
+            '  Every turn must end with either another `::tool_name` action\n'
+            '  or `::response @...` to hand control back to the user.'
         ),
     }
 

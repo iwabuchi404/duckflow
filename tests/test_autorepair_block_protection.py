@@ -141,6 +141,57 @@ class TestFixMissingSymbolsBlockProtection:
         result = self.repair._fix_missing_symbols(text)
         assert "confidence: 95%" in result
 
+    def test_prose_sentence_starting_with_action_verb_is_not_repaired(self) -> None:
+        """
+        'Create a summary of the file structure.' のような自然言語の説明文が、
+        先頭語だけ ACTION_VERBS に一致して実在しないアクションへ誤変換
+        されないことを確認する（弱いモデルの幻覚ツール呼び出しの一因）。
+
+        Args: なし
+        Returns: なし
+        """
+        text = "Create a summary of the file structure."
+        result = self.repair._fix_missing_symbols(text)
+        assert result == text
+        assert ":: create" not in result.lower()
+
+    def test_prose_sentence_with_leading_article_object_is_not_repaired(self) -> None:
+        """
+        'Edit the login function to add validation.' も同様に、
+        冠詞から始まる目的語部分を持つ自然文としてアクション化されない。
+
+        Args: なし
+        Returns: なし
+        """
+        text = "Edit the login function to add validation."
+        result = self.repair._fix_missing_symbols(text)
+        assert result == text
+
+    def test_explicit_at_sign_is_always_repaired_even_if_wordy(self) -> None:
+        """
+        明示的に `@` が書かれている場合は、モデルが意図的にアクション記法を
+        使おうとした強いシグナルなので、語数や冠詞に関わらず補完される。
+
+        Args: なし
+        Returns: なし
+        """
+        text = "create @ a summary of the file structure"
+        result = self.repair._fix_missing_symbols(text)
+        assert result.startswith(":: create @")
+
+    def test_short_command_like_target_is_still_repaired(self) -> None:
+        """
+        コマンド/パスらしい短い対象は、これまで通りアクション化される
+        （厳格化による過剰な抑制がないことの確認）。
+
+        Args: なし
+        Returns: なし
+        """
+        text = "run tests/test_foo.py -v"
+        result = self.repair._fix_missing_symbols(text)
+        assert result.startswith(":: run @")
+        assert "tests/test_foo.py -v" in result
+
 
 class TestFixMarkdownBlocksProtection:
     """_fix_markdown_blocks のブロック保護テスト"""

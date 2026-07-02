@@ -177,7 +177,7 @@ INVESTIGATION_EXAMPLES = [
 Investigation Mode started. Reason: Checking logs for error X
 ━━━ NEXT ACTION REQUIRED ━━━
 Do NOT call ::response or ::duck_call yet.
-Call read_file, grep_files, list_directory, or run_command to observe."""},
+Call read_file, grep_files, list_files, or run_command to observe."""},
     # Turn 2: MUST observe — do NOT call response here
     {"role": "assistant", "content": """\
 >> Investigation active. Reading logs to find error X.

@@ -158,6 +158,17 @@ class ActionList(BaseModel):
     vitals: Optional[Dict[str, float]] = Field(
         default=None, description="アヒルのバイタル情報"
     )
+    parse_error_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Sym-Ops のパースが完全失敗、または空応答だった場合のエラー種別"
+            "（'parse_failed' / 'empty_actions'）。次ターンの Correction Guide"
+            "に渡すため。正常パース時は None"
+        ),
+    )
+    parse_error_detail: Optional[str] = Field(
+        default=None, description="parse_error_type が設定された場合の詳細メッセージ"
+    )
 
 
 # --- Main State ---

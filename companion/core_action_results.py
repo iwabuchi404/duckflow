@@ -2,6 +2,7 @@
 Approval and tool-result formatting helpers for DuckAgent action execution.
 """
 
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -205,3 +206,37 @@ def build_action_exception_syntax_error(
         )
 
     return None
+
+
+def build_dropped_params_syntax_error(
+    action: Action, dropped_params: set[str], func: Callable[..., Any]
+) -> SyntaxErrorInfo:
+    """
+    Build syntax correction feedback for parameters silently dropped
+    because a tool does not accept them.
+
+    Without this feedback the model never learns that its extra parameters
+    were ignored and tends to repeat them turn after turn.
+
+    Args:
+        action: Action whose parameters included unsupported keys.
+        dropped_params: Parameter names that were dropped before invocation.
+        func: The tool implementation, used to list its accepted parameters.
+
+    Returns:
+        SyntaxErrorInfo describing the dropped parameters and valid ones.
+    """
+    valid_params = [
+        name
+        for name, param in inspect.signature(func).parameters.items()
+        if param.kind != inspect.Parameter.VAR_KEYWORD
+    ]
+    dropped_list = ", ".join(sorted(dropped_params))
+    return SyntaxErrorInfo(
+        error_type="unexpected_params",
+        raw_snippet=f"{action.name}: {dropped_list}",
+        correction_hint=(
+            f"Tool '{action.name}' does not accept parameter(s): {dropped_list}. "
+            f"They were ignored. Valid parameters: {', '.join(valid_params) or '(none)'}."
+        ),
+    )

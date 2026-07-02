@@ -1,5 +1,6 @@
 from companion.modules.pacemaker import DuckPacemaker
 from companion.state.agent_state import Action, AgentState, MAX_HYPOTHESIS_ATTEMPTS
+from companion.config.tier_profile import _TIER_DEFAULTS, TIER_LOW, TIER_HIGH
 
 
 def test_pacemaker_detects_repeated_action_stagnation() -> None:
@@ -93,3 +94,37 @@ def test_pacemaker_max_loops_is_clamped_to_supported_range() -> None:
     loops_high = pacemaker.calculate_max_loops()
     assert 3 <= loops_high <= 35
     assert loops_high >= loops  # high success rate should not reduce loops
+
+
+def test_pacemaker_max_loops_capped_by_tier_profile() -> None:
+    """A low-tier TierProfile should cap max_loops well below the high-tier
+    ceiling, even with a plan that would otherwise justify more loops
+    (docs/agent_surface_redesign_design.md §5.2)."""
+    from companion.state.agent_state import Plan
+
+    state = AgentState()
+    state.current_plan = Plan(goal="test goal")
+    step = state.current_plan.add_step("step 1")
+    for i in range(10):
+        step.add_task(f"task {i}")
+    pacemaker = DuckPacemaker(state)
+
+    low_profile = _TIER_DEFAULTS[TIER_LOW]
+    high_profile = _TIER_DEFAULTS[TIER_HIGH]
+
+    loops_low = pacemaker.calculate_max_loops(low_profile)
+    loops_high = pacemaker.calculate_max_loops(high_profile)
+
+    assert loops_low <= low_profile.max_loops
+    assert loops_high <= high_profile.max_loops
+    assert loops_low < loops_high
+
+
+def test_pacemaker_max_loops_without_profile_defaults_to_35_ceiling() -> None:
+    """Omitting tier_profile keeps the historical 35 ceiling (backward compat
+    for callers/tests that don't pass a profile)."""
+    state = AgentState()
+    pacemaker = DuckPacemaker(state)
+
+    loops = pacemaker.calculate_max_loops()
+    assert 3 <= loops <= 35

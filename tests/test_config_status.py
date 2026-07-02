@@ -46,8 +46,8 @@ class FakeAgent:
     pacemaker = FakePacemaker()
     llm = FakeLLM()
     tools = {
-        "note", "response", "exit", "duck_call", "search_archives",
-        "get_project_tree", "list_symbols", "find_definition",
+        "response", "exit", "duck_call",
+        "list_files", "find_symbol", "retrieve_result",
         "read_file", "edit_file", "write_file", "run_command",
         "replace_function",
     }

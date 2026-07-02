@@ -7,11 +7,14 @@ from companion.execution.result_pipeline import summarize_result
 
 
 class FakeAgent:
-    """Minimal agent with result_cache and sub_llm_manager."""
+    """Minimal agent with result_cache, sub_llm_manager, and a tier_profile
+    stub (summarize_result reads agent.llm.tier_profile.history_compression)."""
     def __init__(self):
         from companion.modules.result_cache import ResultCache
         self.result_cache = ResultCache(max_size=10)
         self.sub_llm_manager = MagicMock()
+        self.llm = MagicMock()
+        self.llm.tier_profile.history_compression = "standard"
 
 
 class TestSummarizeResult:

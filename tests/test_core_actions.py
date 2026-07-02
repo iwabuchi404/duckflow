@@ -137,4 +137,4 @@ def test_noop_symops_marker_returns_guidance():
     result = actions._action_noop_symops_marker()
     assert "::status" in result
     assert "::result" in result
-    assert "::note" in result
+    assert ">>" in result

@@ -43,7 +43,7 @@ def build_prompt_for_mode(agent: DuckAgent, mode: str) -> list[dict]:
     state.current_mode = AgentMode(mode)
 
     tool_descriptions = agent.get_tool_descriptions(mode)
-    builder = PromptBuilder(state)
+    builder = PromptBuilder(state, agent.llm.tier_profile)
     return builder.build_messages(tool_descriptions)
 
 

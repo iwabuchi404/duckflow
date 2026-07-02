@@ -28,12 +28,12 @@ class CoreActions:
         """
         ::status and ::result are output markers, NOT callable actions.
         They appear inside tool results and error messages, but cannot be invoked directly.
-        Use ::note for progress logging. Use ::response to deliver results.
+        Use a `>>` thought for progress logging. Use ::response to deliver results.
         """
         return (
             "::status / ::result are output markers, not callable actions.\n"
             "Correct usage:\n"
-            "  ::note @<progress message>      — internal log, loop continues\n"
+            "  >> <progress note>              — internal thought, loop continues\n"
             "  ::response @<short message>     — deliver result to user\n"
             "Do NOT call ::status or ::result as actions."
         )

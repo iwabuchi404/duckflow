@@ -51,13 +51,13 @@ def test_propose_plan_content_maps_to_goal_parameter() -> None:
     assert action.parameters["goal"].startswith("## Step 1: Build")
 
 
-def test_mark_task_complete_target_maps_to_task_index() -> None:
-    """mark_task_complete @N should become task_index=N."""
-    result = _parse_actions(">> complete task\n::mark_task_complete @2\n::c0.9 ::s1.0")
+def test_find_symbol_target_maps_to_name_parameter() -> None:
+    """find_symbol @<name> should map @target to the 'name' parameter."""
+    result = _parse_actions(">> find it\n::find_symbol @execute_actions\n::c0.9 ::s1.0")
 
     action = result.actions[0]
-    assert action.name == "mark_task_complete"
-    assert action.parameters["task_index"] == 2
+    assert action.name == "find_symbol"
+    assert action.parameters["name"] == "execute_actions"
 
 
 def test_archive_search_target_maps_to_query_parameter() -> None:

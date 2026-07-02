@@ -261,3 +261,30 @@ async def test_execute_actions_reports_missing_required_parameter() -> None:
     assert is_tool_result_message(tool_msg["content"])
     assert "::status error" in tool_msg["content"]
     assert "::ping" in tool_msg["content"]
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_reports_dropped_unexpected_params() -> None:
+    """
+    Extra parameters the model passes but the tool does not accept must be
+    fed back as syntax feedback, not silently discarded — otherwise the
+    model repeats the same invalid parameter every turn.
+    """
+    agent = _agent()
+
+    def ping(index: int) -> str:
+        return f"pong-{index}"
+
+    agent.register_tool("ping", ping)
+    action_list = ActionList(
+        reasoning="pass an unsupported extra param",
+        actions=[Action(name="ping", parameters={"index": 1, "bogus": "x"})],
+    )
+
+    results = await agent.execute_actions(action_list)
+
+    assert results == ["pong-1"]
+    assert agent.state.last_syntax_errors
+    error = agent.state.last_syntax_errors[-1]
+    assert error.error_type == "unexpected_params"
+    assert "bogus" in error.correction_hint

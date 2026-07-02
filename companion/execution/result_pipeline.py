@@ -59,8 +59,9 @@ def summarize_result(
         return result, None
 
     # Stage 2: Mechanical summarization
+    strength = agent.llm.tier_profile.history_compression
     try:
-        mechanical = compress_for_history(action_name, result)
+        mechanical = compress_for_history(action_name, result, strength=strength)
     except Exception as e:
         logger.warning(f"Mechanical summarization failed for {action_name}: {e}")
         mechanical = result

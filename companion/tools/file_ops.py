@@ -964,28 +964,42 @@ class FileOps:
 
         return _re.sub(r"^\s*\d+(?::[0-9a-fA-F]+)?\|\s*", "", line)
 
-    async def list_files(self, path: str = ".") -> List[str]:
+    async def list_files(
+        self, path: str = ".", glob: Optional[str] = None, depth: int = 2
+    ) -> str:
         """
-        List files and directories in a path.
-        隠しファイル（.で始まるもの）は除外される。
+        List files and directories under a path.
+
+        Without `glob`: shows a directory tree up to `depth` levels, like a
+        file browser (noise directories such as __pycache__/node_modules and
+        .gitignore'd paths are hidden).
+        With `glob`: recursively searches for files matching the pattern
+        (e.g. "*.py") under `path` and returns matching relative paths;
+        `depth` is ignored in this mode.
+
+        Unifies the previously separate list_directory / find_files /
+        get_project_tree tools into one (docs/agent_surface_redesign_design.md §4.1).
 
         Args:
-            path: 一覧を取得するディレクトリパス（デフォルト: "."）
+            path: 探索対象のディレクトリパス（デフォルト: "."、ワークスペースルートからの相対パス）
+            glob: ファイル名マッチパターン（例: "*.py"）。指定時は再帰検索モードになる
+            depth: glob 未指定時のツリー表示の最大深度（デフォルト: 2）
 
         Returns:
-            "[DIR] path" または "[FILE] path" 形式の文字列リスト（ソート済み）
+            glob 指定時: マッチしたファイルパスの一覧（1行1件、ソート済み）
+            glob 未指定時: 視認性の高いテキストツリー形式の出力
         """
-        full_path = self._get_full_path(path)
-        if not full_path.exists():
-            raise FileNotFoundError(f"Path not found: {path}")
-        results = []
-        for item in full_path.iterdir():
-            if item.name.startswith("."):
-                continue
-            prefix = "[DIR] " if item.is_dir() else "[FILE]"
-            rel_path = item.relative_to(self.workspace_root)
-            results.append(f"{prefix} {rel_path}")
-        return sorted(results)
+        if glob:
+            matches = await self.find_files(pattern=glob, recursive=True, path=path)
+            if not matches:
+                return f"No files matching '{glob}' found under {path}"
+            return "\n".join(matches)
+
+        from companion.tools.get_project_tree import get_project_tree as _get_project_tree
+
+        return await _get_project_tree(
+            path=path, depth=depth, workspace_root=str(self.workspace_root)
+        )
 
     async def mkdir(self, path: str) -> str:
         """Create a directory (mkdir -p)."""

@@ -98,25 +98,12 @@ If you are a reasoning model (your output includes a reasoning/thinking field):
       >>>>>>> REPLACE
       >>>
     - **Multi-edit**: Stack multiple SEARCH/REPLACE blocks in one content block.
+    - **Deletion**: To delete a block, leave REPLACE empty.
     - **Conflict files**: If the target file contains unresolved git conflict markers, do NOT use edit_file — use `write_file` to rewrite the region.
     - **Note**: If a match fails, the tool returns a detailed `diff` showing exactly where your SEARCH block differs from the file. Use this to self-correct.
     - **Pro Tip**: Use a large enough SEARCH block to ensure uniqueness, but keep it precise.
 
-2. `delete_lines`
-   - **Description**: Remove a specific code block using the same SEARCH/REPLACE marker style as `edit_file`.
-   - **Constraint**: The REPLACE section must be empty. Use `edit_file` if you want to replace text instead of deleting it.
-   - **Structure**:
-     ::delete_lines @path
-     <<<
-     <<<<<<< SEARCH
-     [Code to Delete]
-     =======
-     >>>>>>> REPLACE
-     >>>
-   - **Legacy**: `find: |` content is still accepted for backward compatibility.
-
-
-3. `write_file`
+2. `write_file`
    - **Description**: Creates a new file or overwrites an existing one entirely.
    - **Structure**:
      ::write_file @path
@@ -124,25 +111,28 @@ If you are a reasoning model (your output includes a reasoning/thinking field):
      [Full file content]
      >>>
 
-4. `generate_code` — Delegate complex generation to sub-worker.
-
-5. `analyze_structure` — Get a code-map (classes/functions) of a file.
+3. `replace_function`
+   - **Description**: Replace a whole function/class by name (ast-verified). Use when `edit_file` keeps failing on whitespace/context mismatches — no SEARCH block needed.
+   - **Structure**: `::replace_function` with `path`, `name`, `body` in a YAML content block.
 
 ### Search & Discovery Tools
 
-1. `find_files`
-   - **Description**: Find files by name pattern (glob).
-   - **Structure**: `::find_files @path pattern="*.py"`
+1. `list_files`
+   - **Description**: Browse a directory tree, or find files by name pattern (glob).
+   - **Structure**: `::list_files @path` for a tree view, or `::list_files @path glob="*.py"` to search recursively.
 
 2. `grep_files`
    - **Description**: Search for content using regex.
    - **Structure**: `::grep_files @path pattern="regex" include="*.py"`
 
+3. `find_symbol`
+   - **Description**: Find where a function/class is defined, or list all symbols in a file.
+   - **Structure**: `::find_symbol name="my_func"` to find a definition, or `::find_symbol path="module.py"` to list its symbols.
+
 ### Communication Actions
 
-- `::note @<msg>`: Internal progress log.
 - `::duck_call @<msg>`: Pause for user input.
-- `::response`: 
+- `::response`:
   - Short: `::response @Message`
   - Structured: `::response` followed by `<<< >>>` block.
 
@@ -171,7 +161,7 @@ INVESTIGATION_MODE_INSTRUCTIONS = """
 ## Investigation Mode
 Path to goal is unclear. Follow the OODA Loop:
 
-1. Observe   — Use `read_file`, `run_command`, `list_directory`
+1. Observe   — Use `read_file`, `run_command`, `list_files`
 2. Orient    — Analyze in `>>` thought block
 3. Hypothesize — Register theory with `::submit_hypothesis`
 4. Validate  — Test the theory
@@ -225,17 +215,15 @@ TASK_MODE_INSTRUCTIONS = """
 ## Task Execution Mode
 Execute the current plan step. Keep moving until the step is complete.
 
-1. Break the step into atomic tasks with `::generate_tasks`.
-2. Use Fast Path (`::execute_batch`) for independent tasks.
-   Use sequential execution for dependent tasks.
-3. After each action, use `::note` to state:
-   - What you just did
-   - What you will do next
-4. Validate output: read the generated file to confirm it worked.
-5. Only use `::response` when ALL tasks in the current step are complete.
+1. Work directly: `read_file` to confirm context, then `edit_file` / `write_file` /
+   `run_command` as needed. State what you did and what's next in your `>>` thought.
+2. Validate output: read the generated file, or run tests, to confirm it worked.
+3. When the current step's goal is fully met, call `::complete_step` (no
+   parameters — it closes the current unit of work and reports what's next).
+4. Only use `::response` when ALL steps in the plan are complete.
 
 ### Staying on Track
-- One file edited ≠ task complete. Continue until the step goal is met.
+- One file edited ≠ step complete. Continue until the step goal is met.
 - If you hit an unexpected issue, investigate first (read more files).
   Use `::duck_call` only if investigation doesn't resolve it.
 </mode_task>

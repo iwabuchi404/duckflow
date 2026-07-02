@@ -84,8 +84,8 @@ async def invoke_tool(
                             resolved_tool_name,
                             target,
                             "propose_plan was called without a goal. "
-                            "If a plan already exists, continue with ::note or "
-                            "::mark_step_complete. If you need a new plan, "
+                            "If a plan already exists, continue with the next action or "
+                            "::complete_step. If you need a new plan, "
                             "provide the plan content in a <<<...>>> block.",
                         ),
                         dropped,

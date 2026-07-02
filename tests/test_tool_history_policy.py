@@ -59,7 +59,7 @@ def test_grep_keeps_file_level_counts():
     assert "match(es)" in compressed
 
 
-# --- get_project_tree compression ---
+# --- list_files (tree-view mode) compression ---
 
 
 def test_project_tree_compresses_deep_nesting():
@@ -72,17 +72,17 @@ def test_project_tree_compresses_deep_nesting():
             lines.append(f"  file_{i}.py")
     raw = "\n".join(lines)
 
-    compressed = compress_for_history("get_project_tree", raw)
+    compressed = compress_for_history("list_files", raw)
     assert len(compressed) < len(raw)
     assert "Top-level entries" in compressed
     assert "Omitted" in compressed
-    assert "list_directory" in compressed
+    assert "list_files" in compressed
 
 
 def test_project_tree_short_passes_through():
     """Short project tree should not be compressed."""
     raw = "dir_a/\nfile_b.py\nfile_c.py"
-    compressed = compress_for_history("get_project_tree", raw)
+    compressed = compress_for_history("list_files", raw)
     assert compressed == raw
 
 
@@ -142,3 +142,42 @@ def test_build_tool_result_message_without_history_content():
     action = Action(name="read_file", parameters={"path": "test.py"})
     msg = build_tool_result_message(action, "raw content here")
     assert "raw content here" in msg
+
+
+# --- tier-aware compression strength (docs/agent_surface_redesign_design.md §5.2) ---
+
+
+def test_strong_strength_truncates_grep_harder_than_standard():
+    """'strong' (low tier) should keep fewer grep excerpts than 'standard'."""
+    lines = [f"src/file_{i % 3}.py:{i + 1}: match text {i}" for i in range(30)]
+    lines.append("")
+    lines.append("30 match(es) found.")
+    raw = "\n".join(lines)
+
+    standard = compress_for_history("grep_files", raw, strength="standard")
+    strong = compress_for_history("grep_files", raw, strength="strong")
+
+    assert "Top 10 matches" in standard
+    assert "Top 5 matches" in strong
+    assert len(strong) < len(standard)
+
+
+def test_strong_strength_truncates_run_command_harder_than_standard():
+    """'strong' should use a shorter head/tail window for run_command output."""
+    lines = [f"line {i}" for i in range(100)]
+    raw = "\n".join(lines)
+
+    standard = compress_for_history("run_command", raw, strength="standard")
+    strong = compress_for_history("run_command", raw, strength="strong")
+
+    assert "line 19" in standard and "line 20" not in standard
+    assert "line 9" in strong and "line 10" not in strong
+    assert len(strong) < len(standard)
+
+
+def test_unknown_strength_falls_back_to_standard():
+    """An unrecognized strength value should behave like 'standard'."""
+    raw = "\n".join(f"line {i}" for i in range(100))
+    standard = compress_for_history("run_command", raw, strength="standard")
+    unknown = compress_for_history("run_command", raw, strength="not-a-real-tier")
+    assert unknown == standard

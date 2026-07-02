@@ -254,11 +254,24 @@ def get_repo_map_generator(workspace_root: str = ".") -> RepoMapGenerator:
     return _repo_map_generator
 
 
-def generate_repo_map_text(workspace_root: str = ".") -> str:
+def generate_repo_map_text(
+    workspace_root: str = ".", token_budget: Optional[int] = None
+) -> str:
     """Generate repo map text for prompt injection.
 
-    Returns the compressed symbol map text, or empty string if no symbols found.
+    Args:
+        workspace_root: Root directory to scan for Python source files.
+        token_budget: Token budget for the generated map. When omitted, the
+            generator's current budget (DEFAULT_TOKEN_BUDGET unless already
+            overridden) is used. Callers pass
+            ``TierProfile.repo_map_token_budget`` to ration this by model
+            strength (docs/agent_surface_redesign_design.md §5.2).
+
+    Returns:
+        The compressed symbol map text, or empty string if no symbols found.
     """
     gen = get_repo_map_generator(workspace_root)
+    if token_budget is not None:
+        gen.token_budget = token_budget
     repo_map = gen.generate()
     return repo_map.text

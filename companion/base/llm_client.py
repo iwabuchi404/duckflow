@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional, Union, Tuple
 from openai import OpenAI, AsyncOpenAI, APIError
 from companion.state.agent_state import ActionList, Action
 from companion.config.config_loader import config
+from companion.config.tier_profile import TierProfile, resolve_tier_profile
 from companion.base.response_preprocessor import default_preprocessor
 from companion.utils.sym_ops import SymOpsProcessor
 from companion.utils.preprocessor import reasoning_to_thought, extract_reasoning_actions, truncate_reasoning_loop
@@ -148,8 +149,13 @@ CONTEXT_LENGTH_FALLBACK: Dict[str, int] = {
     "@cf/zai-org/glm-5.2": 262_144,
 }
 
-# API取得もフォールバックも失敗した場合のデフォルト
-DEFAULT_CONTEXT_LENGTH = 128_000
+# API取得もフォールバックも失敗した場合のデフォルトは、TierProfile
+# （companion/config/tier_profile.py）の unknown_model_context_length を使う。
+# 128Kクラスの既知モデルは CONTEXT_LENGTH_FALLBACK で個別に捕捉されるため、
+# ここに到達するのは tier 未指定の未知モデルのみで、その場合は low tier の
+# 保守的な値（16,000）が使われる。128Kを既定にすると弱いモデルのトークン
+# 予算計算が全崩壊するため、フォールバックテーブルにない未知モデルは
+# 「弱いモデル」として扱う。
 
 
 class LLMClient:
@@ -274,6 +280,15 @@ class LLMClient:
             "retry_successes": 0,
         }
 
+        # get_context_length() が値をどこから得たか（"api"/"fallback"/"default"）。
+        # "default" は未知モデルへの推測値であり、呼び出し側がユーザーに警告するために使う。
+        self.context_length_source: str = "unknown"
+
+        # Tier運転プロファイル（docs/agent_surface_redesign_design.md §5）。
+        # tier を知るのは resolve_tier_profile() だけ — このクライアントは
+        # 解決済みの値を保持するだけで、tier 文字列による分岐は持たない。
+        self._refresh_tier_profile()
+
         logger.info(
             f"LLM Client initialized: provider={self.provider}, model={self.model}, base_url={self.base_url}"
         )
@@ -394,6 +409,8 @@ class LLMClient:
                 api_key=self.api_key, base_url=self.base_url, timeout=self.timeout
             )
 
+            self._refresh_tier_profile()
+
             logger.info(f"✅ LLM Client reinitialized successfully")
             return True
 
@@ -441,6 +458,17 @@ class LLMClient:
             logger.error(f"❌ Connection test failed: {e}")
             return False
 
+    def _refresh_tier_profile(self) -> None:
+        """現在の model/provider から TierProfile を再解決して保持する。
+
+        __init__ 時と reinitialize() 成功時に呼び出す。tier の解決ロジック
+        自体は resolve_tier_profile() に一本化されており、ここでは結果を
+        キャッシュするだけ。
+        """
+        self.tier_profile: TierProfile = resolve_tier_profile(
+            self.model, provider=self.provider
+        )
+
     async def get_context_length(self) -> int:
         """
         モデルのコンテキスト長を取得する。
@@ -448,7 +476,11 @@ class LLMClient:
         取得優先順位:
             1. OpenRouter API（/api/v1/models でモデル一覧から検索）
             2. フォールバックテーブル（CONTEXT_LENGTH_FALLBACK）
-            3. デフォルト値（DEFAULT_CONTEXT_LENGTH = 128,000）
+            3. TierProfile.unknown_model_context_length（tier未指定モデルは
+               low tier の保守的既定値 16,000）
+
+        取得元は `self.context_length_source`（"api"/"fallback"/"default"）に記録する。
+        "default" の場合は推測値であり、呼び出し側（core.py）がユーザーに警告を表示する。
 
         Returns:
             コンテキスト長（トークン数）
@@ -474,6 +506,7 @@ class LLMClient:
                                         f"Context length from OpenRouter API: "
                                         f"{self.model} = {ctx:,} tokens"
                                     )
+                                    self.context_length_source = "api"
                                     return ctx
                         logger.warning(
                             f"Model {self.model} not found in OpenRouter models list"
@@ -493,14 +526,21 @@ class LLMClient:
                     f"Context length from fallback table: "
                     f"{self.model} matched '{key}' = {length:,} tokens"
                 )
+                self.context_length_source = "fallback"
                 return length
 
-        # 3. デフォルト値
+        # 3. デフォルト値（未知モデル。実際より小さめに見積もる方が安全）
+        # tier_profile が解決済みの unknown_model_context_length を使う
+        # （available_models で tier を指定していれば mid/high はより緩く、
+        # 未指定モデルは low tier の保守的な既定値になる）。
+        fallback_default = self.tier_profile.unknown_model_context_length
         logger.warning(
             f"Context length unknown for {self.model}, "
-            f"using default: {DEFAULT_CONTEXT_LENGTH:,} tokens"
+            f"using conservative default for tier '{self.tier_profile.tier}': "
+            f"{fallback_default:,} tokens"
         )
-        return DEFAULT_CONTEXT_LENGTH
+        self.context_length_source = "default"
+        return fallback_default
 
     async def _call_with_retry(self, **kwargs):
         """Call the LLM API with exponential backoff retry.
@@ -997,8 +1037,7 @@ class LLMClient:
                     "submit_hypothesis": "hypothesis",
                     "finish_investigation": "conclusion",
                     "search_archives": "query",
-                    "find_definition": "name",
-                    "mark_task_complete": "task_index",
+                    "find_symbol": "name",
                     "retrieve_result": "cache_id",
                     "note": "message",
                     "response": "message",
@@ -1034,15 +1073,6 @@ class LLMClient:
                             params["start"] = int(parts[1])
                         else:
                             params["path"] = action.path
-                    elif tool_name == "mark_task_complete":
-                        # @0, @1 などを task_index に変換
-                        try:
-                            params["task_index"] = int(action.path)
-                        except (ValueError, TypeError):
-                            logger.warning(
-                                f"Could not parse task_index from path: {action.path!r}"
-                            )
-                            params["task_index"] = 0
                     else:
                         # デフォルト or 特殊マップから解決
                         param_name = _TARGET_PARAM.get(tool_name, "path")
@@ -1057,13 +1087,6 @@ class LLMClient:
                         logger.debug(
                             f"  → Parsed replace_in_file: search={params.get('search', '')[:30]}, replace={params.get('replace', '')[:30]}"
                         )
-                    elif tool_name == "mark_task_complete":
-                        # @target で処理済み。content ブロックは無視
-                        if "task_index" not in params:
-                            logger.warning(
-                                "Sym-Ops: 'mark_task_complete' missing @index. Defaulting to 0."
-                            )
-                            params["task_index"] = 0
                     else:
                         # デフォルト or 特殊マップから解決
                         param_name = _CONTENT_PARAM.get(tool_name, "content")
@@ -1138,8 +1161,25 @@ class LLMClient:
                     )
                 )
 
+            parse_error_type = None
+            parse_error_detail = None
+            if not actions and not result.thoughts and not reasoning_thoughts_text:
+                # Genuinely empty: no actions, no thoughts, no reasoning block.
+                # Record this so the next turn's Correction Guide tells the
+                # model its previous output produced nothing usable, instead
+                # of silently ending the turn with no feedback.
+                logger.warning(
+                    "Empty Sym-Ops response: no actions, no thoughts, no reasoning."
+                )
+                parse_error_type = "empty_actions"
+                parse_error_detail = content[:300]
+
             action_list = ActionList(
-                reasoning=reasoning, actions=actions, vitals=result.vitals
+                reasoning=reasoning,
+                actions=actions,
+                vitals=result.vitals,
+                parse_error_type=parse_error_type,
+                parse_error_detail=parse_error_detail,
             )
 
             return action_list
@@ -1159,6 +1199,8 @@ class LLMClient:
                         thought="Fallback for raw text response",
                     )
                 ],
+                parse_error_type="parse_failed",
+                parse_error_detail=str(e)[:300],
             )
 
     def _parse_structured_response(self, content: str, response_model: type):

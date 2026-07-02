@@ -5,14 +5,17 @@ from companion.tool_history_policy import (
     compress_for_history,
     _compress_list_symbols,
     _compress_generic,
+    _COMPRESSION_PROFILES,
 )
+
+_STANDARD = _COMPRESSION_PROFILES["standard"]
 
 
 class TestCompressListSymbols:
     def test_short_list_passthrough(self):
         """Short symbol lists should not be compressed."""
         content = "class Foo\ndef bar\ndef baz"
-        result = _compress_list_symbols(content)
+        result = _compress_list_symbols(content, _STANDARD)
         assert result == content
 
     def test_long_list_compressed(self):
@@ -24,7 +27,7 @@ class TestCompressListSymbols:
             lines.append(f"def func{i}")
         content = "\n".join(lines)
 
-        result = _compress_list_symbols(content)
+        result = _compress_list_symbols(content, _STANDARD)
         assert len(result) < len(content)
         assert "Symbols:" in result
         assert "80 total" in result
@@ -37,7 +40,7 @@ class TestCompressListSymbols:
         lines = ["class A", "class B", "def x", "def y", "def z", "interface I"]
         lines.extend([f"def extra{i}" for i in range(20)])
         content = "\n".join(lines)
-        result = _compress_list_symbols(content)
+        result = _compress_list_symbols(content, _STANDARD)
         assert "class:" in result
         assert "def:" in result
 
@@ -46,13 +49,13 @@ class TestCompressGeneric:
     def test_short_passthrough(self):
         """Short outputs should not be compressed."""
         content = "short output"
-        result = _compress_generic(content)
+        result = _compress_generic(content, _STANDARD)
         assert result == content
 
     def test_long_single_line_truncated(self):
         """Very long single line should be truncated by chars."""
         content = "x" * 5000
-        result = _compress_generic(content)
+        result = _compress_generic(content, _STANDARD)
         assert len(result) < len(content)
         assert "chars omitted" in result
 
@@ -60,7 +63,7 @@ class TestCompressGeneric:
         """Long multi-line output should get head/tail."""
         lines = [f"line{i}" for i in range(100)]
         content = "\n".join(lines)
-        result = _compress_generic(content)
+        result = _compress_generic(content, _STANDARD)
         assert len(result) < len(content)
         assert "100 lines" in result
         assert "line0" in result
@@ -79,11 +82,11 @@ class TestCompressForHistoryDispatch:
         assert "lines" in result
         assert "Structure" not in result  # no structure extraction
 
-    def test_list_symbols_dispatched(self):
-        """compress_for_history should dispatch list_symbols correctly."""
+    def test_find_symbol_dispatched(self):
+        """compress_for_history should dispatch find_symbol correctly."""
         lines = [f"class C{i}" for i in range(50)]
         content = "\n".join(lines)
-        result = compress_for_history("list_symbols", content)
+        result = compress_for_history("find_symbol", content)
         assert len(result) < len(content)
         assert "Symbols:" in result
 

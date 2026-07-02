@@ -193,3 +193,31 @@ def test_generate_repo_map_text_function(workspace):
     text = generate_repo_map_text(str(workspace))
     assert text
     assert "def main" in text
+
+
+def test_generate_repo_map_text_respects_token_budget_override(tmp_path):
+    """token_budget param should override the singleton's current budget.
+
+    This is how TierProfile.repo_map_token_budget rations the repo map by
+    model strength (docs/agent_surface_redesign_design.md §5.2).
+    """
+    import companion.modules.repo_map as rm
+
+    for i in range(20):
+        (tmp_path / f"mod_{i}.py").write_text(
+            "\n".join(f"def func_{i}_{j}(): pass" for j in range(20))
+        )
+
+    rm._repo_map_generator = None
+    full_text = generate_repo_map_text(str(tmp_path))
+    assert len(full_text) > 600
+
+    # Same singleton, but a low-tier-sized budget should truncate hard.
+    tight_text = generate_repo_map_text(str(tmp_path), token_budget=100)
+    assert len(tight_text) < len(full_text)
+    assert len(tight_text) < 600
+
+    # A budget of 0 should suppress the repo map entirely (low tier could
+    # configure this to disable it).
+    off_text = generate_repo_map_text(str(tmp_path), token_budget=0)
+    assert off_text == ""

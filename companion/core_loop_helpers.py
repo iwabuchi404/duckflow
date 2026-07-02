@@ -37,6 +37,48 @@ def update_vitals_from_response(state, action_list: ActionList) -> None:
         state.vitals.focus = action_list.vitals["focus"]
 
 
+_PARSE_ERROR_HINTS = {
+    "parse_failed": (
+        "The previous output could not be parsed as Sym-Ops at all. "
+        "Use `::tool_name @target key=value` for actions, and `<<< ... >>>` "
+        "blocks only for large content. Do not wrap actions in markdown fences."
+    ),
+    "empty_actions": (
+        "The previous output produced no action and no response text. "
+        "Every turn must end with either another `::tool_name` action or "
+        "`::response @...` to hand control back to the user."
+    ),
+}
+
+
+def record_parse_error_if_any(state, action_list: ActionList) -> None:
+    """Record a Sym-Ops parse failure so the next turn's Correction Guide
+    tells the model what went wrong, instead of silently ending the turn.
+
+    Without this, a fully unparseable or empty response leaves no trace in
+    conversation history — the model never learns why nothing happened and
+    may repeat the same malformed output.
+
+    Args:
+        state: AgentState to append the syntax error to.
+        action_list: The ActionList just received from LLMClient.chat().
+    """
+    if not action_list.parse_error_type:
+        return
+
+    hint = _PARSE_ERROR_HINTS.get(
+        action_list.parse_error_type,
+        "The previous output was not usable. Follow the Sym-Ops format exactly.",
+    )
+    state.last_syntax_errors.append(
+        SyntaxErrorInfo(
+            error_type=action_list.parse_error_type,
+            raw_snippet=action_list.parse_error_detail or "",
+            correction_hint=hint,
+        )
+    )
+
+
 def build_intervention_prompt(intervention, summary: str) -> str:
     """Build the prompt sent to LLM during a Pacemaker intervention.
 
