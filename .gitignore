@@ -174,3 +174,8 @@ Thumbs.db
 
 #claude
 .claude
+# App logs
+duckflow_v4.log*
+tmp/
+utils/
+blocked.txt

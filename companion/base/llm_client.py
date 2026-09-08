@@ -1165,14 +1165,27 @@ class LLMClient:
             parse_error_detail = None
             if not actions and not result.thoughts and not reasoning_thoughts_text:
                 # Genuinely empty: no actions, no thoughts, no reasoning block.
-                # Record this so the next turn's Correction Guide tells the
-                # model its previous output produced nothing usable, instead
-                # of silently ending the turn with no feedback.
+                # Preserve strict-parser diagnostics when fuzzy parsing also
+                # found nothing so the next Correction Guide can show the
+                # expected syntax alongside the model's actual input.
+                strict_failure = next(
+                    (
+                        warning
+                        for warning in result.warnings
+                        if warning.startswith("Strict parse failed:")
+                    ),
+                    None,
+                )
                 logger.warning(
                     "Empty Sym-Ops response: no actions, no thoughts, no reasoning."
                 )
-                parse_error_type = "empty_actions"
-                parse_error_detail = content[:300]
+                parse_error_type = (
+                    "parse_failed" if strict_failure else "empty_actions"
+                )
+                if strict_failure:
+                    parse_error_detail = f"{strict_failure}; input={content[:180]!r}"
+                else:
+                    parse_error_detail = content[:300]
 
             action_list = ActionList(
                 reasoning=reasoning,

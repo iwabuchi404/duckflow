@@ -5,62 +5,103 @@ llm:
     provider: openai
     model: gpt-4o
     description: 最新のGPT-4 Optimized。高性能で複雑なタスクに最適
+    max_output_tokens: 16384
   - name: GPT-4o Mini (OpenAI)
     provider: openai
     model: gpt-4o-mini
     description: 軽量版GPT-4o。高速で低コスト
+    max_output_tokens: 16384
   - name: google/gemini-2.5-flash
     provider: openrouter
     model: google/gemini-2.5-flash
     description: ''
+    max_output_tokens: 65536
   - name: anthropic/claude-sonnet-4.5
     provider: openrouter
     model: anthropic/claude-sonnet-4.5
     description: 最新のClaude。高度な推論能力
+    max_output_tokens: 16384
   - name: Claude 3.5 Sonnet (Anthropic via OpenRouter)
     provider: openrouter
     model: anthropic/claude-3-5-sonnet-20241022
     description: 最新のClaude。高度な推論能力
+    max_output_tokens: 8192
   - name: anthropic/claude-haiku-4.5
     provider: openrouter
     model: anthropic/claude-haiku-4.5
     description: ''
+    max_output_tokens: 8192
   - name: Llama 3.3 70B (Groq)
     provider: groq
     model: llama-3.3-70b-versatile
     description: 高速推論。Groqの専用ハードウェアで動作
+    max_output_tokens: 32768
   - name: GLM-4.5 Air Free (OpenRouter)
     provider: openrouter
     model: z-ai/glm-4.5-air:free
     description: 無料で使える高性能モデル
+    max_output_tokens: 16384
   - name: Gemini 1.5 Pro (Google)
     provider: google
     model: gemini-1.5-pro-002
     description: Googleの最新モデル。長いコンテキストに対応
+    max_output_tokens: 8192
   - name: google/gemini-2.5-flash
     provider: openrouter
     model: google/gemini-2.5-flash
     description: ''
+    max_output_tokens: 65536
   - name: google/gemini-2.5-pro
     provider: openrouter
     model: google/gemini-2.5-pro
     description: ''
+    max_output_tokens: 8192
+  - name: Llama 3.3 70B (Cloudflare Workers AI)
+    provider: cloudflare
+    model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+    description: Cloudflare Workers AI上のLlama 3.3 70B。低コスト・低レイテンシ
+    max_output_tokens: 16384
+  - name: QwQ 32B (Cloudflare Workers AI)
+    provider: cloudflare
+    model: '@cf/qwen/qwq-32b'
+    description: Cloudflare Workers AI上のQwen QwQ 32B。推論特化
+    max_output_tokens: 16384
+  - name: Kimi K2.7 Code (Cloudflare Workers AI)
+    provider: cloudflare
+    model: '@cf/moonshotai/kimi-k2.7-code'
+    description: Moonshot AIの1TパラメータMoEコーディング特化モデル。262k context
+    max_output_tokens: 16384
+  - name: GLM-5.2 (Cloudflare Workers AI)
+    provider: cloudflare
+    model: '@cf/zai-org/glm-5.2'
+    description: Z.aiの旗艦アジェンダコーディングモデル。262k context・推論対応
+    max_output_tokens: 32768
   openrouter:
-    model: qwen/qwen3.6-35b-a3b
+    model: deepseek/deepseek-v4-flash-0731
+    max_output_tokens: 24576
   openai:
     model: gpt-4o-mini
+    max_output_tokens: 16384
   groq:
     model: llama-3.3-70b-versatile
+    max_output_tokens: 32768
   google:
     model: gemini-1.5-pro-002
+    max_output_tokens: 8192
+  cloudflare:
+    model: '@cf/zai-org/glm-5.2'
+    max_output_tokens: 32768
   temperature: 0.7
-  max_output_tokens: 8192
+  max_output_tokens: 24576
   reasoning:
     enabled: true
-    max_tokens: 2000
+    max_tokens: 4096
 agent:
   max_loops: 10
   language: japanese
   auto_approval:
   - read_file
   - list_files
+  proactive_continuation:
+    enabled: false
+    max_loops: 50

@@ -30,9 +30,45 @@ class ParsedResult:
 
 
 class ParseError(Exception):
-    """Parse error"""
+    """Describe a structural Sym-Ops parse error with actionable context.
 
-    pass
+    Args:
+        message: Short description of the parsing problem.
+        line_number: One-based line number where the problem was found.
+        expected: Expected syntax at the failure location.
+        actual: Actual input found at the failure location.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        line_number: Optional[int] = None,
+        expected: Optional[str] = None,
+        actual: Optional[str] = None,
+    ) -> None:
+        """Initialize a detailed parse error.
+
+        Args:
+            message: Short description of the parsing problem.
+            line_number: One-based line number where the problem was found.
+            expected: Expected syntax at the failure location.
+            actual: Actual input found at the failure location.
+
+        Returns:
+            None.
+        """
+        details = [message]
+        if line_number is not None:
+            details.append(f"line {line_number}")
+        if expected:
+            details.append(f"expected {expected}")
+        if actual is not None:
+            details.append(f"actual {actual!r}")
+        super().__init__("; ".join(details))
+        self.line_number = line_number
+        self.expected = expected
+        self.actual = actual
 
 
 class AutoRepair:
@@ -99,17 +135,17 @@ class AutoRepair:
         Returns:
             未閉鎖ブロックを末尾で閉じた全文
         """
-        open_count = 0
-        close_count = 0
+        in_block = False
         for line in text.split("\n"):
+            if in_block:
+                if line.rstrip() == ">>>":
+                    in_block = False
+                continue
             if line.strip() == "<<<":
-                open_count += 1
-            elif line.rstrip() == ">>>":
-                close_count += 1
+                in_block = True
 
-        if open_count > close_count:
-            # 不足している終端区切りを追加
-            text = text.rstrip() + "\n" + (">>>\n" * (open_count - close_count))
+        if in_block:
+            text = text.rstrip() + "\n>>>"
         return text
 
     def _fix_markdown_blocks(self, text: str) -> str:
@@ -447,6 +483,13 @@ class AutoRepair:
 class FuzzyParser:
     """Tolerant parser v2.1"""
 
+    _VITAL_NAMES = {
+        "c": "confidence",
+        "s": "safety",
+        "m": "memory",
+        "f": "focus",
+    }
+
     def strict_parse(self, text: str) -> ParsedResult:
         """Strict parse v3.1 format. execute_batch ブロックを認識する。"""
         result = ParsedResult(
@@ -462,19 +505,13 @@ class FuzzyParser:
             line = lines[i]
             stripped = line.strip()
 
-            if stripped == "<<<":
-                if not current_action:
-                    # Robustness: Create a default action if content starts without one
-                    current_action = Action(type="response", path="")
-                in_content = True
-                i += 1
-                continue
-
-            # v3.2: >>> は行頭（column 0）のみブロック終端として認識する（doctest保護）
-            if line.rstrip() == ">>>":
-                if not in_content:
+            if in_content:
+                # `\>>>` (and additional leading backslashes) escapes a literal
+                # column-zero terminator. It is decoded after collecting the block.
+                if line.rstrip() != ">>>":
+                    content_buffer.append(line)
                     i += 1
-                    continue  # Ignore orphan >>>
+                    continue
 
                 if current_action:
                     if current_action.type == "execute_batch":
@@ -484,7 +521,7 @@ class FuzzyParser:
                         )
                         result.actions.extend(batch_actions)
                     else:
-                        raw_content = "\n".join(content_buffer)
+                        raw_content = self._unescape_content("\n".join(content_buffer))
                         yaml_params, body = self._extract_yaml_frontmatter(raw_content)
                         current_action.content = body
                         # YAML フロントマターのパラメーターをインライン params にマージ（YAML優先）
@@ -496,27 +533,47 @@ class FuzzyParser:
                 i += 1
                 continue
 
-            if in_content:
-                content_buffer.append(line)
+            if stripped == "<<<":
+                if not current_action:
+                    # Robustness: Create a default action if content starts without one
+                    current_action = Action(type="response", path="")
+                in_content = True
                 i += 1
                 continue
+
+            # v3.2: >>> は行頭（column 0）のみブロック終端として認識する（doctest保護）
+            if line.rstrip() == ">>>":
+                raise ParseError(
+                    "Orphan content-block terminator",
+                    line_number=i + 1,
+                    expected="an action followed by '<<<' before '>>>'",
+                    actual=line,
+                )
 
             if stripped.startswith(">>"):
                 result.thoughts.append(stripped[2:].strip())
             elif stripped.startswith("::"):
                 if self._is_vitals(stripped):
-                    self._parse_vitals(stripped, result.vitals)
+                    self._parse_vitals(stripped, result.vitals, result.warnings)
                 else:
                     if current_action:
                         # 前のアクションにコンテンツブロックがなかった
                         # コンテンツなしの単体アクションとして追加する
                         result.actions.append(current_action)
-                    current_action = self._parse_action(stripped)
+                    current_action = self._parse_action(stripped, line_number=i + 1)
             elif stripped.startswith("?"):
                 result.questions.append(stripped[1:].strip())
             elif stripped.startswith("!"):
                 result.errors.append(stripped[1:].strip())
             i += 1
+
+        if in_content:
+            raise ParseError(
+                "Unclosed content block",
+                line_number=len(lines),
+                expected="a column-zero '>>>' terminator",
+                actual="<end of response>",
+            )
 
         # ループ終了時に未追加のアクションがあれば追加（コンテンツブロックなしの単体アクション）
         if current_action:
@@ -721,6 +778,30 @@ class FuzzyParser:
 
         return clean_path, params
 
+    @staticmethod
+    def _unescape_content(content: str) -> str:
+        r"""Decode escaped column-zero block terminators in raw content.
+
+        A line containing ``\>>>`` represents a literal ``>>>`` line. Each
+        additional leading backslash is preserved, so ``\\>>>`` represents
+        the literal text ``\>>>``. Only otherwise-exact terminator lines are
+        decoded; ordinary content such as ``\>>> expression`` is unchanged.
+
+        Args:
+            content: Raw text collected between ``<<<`` and ``>>>``.
+
+        Returns:
+            Content with one escape backslash removed from escaped terminators.
+        """
+        decoded_lines = []
+        escaped_terminator = re.compile(r"^(\\+)(>>>[ \t]*)$")
+        for line in content.split("\n"):
+            match = escaped_terminator.match(line)
+            if match:
+                line = match.group(1)[1:] + match.group(2)
+            decoded_lines.append(line)
+        return "\n".join(decoded_lines)
+
     def _split_batch_content(self, content: str) -> List[Action]:
         """
         execute_batch ブロックのコンテンツを %%% 区切りで分割し、
@@ -777,7 +858,7 @@ class FuzzyParser:
         # Extract parameters from path_part
         path, params = self._extract_line_params(path_part)
 
-        content = "\n".join(content_lines).strip()
+        content = self._unescape_content("\n".join(content_lines).strip())
 
         # run_command の場合、pathがなければcontentをcommandとして扱う
         if action_type == "run_command" and not path and content:
@@ -798,7 +879,7 @@ class FuzzyParser:
             thoughts=[], vitals={}, actions=[], questions=[], errors=[], warnings=[]
         )
         result.thoughts = self._extract_thoughts(text)
-        result.vitals = self._extract_vitals(text)
+        result.vitals = self._extract_vitals(text, result.warnings)
         result.actions = self._extract_actions_fuzzy(text)
         result.questions = self._extract_questions(text)
         result.errors = self._extract_errors(text)
@@ -883,7 +964,7 @@ class FuzzyParser:
                         content_lines.append(lines[j])
                         j += 1
 
-                raw_content = "\n".join(content_lines)
+                raw_content = self._unescape_content("\n".join(content_lines))
 
                 # Extract parameters from path
                 clean_path, params = self._extract_line_params(path)
@@ -908,33 +989,66 @@ class FuzzyParser:
 
         return self._dedup_consecutive_actions(actions)
 
-    def _parse_vitals(self, line: str, vitals: dict) -> None:
-        """Parse multiple vitals from a single line."""
-        patterns = {
-            "confidence": r"::c([\d.]+)",
-            "safety": r"::s([\d.]+)",
-            "memory": r"::m([\d.]+)",
-            "focus": r"::f([\d.]+)",
-        }
-        for key, pattern in patterns.items():
-            matches = re.finditer(pattern, line)
-            for match in matches:
+    def _parse_vitals(
+        self,
+        line: str,
+        vitals: dict,
+        warnings: Optional[List[str]] = None,
+    ) -> None:
+        """Parse and range-check multiple vitals from one protocol line.
+
+        Args:
+            line: Sym-Ops line containing one or more vital tokens.
+            vitals: Destination mapping updated with valid values.
+            warnings: Optional list receiving diagnostics for invalid values.
+
+        Returns:
+            None.
+        """
+        for symbol, name in self._VITAL_NAMES.items():
+            for match in re.finditer(rf"::{symbol}([^\s]+)", line):
+                raw_value = match.group(1)
                 try:
-                    vitals[key] = float(match.group(1))
+                    value = float(raw_value)
                 except ValueError:
-                    pass
+                    if warnings is not None:
+                        warnings.append(
+                            f"Ignored invalid vital {name}={raw_value!r}; expected 0.0-1.0"
+                        )
+                    continue
+                if not 0.0 <= value <= 1.0:
+                    if warnings is not None:
+                        warnings.append(
+                            f"Ignored out-of-range vital {name}={raw_value!r}; expected 0.0-1.0"
+                        )
+                    continue
+                vitals[name] = value
 
     def _is_vitals(self, line: str) -> bool:
-        """Robust vitals line check."""
-        # Check if line contains mostly vitals markers
-        v_matches = re.findall(r"::[cmfs][\d.]+", line)
-        if not v_matches:
-            return False
-        # If the line starts with vitals and doesn't look like an action verb
-        return True
+        """Return whether a line begins with a numeric-looking vital token.
 
-    def _parse_action(self, line: str) -> Action:
-        """Parse action line v2"""
+        Args:
+            line: Candidate protocol line.
+
+        Returns:
+            True for vital lines, including malformed numeric values that
+            should be diagnosed rather than dispatched as tool names.
+        """
+        return bool(re.match(r"^::[cmfs](?=[+\-.0-9])", line))
+
+    def _parse_action(self, line: str, line_number: Optional[int] = None) -> Action:
+        """Parse one strict action line.
+
+        Args:
+            line: Sym-Ops action line beginning with ``::``.
+            line_number: Optional one-based source line for diagnostics.
+
+        Returns:
+            Parsed action.
+
+        Raises:
+            ParseError: If the action name is empty or malformed.
+        """
         # Better parsing for actions without @ (like run_command python script.py)
         # If no @, try to split by space for the action type
         parts = line[2:].strip().split("@", 1)
@@ -953,6 +1067,14 @@ class FuzzyParser:
             else:
                 action_type = content
                 path_part = ""
+
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", action_type):
+            raise ParseError(
+                "Invalid action name",
+                line_number=line_number,
+                expected="'::action_name @target key=value'",
+                actual=line,
+            )
 
         depends_on = None
 
@@ -998,22 +1120,29 @@ class FuzzyParser:
                 thoughts.append(line.strip()[2:].strip())
         return thoughts
 
-    def _extract_vitals(self, text: str) -> dict:
-        """Extract Duck Vitals v3.1: c=confidence, s=safety, m=memory, f=focus"""
+    def _extract_vitals(self, text: str, warnings: Optional[List[str]] = None) -> dict:
+        """Extract range-checked Duck Vitals from outside content blocks.
+
+        Args:
+            text: Full Sym-Ops response text.
+            warnings: Optional list receiving diagnostics for invalid values.
+
+        Returns:
+            Mapping of valid vital names to values in the 0.0-1.0 range.
+        """
         vitals = {}
-        patterns = {
-            "confidence": r"::c([\d.]+)",
-            "safety": r"::s([\d.]+)",
-            "memory": r"::m([\d.]+)",
-            "focus": r"::f([\d.]+)",
-        }
-        for key, pattern in patterns.items():
-            match = re.search(pattern, text)
-            if match:
-                try:
-                    vitals[key] = float(match.group(1))
-                except ValueError:
-                    pass
+        in_block = False
+        for line in text.split("\n"):
+            if in_block:
+                if line.rstrip() == ">>>":
+                    in_block = False
+                continue
+            if line.strip() == "<<<":
+                in_block = True
+                continue
+            stripped = line.strip()
+            if self._is_vitals(stripped):
+                self._parse_vitals(stripped, vitals, warnings)
         return vitals
 
     def _extract_questions(self, text: str) -> List[str]:
@@ -1141,12 +1270,13 @@ class SymOpsProcessor:
             if corrections:
                 parsed.warnings.append(f"Preprocessing: {', '.join(corrections)}")
             return parsed
-        except ParseError:
-            pass
+        except ParseError as exc:
+            strict_error = str(exc)
 
         # Phase 4: Fuzz Parse (Fallback)
         partial = self.parser.fuzzy_parse(repaired)
         partial.warnings.append("Partial parse used")
+        partial.warnings.append(f"Strict parse failed: {strict_error}")
         if reasoning_stripped:
             partial.warnings.append("Reasoning tags stripped (<think>)")
         if was_converted:

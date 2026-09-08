@@ -1,3 +1,11 @@
+### 2026-08-02: Sym-Ops パーサー境界の堅牢化
+- `companion/utils/parser.py`: 独自の旧文法実装を廃止し、実運用と同じ `SymOpsProcessor` へ委譲する後方互換アダプターへ変更。旧APIでも `@target` を失わず返すようにした。
+- `companion/utils/sym_ops.py`: vitals を小数桁数ではなく数値範囲 `0.0 <= value <= 1.0` で検証。範囲外・不正値は警告付きで無視し、コンテンツブロック内の vitals 文字列は解析対象外とした。単独の列0 `>>>` は `\>>>` でエスケープでき、先頭バックスラッシュ1文字を解析時に外す。本文中の単独 `<<<` はブロック再開始として扱わず保持する。
+- strict/fuzzy 境界: orphan `>>>`、未閉鎖ブロック、不正アクション名を行番号・期待形式・実入力付き `ParseError` にし、fuzzy fallback の警告へ具体的な失敗理由を保持。fuzzyでも回復不能な場合は `LLMClient` から次ターンの Correction Guide へ詳細を渡す。
+- `companion/core_loop_helpers.py`: パーサー以外から渡された範囲外・非有限 vitals も状態へ反映しない二重防御を追加。
+- プロンプト・設計文書: `@` をパス専用ではなく「ツールの主引数」と明文化し、`\>>>` エスケープ規則と vitals 範囲表記を同期。
+- テスト: `tests/test_sym_ops_protocol_hardening.py` を追加（主引数マッピング、空白入りパス、引用値、旧API委譲、vitals検証、終端エスケープ、本文内開始マーカー、strict/fuzzy診断、Correction Guide連携）。`uv run pytest tests/ -v` → **587 passed / 2 skipped**。
+
 ### 2026-06-28: ツール返り値の統一（ToolResult 化）
 - 目的: プロンプト・ツール回りの改善案「1. ツール返り値の統一」に対応。`file_ops`/`symbols`/`sub_llm_tools`/`shell_tool`/`core_actions` が返していた `::status error` 形式の事前整形文字列を廃止し、すべて `ToolResult` オブジェクトで返すようにした。`normalize_tool_result()` という事後正規化を削除。
 - 修正:

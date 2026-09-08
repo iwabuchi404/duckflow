@@ -6,6 +6,7 @@ without containing loop control flow.
 """
 
 import logging
+import math
 from typing import TYPE_CHECKING
 
 from companion.state.agent_state import ActionList, SyntaxErrorInfo
@@ -27,14 +28,23 @@ def update_vitals_from_response(state, action_list: ActionList) -> None:
         return
 
     logger.info(f"Updating vitals from response: {action_list.vitals}")
-    if "confidence" in action_list.vitals:
-        state.vitals.confidence = action_list.vitals["confidence"]
-    if "safety" in action_list.vitals:
-        state.vitals.safety = action_list.vitals["safety"]
-    if "memory" in action_list.vitals:
-        state.vitals.memory = action_list.vitals["memory"]
-    if "focus" in action_list.vitals:
-        state.vitals.focus = action_list.vitals["focus"]
+    for name in ("confidence", "safety", "memory", "focus"):
+        if name not in action_list.vitals:
+            continue
+        value = action_list.vitals[name]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or not 0.0 <= value <= 1.0
+        ):
+            logger.warning(
+                "Ignoring invalid vital from response: %s=%r (expected 0.0-1.0)",
+                name,
+                value,
+            )
+            continue
+        setattr(state.vitals, name, float(value))
 
 
 _PARSE_ERROR_HINTS = {

@@ -79,9 +79,10 @@ If you are a reasoning model (your output includes a reasoning/thinking field):
 ## Tool Usage & Schema
 
 ### Parameter Passing
-- **Inline (Simple)**: `::tool_name @path key=value`
+- **Inline (Simple)**: `::tool_name @target key=value`. `@target` is the tool's primary argument (such as `path`, `command`, `reason`, `query`, or `message`).
 - **YAML Block (Complex)**: For multiple parameters or structured data, use a YAML block inside `<<< >>>`.
 - **Content**: Code or text always follows the YAML front matter or is the entire block.
+- **Literal terminator**: To include a column-zero line containing only `>>>` in content, write `\\>>>`; the parser removes one escape backslash.
 
 ### Edit Tools
 
