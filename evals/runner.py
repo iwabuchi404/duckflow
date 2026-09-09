@@ -93,6 +93,12 @@ def _make_input_provider(
                 # separate from the action summary appended after it.
                 if any(looks_like_plan(c) for c in assistants[-3:]):
                     return follow_ups.pop(0)
+                # A structured plan via propose_plan lives in state, not in
+                # message text. Treat an existing stepped plan as a presented
+                # plan awaiting user go-ahead.
+                plan = getattr(agent.state, "current_plan", None)
+                if plan is not None and getattr(plan, "steps", []):
+                    return follow_ups.pop(0)
         return "exit"
 
     return _next_input
