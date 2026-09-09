@@ -182,6 +182,15 @@ async def run_scenario(
 
     llm = LLMClient(provider=provider, model=model)
     agent = DuckAgent(llm_client=llm, session_manager=None)
+
+    # core.py recalculates max_loops from the tier profile on every user
+    # turn, overriding any direct assignment. Force the scenario budget by
+    # pinning calculate_max_loops to the scenario value.
+    def _fixed_max_loops(tier_profile: Any = None) -> int:
+        """Return the scenario's loop budget unchanged."""
+        return max_loops
+
+    agent.pacemaker.calculate_max_loops = _fixed_max_loops  # type: ignore[method-assign]
     agent.pacemaker.max_loops = max_loops
 
     # pacemaker.reset() clears loop_count on turn completion; capture the

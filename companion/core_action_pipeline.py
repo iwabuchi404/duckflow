@@ -181,16 +181,19 @@ def build_investigation_edit_block(action: Action) -> InvestigationBlock:
         "Investigation is read-only. "
         "Allowed: read_file, grep_files, list_directory, run_command, "
         "submit_hypothesis, finish_investigation. "
-        "Call ::finish_investigation @<conclusion> when root cause is confirmed, "
-        "then re-enter Task mode to apply edits."
+        "To apply your fix: call ::finish_investigation @<conclusion>. "
+        "That immediately switches you to Planning Mode where "
+        f"'{action.name}' is allowed — no other step is needed. "
+        "If you already confirmed the root cause earlier, just call "
+        "::finish_investigation again with that conclusion."
     )
     syntax_error = SyntaxErrorInfo(
         error_type="investigation_edit_blocked",
         raw_snippet=f"::{action.name}",
         correction_hint=(
             f"'{action.name}' cannot be called during Investigation Mode. "
-            "Close investigation first: ::finish_investigation @<conclusion>, "
-            "then re-enter Task mode to apply edits."
+            "Call ::finish_investigation @<conclusion> — this switches you to "
+            f"Planning Mode where '{action.name}' works immediately."
         ),
     )
     return InvestigationBlock(message=message, syntax_error=syntax_error)
