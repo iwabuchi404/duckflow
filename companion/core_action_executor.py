@@ -57,6 +57,32 @@ async def execute_actions(agent, action_list) -> list:
     logger.info(f"Executing actions: {[a.name for a in action_list.actions]}")
     results = []
 
+    # --- Causal history ordering ---
+    # Tool results are user-role messages. If they are appended during
+    # execution and the assistant action summary afterwards, the turn ends
+    # with the model's own summary — inviting the model to continue writing
+    # (e.g. fabricating further results). Instead, buffer user-role messages
+    # and flush them AFTER the summary, so history ends with the latest tool
+    # result: call → result order.
+    pending_user_messages: list[str] = []
+    history_flushed = False
+
+    def _queue_user_message(content: str) -> None:
+        """Buffer a user-role history message for end-of-turn flush."""
+        pending_user_messages.append(content)
+
+    def _flush_history() -> None:
+        """Write summary first, then buffered results in execution order."""
+        nonlocal history_flushed
+        if history_flushed:
+            return
+        history_flushed = True
+        action_summary = build_action_summary(action_list)
+        if action_summary:
+            agent.state.add_message("assistant", action_summary)
+        for content in pending_user_messages:
+            agent.state.add_message("user", content)
+
     mode_val = agent.state.current_mode.value if agent.state.current_mode else None
     if mode_val and mode_val in agent.MODE_TOOL_MAPPING:
         mode_tools = agent.UNIVERSAL_TOOLS | agent.MODE_TOOL_MAPPING[mode_val]
@@ -93,8 +119,7 @@ async def execute_actions(agent, action_list) -> list:
         agent.state.last_action_result = error_msg
         ui.print_result(str(error_content), is_error=True)
 
-        agent.state.add_message(
-            "user",
+        _queue_user_message(
             build_tool_result_message(
                 action, error_content, status=ToolStatus.ERROR
             ),
@@ -129,8 +154,7 @@ async def execute_actions(agent, action_list) -> list:
                         consecutive_errors, remaining
                     )
                 )
-                agent.state.add_message(
-                    "user",
+                _queue_user_message(
                     build_fail_fast_history_message(
                         consecutive_errors, remaining
                     ),
@@ -178,8 +202,7 @@ async def execute_actions(agent, action_list) -> list:
                 )
                 block = build_investigation_edit_block(action)
                 agent.state.last_syntax_errors.append(block.syntax_error)
-                agent.state.add_message(
-                    "user",
+                _queue_user_message(
                     build_tool_result_message(
                         action, block.message, status=ToolStatus.ERROR
                     ),
@@ -198,8 +221,7 @@ async def execute_actions(agent, action_list) -> list:
                     ui.print_result(msg, is_error=True)
                     agent.state.last_action_result = msg
 
-                    agent.state.add_message(
-                        "user",
+                    _queue_user_message(
                         build_denial_context(action, approval_request.warning),
                     )
 
@@ -263,8 +285,7 @@ async def execute_actions(agent, action_list) -> list:
                             action.name, result_str, agent
                         )
 
-                        agent.state.add_message(
-                            "user",
+                        _queue_user_message(
                             build_tool_result_message(
                                 action,
                                 result,
@@ -334,14 +355,11 @@ async def execute_actions(agent, action_list) -> list:
                     break
     except KeyboardInterrupt:
         ui.print_warning("Execution interrupted by user.")
-        agent.state.add_message(
-            "user",
+        _queue_user_message(
             "[System: Execution was interrupted by the user (Ctrl+C). Please wait for new instructions.]",
         )
 
-    action_summary = build_action_summary(action_list)
-    if action_summary:
-        agent.state.add_message("assistant", action_summary)
+    _flush_history()
 
     if ui:
         ui.print_token_usage(agent.llm.usage_stats)

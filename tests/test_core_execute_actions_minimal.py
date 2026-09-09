@@ -65,7 +65,7 @@ async def test_execute_actions_blocks_edits_in_investigation_mode() -> None:
     assert len(results) == 1
     assert "[BLOCKED]" in results[0]
     assert agent.state.last_syntax_errors[-1].error_type == "investigation_edit_blocked"
-    tool_msg = agent.state.conversation_history[-2]
+    tool_msg = agent.state.conversation_history[-1]
     assert tool_msg["role"] == "user"
     assert is_tool_result_message(tool_msg["content"])
     assert "Investigation Mode" in tool_msg["content"]
@@ -224,7 +224,7 @@ async def test_execute_actions_wraps_tool_error_with_error_status() -> None:
     assert "Something went wrong" in results[0]
     assert "failed" in results[0]
 
-    tool_msg = agent.state.conversation_history[-2]
+    tool_msg = agent.state.conversation_history[-1]
     assert tool_msg["role"] == "user"
     assert is_tool_result_message(tool_msg["content"])
     assert "::status error" in tool_msg["content"]
@@ -256,7 +256,7 @@ async def test_execute_actions_reports_missing_required_parameter() -> None:
     assert "Required parameter 'index' is missing" in results[0]
     assert "failed" in results[0]
 
-    tool_msg = agent.state.conversation_history[-2]
+    tool_msg = agent.state.conversation_history[-1]
     assert tool_msg["role"] == "user"
     assert is_tool_result_message(tool_msg["content"])
     assert "::status error" in tool_msg["content"]
@@ -288,3 +288,37 @@ async def test_execute_actions_reports_dropped_unexpected_params() -> None:
     error = agent.state.last_syntax_errors[-1]
     assert error.error_type == "unexpected_params"
     assert "bogus" in error.correction_hint
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_orders_summary_before_results() -> None:
+    """
+    History must end with the latest tool result (call -> result order),
+    not with the model's own summary — otherwise the model continues
+    writing past its turn (e.g. fabricating further results).
+    """
+    agent = _agent()
+
+    def ping(index: int) -> str:
+        """Record that a test action was executed."""
+        return f"pong-{index}"
+
+    agent.register_tool("ping", ping)
+    action_list = ActionList(
+        reasoning="two pings",
+        actions=[
+            Action(name="ping", parameters={"index": 1}),
+            Action(name="ping", parameters={"index": 2}),
+        ],
+    )
+
+    await agent.execute_actions(action_list)
+
+    summary_msg = agent.state.conversation_history[-3]
+    first_result = agent.state.conversation_history[-2]
+    second_result = agent.state.conversation_history[-1]
+    assert summary_msg["role"] == "assistant"
+    assert first_result["role"] == "user"
+    assert "pong-1" in first_result["content"]
+    assert second_result["role"] == "user"
+    assert "pong-2" in second_result["content"]

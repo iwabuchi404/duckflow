@@ -276,11 +276,15 @@ class TestDuckAgentExecuteActionsEnvelope:
             "execute_actions 後に会話履歴が増えていない"
         )
 
-        # execute_actions は末尾に「推論+アクション概要」を assistant ロールで
-        # 追加する（multi_turn_context_fix_plan.md Phase 1）。
-        # そのためツール結果メッセージは最後から2番目になる。
-        tool_msg = agent.state.conversation_history[-2]
-        summary_msg = agent.state.conversation_history[-1]
+        # execute_actions は「推論+アクション概要」を assistant ロールで
+        # 先に置き、その後に対応するツール結果を user ロールで追加する
+        # （呼び出し→結果の因果順。履歴は最新のツール結果で終わる）。
+        summary_msg = agent.state.conversation_history[-2]
+        tool_msg = agent.state.conversation_history[-1]
+
+        assert summary_msg["role"] == "assistant", (
+            f"アクション概要の role が 'assistant' ではない: {summary_msg['role']}"
+        )
 
         # ツール結果メッセージの role が 'user' であること（ツール結果はユーザーロールで注入される）
         assert tool_msg["role"] == "user", (
