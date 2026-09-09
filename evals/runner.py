@@ -17,6 +17,7 @@ import asyncio
 import json
 import logging
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -148,6 +149,39 @@ def _run_checks(
     return results
 
 
+def _run_verify_command(command: str, workspace: Path) -> dict[str, Any]:
+    """Execute a scenario verification command inside the workspace.
+
+    Args:
+        command: Command string run with cwd=workspace.
+        workspace: Run workspace root.
+
+    Returns:
+        Check result dict in the same shape as _run_checks entries.
+    """
+    import sys as _sys
+
+    command = command.replace("{python}", f'"{_sys.executable}"')
+    # NOTE: do NOT use text=True — console output may mix encodings
+    # (e.g. pytest echoing CP932 docstrings); decode defensively instead.
+    proc = subprocess.run(
+        command,
+        shell=True,
+        cwd=str(workspace),
+        capture_output=True,
+        timeout=120,
+    )
+    stdout = proc.stdout.decode("utf-8", errors="replace") if proc.stdout else ""
+    stderr = proc.stderr.decode("utf-8", errors="replace") if proc.stderr else ""
+    passed = proc.returncode == 0
+    detail = "" if passed else (stdout + stderr)[-500:]
+    return {
+        "check": {"type": "command_exit_zero", "command": command},
+        "passed": passed,
+        "detail": detail,
+    }
+
+
 async def run_scenario(
     scenario: dict[str, Any],
     provider: str,
@@ -263,6 +297,21 @@ async def run_scenario(
     duration = time.monotonic() - start
 
     checks = _run_checks(scenario.get("checks"), workspace)
+    verify_command = scenario.get("verify_command")
+    if verify_command:
+        try:
+            checks.append(_run_verify_command(verify_command, workspace))
+        except subprocess.TimeoutExpired:
+            checks.append(
+                {
+                    "check": {
+                        "type": "command_exit_zero",
+                        "command": verify_command,
+                    },
+                    "passed": False,
+                    "detail": "verify command timed out",
+                }
+            )
     passed = status == "completed" and all(c["passed"] for c in checks)
 
     usage = getattr(llm, "usage_stats", {}) or {}

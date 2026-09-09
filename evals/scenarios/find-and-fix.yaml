@@ -1,8 +1,9 @@
 id: find-and-fix
-task: "このワークスペースで calc.py のテストを実行すると失敗します。pytest を使って失敗を確認し、原因を調査して calc.py を修正してください。完了したら報告してください。"
+task: "このワークスペースで calc.py のテストを実行すると失敗します。pytest を使って失敗を確認し、原因を調査して calc.py を修正してください。計画の提示だけで終了せず、修正の適用とテストの再実行による確認まで行ってください。完了したら報告してください。"
 fixture: fixtures/findfix_ws
 max_loops: 15
 timeout_seconds: 420
+verify_command: "{python} -m pytest test_calc.py -q"
 follow_up_inputs:
   - "了解です。その計画で進めてください。"
 checks:

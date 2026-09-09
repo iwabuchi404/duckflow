@@ -22,6 +22,18 @@ _ACTION_RE = re.compile(r"::\s*([a-z_]+)(?:\s+@([^\n]+))?")
 _ECHO_MARKERS = ("=====", "test session starts", "cachedir:")
 _PLAN_KEYWORDS = ("計画", "プラン", "plan", "steps", "提案", "手順")
 _PLAN_LIST_RE = re.compile(r"(?m)^\s*(?:\d+[.、)]|[-*•])\s+\S")
+_SUCCESS_KEYWORDS = (
+    "完了",
+    "修正しまし",
+    "修正済み",
+    "解決",
+    "パス",
+    "成功",
+    "fixed",
+    "success",
+    "passing",
+    "resolved",
+)
 
 
 def looks_like_plan(text: str) -> bool:
@@ -37,7 +49,7 @@ def looks_like_plan(text: str) -> bool:
     Returns:
         True when the text looks like a presented plan.
     """
-    if len(text) < 80:
+    if len(text) < 40:
         return False
     has_list = bool(_PLAN_LIST_RE.search(text))
     has_keyword = any(k in text.lower() for k in _PLAN_KEYWORDS)
@@ -241,6 +253,26 @@ def tag_llm_call_error(transcript: dict[str, Any]) -> bool:
     )
 
 
+def tag_false_success(transcript: dict[str, Any]) -> bool:
+    """Detect a failed run whose final message claims success.
+
+    Args:
+        transcript: Full transcript dict.
+
+    Returns:
+        True when the run failed while the model reported success.
+    """
+    result = transcript.get("result", {})
+    if result.get("passed", False):
+        return False
+    history = transcript.get("conversation_history", [])
+    assistants = [m["content"] for m in history if m.get("role") == "assistant"]
+    if not assistants:
+        return False
+    last = assistants[-1].lower()
+    return any(k in last for k in _SUCCESS_KEYWORDS)
+
+
 TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "api_error": tag_api_error,
     "output_echo": tag_output_echo,
@@ -273,6 +305,8 @@ def tag_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
         tags.append("llm_call_error")
     if tag_plan_only(transcript):
         tags.append("plan_only")
+    if tag_false_success(transcript):
+        tags.append("false_success")
     return {
         "scenario_id": result.get("scenario_id", "unknown"),
         "passed": result.get("passed", False),
