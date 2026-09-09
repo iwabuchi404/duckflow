@@ -1,0 +1,11 @@
+id: create-fizzbuzz
+task: "fizzbuzz.py を新規作成し、1から15までの FizzBuzz を表示する関数を実装してください。完了したら報告してください。"
+fixture: fixtures/empty_ws
+max_loops: 12
+timeout_seconds: 300
+checks:
+  - type: file_exists
+    path: fizzbuzz.py
+  - type: file_contains
+    path: fizzbuzz.py
+    text: "Fizz"

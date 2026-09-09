@@ -176,6 +176,9 @@ Thumbs.db
 .claude
 # App logs
 duckflow_v4.log*
-tmp/
-utils/
+/tmp/
+/utils/
 blocked.txt
+
+# Eval results (keep locally, not in git)
+evals/results/

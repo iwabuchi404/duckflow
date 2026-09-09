@@ -1,0 +1,12 @@
+id: fix-typo
+task: "utils/helpers.py にはタイポのある関数 helo が定義されています。この関数名を greet に修正してください（引数・中身は変更しないこと）。完了したら報告してください。"
+fixture: fixtures/typo_ws
+max_loops: 12
+timeout_seconds: 300
+checks:
+  - type: file_contains
+    path: utils/helpers.py
+    text: "def greet"
+  - type: file_not_contains
+    path: utils/helpers.py
+    text: "def helo"
