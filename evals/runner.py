@@ -53,36 +53,61 @@ def load_scenarios(paths: list[Path]) -> list[dict[str, Any]]:
     return scenarios
 
 
-def _make_input_provider(inputs: list[str]) -> Callable[[], Any]:
-    """Build a get_user_input replacement serving queued inputs.
+def _make_input_provider(
+    task: str, follow_ups: list[str] | None, agent_ref: dict[str, Any]
+) -> Callable[[], Any]:
+    """Build a get_user_input replacement with content-aware follow-ups.
+
+    Primary inputs (task, then 'exit') are served first. Once they run out,
+    follow-up inputs are served ONLY while the agent's last assistant message
+    looks like a presented plan (see analysis.looks_like_plan). This avoids
+    replying "go ahead" to error messages or silent failures.
 
     Args:
-        inputs: Queued inputs (task first, 'exit' last).
+        task: Scenario task sent as the first user input.
+        follow_ups: Follow-up user inputs for plan-presentation turns.
+        agent_ref: Mutable dict holding the agent under key "agent"; filled
+            in later by run_scenario once the agent exists.
 
     Returns:
-        Async callable returning each input in order (matches the awaited
-        ui.get_user_input interface).
+        Async callable returning the next input.
     """
-    queue = list(inputs)
+    from evals.analysis import looks_like_plan
+
+    queue = [task, "exit"]
 
     async def _next_input() -> str:
-        """Return the next queued input, or 'exit' when exhausted."""
+        """Return the next queued input, with plan-aware follow-ups."""
         if queue:
             return queue.pop(0)
+        if follow_ups:
+            agent = agent_ref.get("agent")
+            if agent is not None:
+                assistants = [
+                    m["content"]
+                    for m in agent.state.conversation_history
+                    if m.get("role") == "assistant"
+                ]
+                # The response text is stored as its own assistant message,
+                # separate from the action summary appended after it.
+                if any(looks_like_plan(c) for c in assistants[-3:]):
+                    return follow_ups.pop(0)
         return "exit"
 
     return _next_input
 
 
-def _patch_ui(task: str) -> None:
+def _patch_ui(task: str, follow_ups: list[str] | None, agent_ref: dict[str, Any]) -> None:
     """Patch the UI module: scripted input and auto-approval.
 
     Args:
         task: Scenario task sent as the first user input.
+        follow_ups: Follow-up inputs for plan-presentation turns.
+        agent_ref: Mutable dict receiving the agent instance.
     """
     from companion.ui import ui as ui_instance
 
-    ui_instance.get_user_input = _make_input_provider([task, "exit"])
+    ui_instance.get_user_input = _make_input_provider(task, follow_ups, agent_ref)
     ui_instance.request_confirmation = lambda warning: True
 
 
@@ -167,7 +192,8 @@ async def run_scenario(
     if fixture.is_dir():
         shutil.copytree(fixture, workspace, dirs_exist_ok=True)
 
-    _patch_ui(scenario["task"])
+    agent_ref: dict[str, Any] = {}
+    _patch_ui(scenario["task"], scenario.get("follow_up_inputs"), agent_ref)
     file_ops.set_workspace_root(str(workspace))
 
     api_key: str | None = None
@@ -182,6 +208,7 @@ async def run_scenario(
 
     llm = LLMClient(provider=provider, model=model)
     agent = DuckAgent(llm_client=llm, session_manager=None)
+    agent_ref["agent"] = agent
 
     # core.py recalculates max_loops from the tier profile on every user
     # turn, overriding any direct assignment. Force the scenario budget by

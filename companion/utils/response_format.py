@@ -105,6 +105,10 @@ def calc(data: str) -> str:
    Do NOT call `::edit_file`, `::write_file`, or `::response` until investigation is closed.
    File edits during Investigation Mode are **blocked by the system**.
 
+9. **Presenting a plan**: If you want the user to review a plan before execution,
+   deliver it via `::response @<plan text>`. Do not end your turn with a bare
+   thought block — thoughts are not visible to the user.
+
 ## 6. Tool Results ([TOOL_RESULT])
 Messages wrapped in `[TOOL_RESULT] ... [/TOOL_RESULT]` are automated outputs from tool
 execution. They are NOT written by the user.

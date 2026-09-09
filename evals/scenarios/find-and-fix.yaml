@@ -3,6 +3,8 @@ task: "このワークスペースで calc.py のテストを実行すると失�
 fixture: fixtures/findfix_ws
 max_loops: 15
 timeout_seconds: 420
+follow_up_inputs:
+  - "了解です。その計画で進めてください。"
 checks:
   - type: file_not_contains
     path: calc.py

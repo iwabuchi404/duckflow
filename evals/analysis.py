@@ -20,6 +20,42 @@ from typing import Any, Callable
 
 _ACTION_RE = re.compile(r"::\s*([a-z_]+)(?:\s+@([^\n]+))?")
 _ECHO_MARKERS = ("=====", "test session starts", "cachedir:")
+_PLAN_KEYWORDS = ("計画", "プラン", "plan", "steps", "提案", "手順")
+_PLAN_LIST_RE = re.compile(r"(?m)^\s*(?:\d+[.、)]|[-*•])\s+\S")
+
+
+def looks_like_plan(text: str) -> bool:
+    """Heuristically decide whether an assistant message presents a plan.
+
+    A plan is a longer message that either contains a numbered/bulleted list
+    or plan-related keywords. Used by the harness to decide whether a
+    follow-up user input makes sense, and by analysis as a behavior marker.
+
+    Args:
+        text: Assistant response text.
+
+    Returns:
+        True when the text looks like a presented plan.
+    """
+    if len(text) < 80:
+        return False
+    has_list = bool(_PLAN_LIST_RE.search(text))
+    has_keyword = any(k in text.lower() for k in _PLAN_KEYWORDS)
+    return has_list and has_keyword
+
+
+def tag_plan_only(transcript: dict[str, Any]) -> bool:
+    """Detect a run whose final assistant message looks like a presented plan.
+
+    Args:
+        transcript: Full transcript dict.
+
+    Returns:
+        True when the run ended by presenting a plan.
+    """
+    history = transcript.get("conversation_history", [])
+    assistants = [m["content"] for m in history if m.get("role") == "assistant"]
+    return bool(assistants) and looks_like_plan(assistants[-1])
 
 
 def _extract_action_sequence(history: list[dict[str, Any]]) -> list[tuple[str, str]]:
@@ -235,6 +271,8 @@ def tag_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
         tags.append("empty_llm_response")
     if tag_llm_call_error(transcript):
         tags.append("llm_call_error")
+    if tag_plan_only(transcript):
+        tags.append("plan_only")
     return {
         "scenario_id": result.get("scenario_id", "unknown"),
         "passed": result.get("passed", False),
