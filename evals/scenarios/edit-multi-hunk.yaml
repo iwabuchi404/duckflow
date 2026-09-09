@@ -1,0 +1,21 @@
+id: edit-multi-hunk
+task: "config.py には4箇所の設定値があります。次のようにすべて修正してください: MAX_RETRIES を 3 から 5 へ、DEBUG を True から False へ、PORT を 8000 から 8080 へ、TIMEOUT を 30 から 60 へ。1つの edit_file アクションでまとめて編集できるのが理想です。完了したら報告してください。"
+fixture: fixtures/multihunk_ws
+max_loops: 12
+timeout_seconds: 300
+checks:
+  - type: file_contains
+    path: config.py
+    text: "MAX_RETRIES = 5"
+  - type: file_contains
+    path: config.py
+    text: "DEBUG = False"
+  - type: file_contains
+    path: config.py
+    text: "PORT = 8080"
+  - type: file_contains
+    path: config.py
+    text: "TIMEOUT = 60"
+  - type: file_not_contains
+    path: config.py
+    text: "MAX_RETRIES = 3"

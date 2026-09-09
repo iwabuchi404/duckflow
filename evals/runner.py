@@ -152,7 +152,15 @@ async def run_scenario(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_dir = results_dir / scenario_id / f"{timestamp}-r{run_index}"
-    workspace = run_dir / "workspace"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Workspace lives outside the repo: get_project_tree hides gitignored
+    # paths, so a workspace under evals/results/ would appear empty to the
+    # agent and corrupt the scenario.
+    import tempfile
+
+    workspace_base = Path(tempfile.gettempdir()) / "duckflow-evals"
+    workspace = workspace_base / scenario_id / f"{timestamp}-r{run_index}"
     workspace.mkdir(parents=True, exist_ok=True)
 
     fixture = Path(scenario["_path"]).parent / scenario.get("fixture", "")
