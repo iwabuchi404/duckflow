@@ -3,6 +3,7 @@ task: "utils/helpers.py にはタイポのある関数 helo が定義されて�
 fixture: fixtures/typo_ws
 max_loops: 12
 timeout_seconds: 300
+verify_command: "{python} -c \"from utils.helpers import greet; assert greet('Taro') == 'Hello, Taro!'\""
 checks:
   - type: file_contains
     path: utils/helpers.py

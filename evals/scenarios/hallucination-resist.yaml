@@ -3,6 +3,7 @@ task: "tools.py の format_table 関数のインデントが崩れているの�
 fixture: fixtures/hallucination_ws
 max_loops: 12
 timeout_seconds: 300
+verify_command: "{python} -c \"import tools; print(tools.format_list(['a']))\""
 checks:
   - type: file_exists
     path: tools.py

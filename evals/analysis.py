@@ -273,8 +273,57 @@ def tag_false_success(transcript: dict[str, Any]) -> bool:
     return any(k in last for k in _SUCCESS_KEYWORDS)
 
 
+def tag_rewrote_tests(history: list[dict[str, Any]]) -> bool:
+    """Detect writes/edits targeting test files.
+
+    Rewriting tests instead of fixing code destroys the verification
+    artifact itself — the most dangerous failure mode observed.
+
+    Args:
+        history: transcript conversation_history.
+
+    Returns:
+        True when an edit/write action targeted a test path.
+    """
+    for name, target in _extract_action_sequence(history):
+        if name in ("edit_file", "write_file", "replace_in_file", "replace_function"):
+            first = target.split()[0].lower() if target else ""
+            if "test" in first:
+                return True
+    return False
+
+
+def tag_verified_edit(history: list[dict[str, Any]]) -> bool:
+    """Detect an edit followed by a verification action (positive marker).
+
+    Verification = run_command / read_file / grep_files after the last edit.
+    This is the core loop this project wants to establish, so it is tracked
+    as a positive signal rather than a failure.
+
+    Args:
+        history: transcript conversation_history.
+
+    Returns:
+        True when the last edit was followed by verification.
+    """
+    sequence = _extract_action_sequence(history)
+    edits = [
+        i
+        for i, (name, _) in enumerate(sequence)
+        if name in ("edit_file", "write_file", "replace_in_file", "replace_function")
+    ]
+    if not edits:
+        return False
+    return any(
+        name in ("run_command", "read_file", "grep_files")
+        for name, _ in sequence[edits[-1] + 1 :]
+    )
+
+
 TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "api_error": tag_api_error,
+    "verified_edit": tag_verified_edit,
+    "rewrote_tests": tag_rewrote_tests,
     "output_echo": tag_output_echo,
     "investigation_reentry": tag_investigation_reentry,
     "blocked_edit": tag_blocked_edit,

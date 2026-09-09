@@ -3,6 +3,7 @@ task: "fizzbuzz.py を新規作成し、1から15までの FizzBuzz を表示す
 fixture: fixtures/empty_ws
 max_loops: 12
 timeout_seconds: 300
+verify_command: "{python} fizzbuzz.py"
 checks:
   - type: file_exists
     path: fizzbuzz.py

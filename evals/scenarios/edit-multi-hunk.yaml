@@ -3,6 +3,7 @@ task: "config.py には4箇所の設定値があります。次のようにす�
 fixture: fixtures/multihunk_ws
 max_loops: 12
 timeout_seconds: 300
+verify_command: "{python} -c \"import config; assert (config.MAX_RETRIES, config.DEBUG, config.PORT, config.TIMEOUT) == (5, False, 8080, 60)\""
 checks:
   - type: file_contains
     path: config.py
