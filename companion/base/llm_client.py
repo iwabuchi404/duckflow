@@ -982,6 +982,9 @@ class LLMClient:
         logger.info(f"📥 Raw LLM Response (FULL):\n{content}")
         logger.info(f"📏 Response length: {len(content)} chars")
 
+        # Keep the raw text for post-hoc diagnostics (evals, /log analysis).
+        self.last_raw_response = content
+
         if response_model is not None and response_model is not ActionList:
             return self._parse_structured_response(content, response_model)
 

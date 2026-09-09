@@ -193,6 +193,18 @@ async def run_scenario(
     agent.pacemaker.calculate_max_loops = _fixed_max_loops  # type: ignore[method-assign]
     agent.pacemaker.max_loops = max_loops
 
+    # Record every raw LLM response for post-hoc heuristic analysis.
+    raw_responses: list[str] = []
+    _original_chat = llm.chat
+
+    async def _chat_and_record(messages: Any, response_model: Any = None, **kw: Any) -> Any:
+        """Call the original chat and archive the raw response text."""
+        result = await _original_chat(messages, response_model=response_model, **kw)
+        raw_responses.append(getattr(llm, "last_raw_response", ""))
+        return result
+
+    llm.chat = _chat_and_record  # type: ignore[method-assign]
+
     # pacemaker.reset() clears loop_count on turn completion; capture the
     # last non-zero value so the metric survives the reset.
     _original_reset = agent.pacemaker.reset
@@ -250,6 +262,7 @@ async def run_scenario(
             }
             for err in agent.state.last_syntax_errors
         ],
+        "raw_responses": raw_responses,
         "vitals": agent.state.vitals.model_dump()
         if hasattr(agent.state.vitals, "model_dump")
         else vars(agent.state.vitals),
