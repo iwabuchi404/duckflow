@@ -8,6 +8,12 @@ from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConver
 logger = logging.getLogger(__name__)
 
 
+# Actions whose @target is passed through verbatim, without ">" dependency
+# splitting. Shell commands legitimately contain ">", ">>", "2>&1", "&&",
+# "||" — splitting them corrupts the command body.
+_NO_DEPENDENCY_SPLIT = {"run_command"}
+
+
 @dataclass
 class Action:
     type: str
@@ -910,7 +916,7 @@ class FuzzyParser:
                 path = match.group(2) if match.group(2) else ""
                 depends_on = None
 
-                if path and ">" in path:
+                if path and ">" in path and action_type not in _NO_DEPENDENCY_SPLIT:
                     path, depends_on = path.split(">", 1)
                     path = path.strip()
                     depends_on = depends_on.strip()
@@ -1082,7 +1088,7 @@ class FuzzyParser:
 
         depends_on = None
 
-        if ">" in path_part:
+        if ">" in path_part and action_type not in _NO_DEPENDENCY_SPLIT:
             path_val, depends_on = path_part.split(">", 1)
             path_val = path_val.strip()
             depends_on = depends_on.strip()

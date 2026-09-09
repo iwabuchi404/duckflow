@@ -52,6 +52,14 @@ class ShellTool:
 
             # Surface the exit code so the model can tell failures from
             # successes (e.g. pytest exit 5 = "no tests collected").
+            # A header marker is prepended for nonzero exits so failures are
+            # visible without reading to the end of long outputs. Control
+            # flow is unchanged: plain string results are successful tool
+            # executions regardless of the command's own exit code.
+            if process.returncode != 0:
+                output = (
+                    f"[command exited with code {process.returncode}]\n" + output
+                )
             output += f"\nexit_code: {process.returncode}"
 
             return output.strip()
