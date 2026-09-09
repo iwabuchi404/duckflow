@@ -23,7 +23,11 @@ def _run(coro):
 
 
 def test_task_then_exit_without_plan() -> None:
-    """Without a plan in state, inputs are task then exit."""
+    """Without a plan in state, the second input is already exit.
+
+    Regression test: a fixed [task, "exit"] queue exits before any
+    follow-up logic runs, so follow-ups must be decided per request.
+    """
     provider = _make_input_provider("do thing", ["go ahead"], {"agent": _FakeAgent(AgentState())})
 
     assert _run(provider) == "do thing"
@@ -41,8 +45,7 @@ def test_follow_up_served_when_stepped_plan_exists() -> None:
     provider = _make_input_provider("do thing", ["go ahead"], {"agent": _FakeAgent(state)})
 
     assert _run(provider) == "do thing"
-    assert _run(provider) == "exit"
-    # Queue exhausted; stepped plan exists -> follow-up.
+    # Queue exhausted; stepped plan exists -> follow-up, not exit.
     assert _run(provider) == "go ahead"
     assert _run(provider) == "exit"
 
@@ -58,5 +61,4 @@ def test_follow_up_served_for_plan_like_response() -> None:
     provider = _make_input_provider("do thing", ["go ahead"], {"agent": _FakeAgent(state)})
 
     assert _run(provider) == "do thing"
-    assert _run(provider) == "exit"
     assert _run(provider) == "go ahead"

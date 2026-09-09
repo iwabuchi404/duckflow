@@ -1105,6 +1105,7 @@ class LLMClient:
                         name=tool_name,
                         parameters=params,
                         thought=f"Confidence: {action.confidence}",
+                        auto_generated=getattr(action, "auto_generated", False),
                     )
                 )
 
@@ -1145,6 +1146,7 @@ class LLMClient:
                         name="response",
                         parameters={"message": thought_text},
                         thought="Auto-converted from thought-only output (analysis paralysis guard)",
+                        auto_generated=True,
                     )
                 )
             elif not actions and not result.thoughts and reasoning_thoughts_text:
@@ -1161,6 +1163,7 @@ class LLMClient:
                         name="response",
                         parameters={"message": "推論でトークンを使い切りました。続けてください。"},
                         thought="Empty body — reasoning consumed all tokens, no actions in reasoning",
+                        auto_generated=True,
                     )
                 )
 

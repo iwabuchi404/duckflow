@@ -154,6 +154,26 @@ def should_return_to_user(action_list: ActionList, state) -> bool:
         if action.name in ["exit", "duck_call"]:
             return True
         if action.name == "response":
+            if getattr(action, "auto_generated", False):
+                # Repair-generated response (bare <<<>>> block or thought-only
+                # output): the model did not explicitly choose to respond.
+                # Do not terminate; ask for an explicit action or response.
+                logger.warning(
+                    "Auto-generated ::response detected — continuing loop."
+                )
+                state.last_syntax_errors.append(
+                    SyntaxErrorInfo(
+                        error_type="auto_response",
+                        raw_snippet="::response (auto-generated)",
+                        correction_hint=(
+                            "Your turn produced no explicit action or response. "
+                            "Take an action (::read_file, ::run_command, "
+                            "::edit_file, ...) or end your turn explicitly "
+                            "with ::response @<message>."
+                        ),
+                    )
+                )
+                continue
             msg = action.parameters.get("message", "").strip()
             if msg:
                 return True

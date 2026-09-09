@@ -304,6 +304,8 @@ class DuckAgent:
                 ui.start_live()
                 no_progress_count = 0
                 MAX_NO_PROGRESS = 3  # 連続して終了条件未達の回数上限
+                auto_response_count = 0
+                MAX_AUTO_RESPONSE = 2  # 自動生成responseの連続許容回数
                 try:
                     while True:
                         self.pacemaker.loop_count += 1
@@ -389,6 +391,47 @@ class DuckAgent:
                             if should_return_to_user(action_list, self.state):
                                 logger.info(
                                     "Autonomous loop ending: response/exit/duck_call action executed"
+                                )
+                                self.pacemaker.reset()
+                                break
+
+                            # --- Auto-response guard ---
+                            # Repair-generated responses must not terminate the
+                            # loop (should_return_to_user ignores them), but
+                            # they also must not spin forever. After repeated
+                            # auto-responses with no explicit action, consult
+                            # the user.
+                            if any(
+                                getattr(a, "auto_generated", False)
+                                for a in action_list.actions
+                            ):
+                                auto_response_count += 1
+                            else:
+                                auto_response_count = 0
+                            if auto_response_count >= MAX_AUTO_RESPONSE:
+                                logger.warning(
+                                    "Autonomous loop: repeated auto-generated "
+                                    "responses. Forcing duck_call."
+                                )
+                                ui.print_warning(
+                                    "🦆 応答の自動生成が続いています。ユーザーに相談します。"
+                                )
+                                await self.execute_actions(
+                                    ActionList(
+                                        reasoning="Auto-response guard",
+                                        actions=[
+                                            Action(
+                                                name="duck_call",
+                                                parameters={
+                                                    "message": (
+                                                        "出力の形式が定まらず進行できません。\n"
+                                                        "方針の確認をお願いします。"
+                                                    )
+                                                },
+                                                thought="Auto-response guard exceeded, forcing duck_call",
+                                            )
+                                        ],
+                                    )
                                 )
                                 self.pacemaker.reset()
                                 break

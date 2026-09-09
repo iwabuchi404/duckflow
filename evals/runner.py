@@ -75,10 +75,15 @@ def _make_input_provider(
     """
     from evals.analysis import looks_like_plan
 
-    queue = [task, "exit"]
+    queue = [task]
 
     async def _next_input() -> str:
-        """Return the next queued input, with plan-aware follow-ups."""
+        """Return the task first, then follow-up or exit.
+
+        After the task is consumed, every subsequent input request decides:
+        follow-up while a presented/stepped plan awaits go-ahead, else exit.
+        (A fixed [task, "exit"] queue would exit before follow-ups run.)
+        """
         if queue:
             return queue.pop(0)
         if follow_ups:
@@ -236,6 +241,16 @@ async def run_scenario(
     _patch_ui(scenario["task"], scenario.get("follow_up_inputs"), agent_ref)
     file_ops.set_workspace_root(str(workspace))
 
+    # Align every workspace-root consumer with the run workspace.
+    # AgentState.working_directory feeds the repo map prompt injection, and
+    # the repo map generator is a process-wide singleton that keeps the first
+    # root it sees — without a reset, eval prompts would describe the
+    # duckflow repo itself instead of the scenario workspace.
+    import companion.modules.repo_map as repo_map_module
+
+    repo_map_module._repo_map_generator = None
+    repo_map_module.get_repo_map_generator(str(workspace))
+
     api_key: str | None = None
     import os
 
@@ -249,6 +264,7 @@ async def run_scenario(
     llm = LLMClient(provider=provider, model=model)
     agent = DuckAgent(llm_client=llm, session_manager=None)
     agent_ref["agent"] = agent
+    agent.state.working_directory = str(workspace)
 
     # core.py recalculates max_loops from the tier profile on every user
     # turn, overriding any direct assignment. Force the scenario budget by

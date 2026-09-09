@@ -16,6 +16,7 @@ class Action:
     depends_on: Optional[str] = None
     confidence: float = 1.0
     params: Dict[str, str] = field(default_factory=dict)
+    auto_generated: bool = False
 
 
 @dataclass
@@ -535,8 +536,11 @@ class FuzzyParser:
 
             if stripped == "<<<":
                 if not current_action:
-                    # Robustness: Create a default action if content starts without one
-                    current_action = Action(type="response", path="")
+                    # Robustness: Create a default action if content starts without one.
+                    # Marked auto-generated so the loop does not treat repair
+                    # output as an explicit user-facing response (see
+                    # should_return_to_user).
+                    current_action = Action(type="response", path="", auto_generated=True)
                 in_content = True
                 i += 1
                 continue

@@ -182,6 +182,12 @@ class PlainMarkdownConverter:
         for line in lines:
             if line.strip().startswith('::'):
                 return True
+            # <<< / >>> content-block markers are also Sym-Ops structure.
+            # Without this, a bare content block is wrapped in a synthetic
+            # ::response by the plain-text fallback, hiding the fact that the
+            # model never explicitly responded (see auto_generated guard).
+            if line.strip() in ('<<<', '>>>'):
+                return True
         return False
     
     def _looks_like_markdown(self, text: str) -> bool:

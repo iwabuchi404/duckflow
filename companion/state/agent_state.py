@@ -148,6 +148,11 @@ class Action(BaseModel):
         default_factory=dict, description="アクションの引数"
     )
     thought: str = Field(default="", description="このアクションを選んだ理由")
+    auto_generated: bool = Field(
+        default=False,
+        description="パーサー/修復フォールバックが生成した場合はTrue。モデルの明示的意思ではないため、"
+        "自律ループを単独で終了させてはならない。",
+    )
 
 
 class ActionList(BaseModel):

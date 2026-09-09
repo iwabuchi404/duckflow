@@ -142,6 +142,20 @@ async def execute_actions(agent, action_list) -> list:
         for action in action_list.actions:
             ui.print_action(action.name, action.parameters, action.thought)
 
+            # --- Skip auto-generated responses ---
+            # Repair fallbacks (bare <<<>>> blocks, thought-only output) create
+            # response actions the model never explicitly chose. Executing them
+            # would show unintended content to the user; the loop-level guard
+            # (should_return_to_user) asks for an explicit action instead.
+            if action.name == "response" and getattr(
+                action, "auto_generated", False
+            ):
+                logger.warning(
+                    "Skipping auto-generated ::response (not model-explicit)."
+                )
+                results.append("[SKIPPED] auto-generated response (awaiting explicit action)")
+                continue
+
             # --- Skip redundant mode-switch actions ---
             # If already in the target mode, skip the mode-switch action
             # to prevent loops where LLM repeatedly calls ::investigate.
