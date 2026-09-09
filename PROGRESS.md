@@ -1,3 +1,20 @@
+### 2026-09-09: ライブモデル評価ハーネス (evals/) + 製品バグ修正
+- 背景: 弱いモデルの実挙動を測るE2E評価が存在しなかったため、実LLMでシナリオを実行・対話履歴を蓄積・ヒューリスティック分析する土台を新設。単体テストの重要ギャップ（承認ゲート・ループ制御）も補填。
+- 単体テスト追加（Step 0）:
+  - `tests/test_core_loop_control.py`（7件）: `should_return_to_user`（空response時のループ継続＋エラー記録を含む）、`build_intervention_prompt`、`check_and_prune_if_needed`（緊急プルーニングの文脈喪失通知）。
+  - `tests/test_approval_gate.py`（6件）: `get_approval_request`（編集系無条件ゲート・write_file上書き時のみ）、拒否時の履歴フィードバックを execute_actions レベルで検証。
+- evals/ 新設:
+  - `evals/runner.py`: 実モデルで `DuckAgent.run()` をフル起動（UI入力差し替え・承認自動yes・ワークスペースは `%TEMP%/duckflow-evals/` にコピー）。トランスクリプト（対話履歴全文＋raw_responses＋syntax_errors）と result.json を `evals/results/`（gitignore・ローカル保持）に保存。`calculate_max_loops` をシナリオ予算にピン留め。
+  - `evals/analysis.py`: ヒューリスティックタグ付け（api_error / output_echo / investigation_reentry / blocked_edit / empty_response / repeated_command / duck_call / no_edit_applied）。`uv run python -X utf8 -m evals.analysis` でサマリ出力＋analysis.json 書き出し。`tests/test_eval_analysis.py` 9件。
+  - シナリオ5本: fix-typo, create-fizzbuzz, edit-multi-hunk, find-and-fix（最難・pytest実行を含む調査→修正）, hallucination-resist（存在しない関数への耐性）。
+  - `llm_client.chat()` が `last_raw_response` を保持するよう変更（evalとデバッグ用）。
+- 評価過程で発見・修正した製品バグ:
+  - `companion/tools/shell_tool.py`: (1) `run_command` に `cwd` 指定がなく `--dir` ワークスペース外（プロセスCWD）で実行される実バグ → `cwd=str(file_ops.workspace_root)` を指定。(2) 終了コードが握り潰され、pytest失敗（exit 5）も `::status ok` になる → 結果に `exit_code: N` を付与。`tests/test_shell_cwd.py` 4件。
+  - `companion/core_action_pipeline.py`: Investigation Mode の編集BLOCKEDメッセージが「re-enter Task mode」と曖昧で、弱いモデルが再調査ループに陥る → finish_investigation で即 Planning モードに切替わる旨を明示。find-and-fix の失敗率が改善（1/3→3/3）。
+  - ハーネス側: evalワークスペースをリポジトリ内（gitignore適用パス）に置くと `get_project_tree` が0件を返しモデルが誤認 → temp ディレクトリへ移設。`core.py` が毎ターン `calculate_max_loops` で再計算しシナリオ予算が無効になる問題 → ランナーでピン留め。
+- ベースライン（z-ai/glm-4.5-air, --runs 3）: fix-typo 3/3, create-fizzbuzz 3/3, edit-multi-hunk 3/3, hallucination-resist 3/3, find-and-fix 3/3（BLOCKEDメッセージ修正後）。find-and-fix の旧失敗は repeated_command(10/15)・output_echo(8/15) が主因と定量確認。
+- 検証: `uv run python -X utf8 -m pytest tests/ -q` → **612 passed / 2 skipped**（開始時587から25件追加）。
+
 ### 2026-08-02: Sym-Ops パーサー境界の堅牢化
 - `companion/utils/parser.py`: 独自の旧文法実装を廃止し、実運用と同じ `SymOpsProcessor` へ委譲する後方互換アダプターへ変更。旧APIでも `@target` を失わず返すようにした。
 - `companion/utils/sym_ops.py`: vitals を小数桁数ではなく数値範囲 `0.0 <= value <= 1.0` で検証。範囲外・不正値は警告付きで無視し、コンテンツブロック内の vitals 文字列は解析対象外とした。単独の列0 `>>>` は `\>>>` でエスケープでき、先頭バックスラッシュ1文字を解析時に外す。本文中の単独 `<<<` はブロック再開始として扱わず保持する。
