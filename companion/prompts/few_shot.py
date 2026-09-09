@@ -210,9 +210,22 @@ Remaining hypothesis attempts before duck_call: 4"""},
 ::finish_investigation @Root cause: auth.py:42 calls user.id without checking if user is None. Fix: add null guard before login()."""}
 ]
 
-def get_examples_for_mode(mode: str) -> list:
-    """Return a compact set of examples relevant to the current mode."""
+def get_examples_for_mode(mode: str, framing: str = "bare") -> list:
+    """Return a compact set of examples relevant to the current mode.
+
+    Args:
+        mode: Agent mode ("task", "planning", "investigation", ...).
+        framing: "bare" keeps the current user/assistant message form.
+            "framed" packs all examples into a single system message marked
+            as reference material (never real history). "minimal" returns
+            BASE_EXAMPLES only.
+
+    Returns:
+        List of message dicts to inject into the prompt.
+    """
     examples = BASE_EXAMPLES.copy()
+    if framing == "minimal":
+        return examples
     if mode == "task" or mode == "task_execution":
         examples.extend(TASK_EXAMPLES)
         # edit_file 失敗時のリカバリーパターンを常に含める
@@ -229,4 +242,27 @@ def get_examples_for_mode(mode: str) -> list:
         examples.extend(RECOVERY_EXAMPLES)
         examples.extend(REPLACE_FUNCTION_EXAMPLES)
         examples.extend(PLANNING_EXAMPLES[:1])
+    if framing == "framed":
+        return [_pack_as_reference(examples)]
     return examples
+
+
+def _pack_as_reference(examples: list) -> dict:
+    """Pack examples into one system message marked as reference-only.
+
+    Args:
+        examples: Bare user/assistant example messages.
+
+    Returns:
+        A single system message dict containing the quoted exchange.
+    """
+    lines = [
+        "以下は参考例です。これらは実際に起きた会話ではありません。",
+        "実際のユーザー発言と混同せず、形式の見本としてだけ使ってください。",
+        "---",
+    ]
+    for msg in examples:
+        role = "ユーザー例" if msg.get("role") == "user" else "アシスタント例"
+        lines.append(f"[{role}]")
+        lines.append(str(msg.get("content", "")))
+    return {"role": "system", "content": "\n".join(lines)}

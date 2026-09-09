@@ -329,6 +329,30 @@ def tag_verified_edit(history: list[dict[str, Any]]) -> bool:
     )
 
 
+def tag_example_contamination(transcript: dict[str, Any]) -> bool:
+    """Detect few-shot examples narrated as real history.
+
+    Observed with MiniMax: reasoning claims "the user greeted me" or
+    "the user wants a weather app", quoting BASE/PLANNING examples.
+
+    Args:
+        transcript: Full transcript dict (uses raw_responses).
+
+    Returns:
+        True when example content is treated as real conversation.
+    """
+    for raw in transcript.get("raw_responses") or []:
+        low = raw.lower()
+        if "weather app" in low and any(
+            p in low
+            for p in ("user wants", "user asked", "user said", "ユーザーが", "ユーザーは")
+        ):
+            return True
+        if "greeted" in low and "hello" in low:
+            return True
+    return False
+
+
 TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "api_error": tag_api_error,
     "verified_edit": tag_verified_edit,
@@ -365,6 +389,8 @@ def tag_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
         tags.append("plan_only")
     if tag_false_success(transcript):
         tags.append("false_success")
+    if tag_example_contamination(transcript):
+        tags.append("example_contamination")
     return {
         "scenario_id": result.get("scenario_id", "unknown"),
         "passed": result.get("passed", False),

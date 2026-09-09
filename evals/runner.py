@@ -414,6 +414,13 @@ async def main() -> None:
     parser.add_argument("--model", default=None, help="Model id (provider-specific)")
     parser.add_argument("--runs", type=int, default=1, help="Runs per scenario")
     parser.add_argument(
+        "--few-shot",
+        choices=["bare", "framed", "minimal"],
+        default=None,
+        help="Few-shot example framing experiment switch "
+        "(sets DUCKFLOW_FEW_SHOT_FRAMING; default keeps current behavior)",
+    )
+    parser.add_argument(
         "--results-dir",
         default=str(Path(__file__).resolve().parent / "results"),
     )
@@ -441,6 +448,10 @@ async def main() -> None:
         )
 
     results_dir = Path(args.results_dir)
+    if args.few_shot:
+        import os
+
+        os.environ["DUCKFLOW_FEW_SHOT_FRAMING"] = args.few_shot
     results: list[dict[str, Any]] = []
     for scenario in scenarios:
         for run_index in range(1, args.runs + 1):
