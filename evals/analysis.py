@@ -170,11 +170,39 @@ def tag_fabricated_tool_result(transcript: dict[str, Any]) -> bool:
         True when any raw response contains tool-result artifacts.
     """
     for raw in transcript.get("raw_responses") or []:
+        if raw.startswith("<"):
+            continue  # skip chat_error / empty markers
         if "[TOOL_RESULT]" in raw or re.search(
             r"^\s*::\s*status\s+\w+", raw, re.MULTILINE
         ):
             return True
     return False
+
+
+def tag_empty_llm_response(transcript: dict[str, Any]) -> bool:
+    """Detect at least one empty LLM response in the run.
+
+    Args:
+        transcript: Full transcript dict (uses raw_responses).
+
+    Returns:
+        True when an empty response marker is present.
+    """
+    return any(r == "<empty response>" for r in transcript.get("raw_responses") or [])
+
+
+def tag_llm_call_error(transcript: dict[str, Any]) -> bool:
+    """Detect at least one failed (exception) LLM call in the run.
+
+    Args:
+        transcript: Full transcript dict (uses raw_responses).
+
+    Returns:
+        True when a chat_error marker is present.
+    """
+    return any(
+        r.startswith("<chat_error:") for r in transcript.get("raw_responses") or []
+    )
 
 
 TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
@@ -203,6 +231,10 @@ def tag_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
     tags = [name for name, fn in TAGS.items() if fn(history)]
     if tag_fabricated_tool_result(transcript):
         tags.append("fabricated_tool_result")
+    if tag_empty_llm_response(transcript):
+        tags.append("empty_llm_response")
+    if tag_llm_call_error(transcript):
+        tags.append("llm_call_error")
     return {
         "scenario_id": result.get("scenario_id", "unknown"),
         "passed": result.get("passed", False),

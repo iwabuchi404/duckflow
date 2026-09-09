@@ -194,13 +194,20 @@ async def run_scenario(
     agent.pacemaker.max_loops = max_loops
 
     # Record every raw LLM response for post-hoc heuristic analysis.
+    # Failed / empty calls are recorded as "<chat_error: ...>" markers so
+    # that turn counts in the log match actual LLM invocations.
     raw_responses: list[str] = []
     _original_chat = llm.chat
 
     async def _chat_and_record(messages: Any, response_model: Any = None, **kw: Any) -> Any:
-        """Call the original chat and archive the raw response text."""
-        result = await _original_chat(messages, response_model=response_model, **kw)
-        raw_responses.append(getattr(llm, "last_raw_response", ""))
+        """Call the original chat and archive the raw response or error."""
+        try:
+            result = await _original_chat(messages, response_model=response_model, **kw)
+        except Exception as exc:
+            raw_responses.append(f"<chat_error: {type(exc).__name__}: {exc}>")
+            raise
+        raw = getattr(llm, "last_raw_response", "")
+        raw_responses.append(raw if raw else "<empty response>")
         return result
 
     llm.chat = _chat_and_record  # type: ignore[method-assign]
