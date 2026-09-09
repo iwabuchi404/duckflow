@@ -13,7 +13,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .file_ops import file_ops
 from .results import ToolResult
+
+
+def _resolve_workspace(workspace_root: Optional[str]) -> Path:
+    """Resolve the effective workspace root.
+
+    Args:
+        workspace_root: Explicit root, or None to use the shared file_ops
+            workspace (so symbol tools see the same files as file tools).
+
+    Returns:
+        Resolved workspace root path.
+    """
+    if workspace_root:
+        return Path(workspace_root).resolve()
+    return file_ops.workspace_root
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +143,9 @@ def _extract_symbols(file_path: Path, source_lines: list[str]) -> List[SymbolInf
     return symbols
 
 
-async def list_symbols(path: str, workspace_root: str = ".") -> str | ToolResult:
+async def list_symbols(
+    path: str, workspace_root: Optional[str] = None
+) -> str | ToolResult:
     """List all functions and classes in a Python file.
 
     Shows name, signature, line range, and docstring first line for each symbol.
@@ -148,7 +166,7 @@ async def list_symbols(path: str, workspace_root: str = ".") -> str | ToolResult
     Returns:
         Formatted list of symbols with signatures and line ranges.
     """
-    root = Path(workspace_root).resolve()
+    root = _resolve_workspace(workspace_root)
     file_path = (root / path).resolve()
 
     if not file_path.exists():
@@ -177,7 +195,7 @@ async def list_symbols(path: str, workspace_root: str = ".") -> str | ToolResult
 async def find_definition(
     name: str,
     scope: str = ".",
-    workspace_root: str = ".",
+    workspace_root: Optional[str] = None,
 ) -> str | ToolResult:
     """Find where a symbol (function/class) is defined.
 
@@ -202,7 +220,7 @@ async def find_definition(
     Returns:
         List of definition locations with file:line and signature.
     """
-    root = Path(workspace_root).resolve()
+    root = _resolve_workspace(workspace_root)
     search_dir = (root / scope).resolve()
 
     if not search_dir.exists():
@@ -247,7 +265,7 @@ async def find_symbol(
     name: Optional[str] = None,
     path: Optional[str] = None,
     scope: str = ".",
-    workspace_root: str = ".",
+    workspace_root: Optional[str] = None,
 ) -> str | ToolResult:
     """Find a symbol's definition, or list symbols in a file.
 
@@ -291,7 +309,7 @@ async def replace_function(
     path: str,
     name: str,
     body: str,
-    workspace_root: str = ".",
+    workspace_root: Optional[str] = None,
 ) -> str | ToolResult:
     r'''Replace a function or class definition in a Python file by name.
 
@@ -323,7 +341,7 @@ async def replace_function(
     Returns:
         Success message with line range, or error message.
     '''
-    root = Path(workspace_root).resolve()
+    root = _resolve_workspace(workspace_root)
     file_path = (root / path).resolve()
 
     if not file_path.exists():
