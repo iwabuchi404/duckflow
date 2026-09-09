@@ -160,6 +160,23 @@ def tag_api_error(history: list[dict[str, Any]]) -> bool:
     )
 
 
+def tag_fabricated_tool_result(transcript: dict[str, Any]) -> bool:
+    """Detect the model writing [TOOL_RESULT]/::status in its own raw output.
+
+    Args:
+        transcript: Full transcript dict (uses raw_responses).
+
+    Returns:
+        True when any raw response contains tool-result artifacts.
+    """
+    for raw in transcript.get("raw_responses") or []:
+        if "[TOOL_RESULT]" in raw or re.search(
+            r"^\s*::\s*status\s+\w+", raw, re.MULTILINE
+        ):
+            return True
+    return False
+
+
 TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "api_error": tag_api_error,
     "output_echo": tag_output_echo,
@@ -183,11 +200,14 @@ def tag_transcript(transcript: dict[str, Any]) -> dict[str, Any]:
     """
     history = transcript.get("conversation_history", [])
     result = transcript.get("result", {})
+    tags = [name for name, fn in TAGS.items() if fn(history)]
+    if tag_fabricated_tool_result(transcript):
+        tags.append("fabricated_tool_result")
     return {
         "scenario_id": result.get("scenario_id", "unknown"),
         "passed": result.get("passed", False),
         "loops": result.get("loops_used", 0),
-        "tags": [name for name, fn in TAGS.items() if fn(history)],
+        "tags": tags,
     }
 
 

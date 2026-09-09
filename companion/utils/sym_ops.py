@@ -2,7 +2,7 @@ import re
 import yaml
 import logging
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter, strip_reasoning_tags, reasoning_to_thought, extract_reasoning_actions, truncate_reasoning_loop
 
 logger = logging.getLogger(__name__)
@@ -1175,6 +1175,38 @@ class SymOpsProcessor:
         self.parser = FuzzyParser()
 
     @staticmethod
+    def _strip_fabricated_tool_results(text: str) -> Tuple[str, int]:
+        """Remove hallucinated tool-result segments from model output.
+
+        Weak models sometimes continue the transcript on the system's behalf:
+        after emitting an action they write "[TOOL_RESULT] ... [/TOOL_RESULT]"
+        envelopes and "::status ok" lines, then keep reasoning as if results
+        had really been observed. Tool results are produced exclusively by
+        the system as user-role messages — a model-authored segment is always
+        a fabrication.
+
+        Args:
+            text: Raw LLM output text.
+
+        Returns:
+            Tuple of (cleaned text, number of removed segments).
+        """
+        envelope_re = re.compile(
+            r"\[TOOL_RESULT\].*?\[/TOOL_RESULT\]", re.DOTALL
+        )
+        status_line_re = re.compile(r"^\s*::\s*status\s+\w+\s*$", re.MULTILINE)
+
+        cleaned = text
+        removed = len(envelope_re.findall(cleaned))
+        cleaned = envelope_re.sub("", cleaned)
+        removed += len(status_line_re.findall(cleaned))
+        cleaned = status_line_re.sub("", cleaned)
+
+        if removed:
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        return cleaned, removed
+
+    @staticmethod
     def _truncate_repetition(text: str, threshold: int = 5) -> str:
         """同じ行の異常な連続繰り返しを検知し、最初の threshold 回だけ保持して残りを切り詰める。
 
@@ -1244,6 +1276,19 @@ class SymOpsProcessor:
             if thought_block:
                 raw_output = f"<!--reasoning-start-->\n{thought_block}\n<!--reasoning-end-->\n\n{raw_output}"
                 logger.info(f"Extracted reasoning from imd blocks ({len(reasoning_content)} chars), prepended as >> Thought")
+
+        # Phase -0.7: Remove fabricated tool results.
+        # Weak models sometimes continue the transcript on their own behalf,
+        # emitting "[TOOL_RESULT] ... [/TOOL_RESULT]" and "::status ok" lines
+        # as if the system had executed the actions. Those are hallucinations:
+        # strip them before parsing so they neither become fake actions nor
+        # encourage the model to believe outcomes it never observed.
+        raw_output, fabricated_count = self._strip_fabricated_tool_results(raw_output)
+        if fabricated_count:
+            logger.warning(
+                f"⚠️ Stripped {fabricated_count} fabricated [TOOL_RESULT]/::status "
+                "segment(s) from model output"
+            )
 
         # Phase -0.5: Repetition detection — LLMが同じ行を異常に繰り返している場合、
         # 最初の数回だけ保持して残りを切り詰める（パーサーの負荷と無意味なアクション実行を防ぐ）
