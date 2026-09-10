@@ -6,8 +6,37 @@ from typing import Tuple
 from companion.config.config_loader import config
 from companion.tools.file_ops import file_ops
 from companion.tools.results import ToolResult
-
 logger = logging.getLogger(__name__)
+
+
+def _decode_output(data: bytes) -> str:
+    """Decode subprocess output, tolerating mixed console encodings.
+
+    Windows consoles often emit the system encoding (e.g. CP932) while the
+    tool layer assumes UTF-8. Pure UTF-8 decoding turns Japanese text into
+    mojibake, which models misdiagnose as encoding failures. Try UTF-8
+    first, then the locale preferred encoding, always with replacement.
+
+    Args:
+        data: Raw stdout/stderr bytes.
+
+    Returns:
+        Decoded text.
+    """
+    import locale
+
+    candidates = ["utf-8", locale.getpreferredencoding(False), "cp932"]
+    seen: set[str] = set()
+    for encoding in candidates:
+        if not encoding or encoding.lower().replace("-", "") in seen:
+            continue
+        seen.add(encoding.lower().replace("-", ""))
+        try:
+            return data.decode(encoding)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", errors="replace")
+
 
 class ShellTool:
     """
@@ -18,6 +47,9 @@ class ShellTool:
     async def run_command(command: str) -> str | ToolResult:
         """
         Execute a shell command in the agent workspace root.
+        Commands already run inside the workspace: use workspace-relative
+        paths directly (e.g. "pytest test_calc.py -v"). Do NOT cd anywhere —
+        there is no /workspace directory; the workspace root IS the cwd.
         ⚑ BEFORE CALLING: set ::s0.3 or lower for destructive commands (rm, drop, reset).
         Returns command output (stdout/stderr).
         """
@@ -46,9 +78,9 @@ class ShellTool:
 
             output = ""
             if stdout:
-                output += stdout.decode('utf-8', errors='replace')
+                output += _decode_output(stdout)
             if stderr:
-                output += f"\nstderr:\n{stderr.decode('utf-8', errors='replace')}"
+                output += f"\nstderr:\n{_decode_output(stderr)}"
 
             # Surface the exit code so the model can tell failures from
             # successes (e.g. pytest exit 5 = "no tests collected").

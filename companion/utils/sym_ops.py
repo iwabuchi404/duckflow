@@ -25,6 +25,77 @@ class Action:
     auto_generated: bool = False
 
 
+# Tools whose content blocks are free prose — never parse leading
+# "key:" lines as parameters for these.
+_BARE_PARAMS_DENYLIST = {"response", "note", "duck_call", "exit"}
+
+_BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:")
+
+
+def extract_bare_key_params(
+    text: str, valid_keys: Optional[set[str]] = None
+) -> Tuple[Dict[str, str], str]:
+    """Parse leading "key: value" lines as parameters (no --- delimiters).
+
+    Models often write parameter lines directly in the content block::
+
+        <<<
+        path: utils/helpers.py
+        name: helo
+        body: |
+          def greet(): ...
+        >>>
+
+    without the YAML frontmatter delimiters. The strict frontmatter parser
+    drops these entirely, losing parameters the model did provide.
+
+    Args:
+        text: Content block text.
+        valid_keys: When given, only these keys are accepted (signature-
+            scoped recovery — prevents prose like "Summary: ..." from being
+            eaten when the tool has no such parameter).
+
+    Returns:
+        Tuple of (params dict, remaining body text).
+    """
+    lines = text.split("\n")
+    start = 0
+    while start < len(lines) and lines[start].strip() == "":
+        start += 1
+    if start >= len(lines) or not _BARE_KEY_RE.match(lines[start].strip()):
+        return {}, text
+    # Full YAML parse first (handles "body: |" literal blocks).
+    try:
+        parsed = yaml.safe_load(text)
+    except yaml.YAMLError:
+        parsed = None
+    if isinstance(parsed, dict):
+        params = {
+            k: (str(v) if v is not None else "")
+            for k, v in parsed.items()
+            if valid_keys is None or k in valid_keys
+        }
+        if params:
+            return params, ""
+        return {}, text
+    # Fallback: single-line "key: value" leading lines only.
+    params: Dict[str, str] = {}
+    i = start
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped == "":
+            i += 1
+            continue
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$", stripped)
+        if not match or (valid_keys is not None and match.group(1) not in valid_keys):
+            break
+        params[match.group(1)] = match.group(2).strip()
+        i += 1
+    if not params:
+        return {}, text
+    return params, "\n".join(lines[i:])
+
+
 @dataclass
 class ParsedResult:
     thoughts: List[str]

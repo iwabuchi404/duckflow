@@ -447,6 +447,25 @@ def print_report(analysis: dict[str, Any]) -> None:
         top = ", ".join(f"{t}:{c}" for t, c in counts.most_common(4)) or "-"
         print(f"{scenario:<24}{len(runs):<6}{passed:<6} {top}")
 
+    # Artifact-pass vs self-verified split: passed by the harness's own
+    # verify_command does not imply the agent verified by itself.
+    # verified_edit marks runs where an edit was followed by a check action.
+    verified_pass = sum(
+        1
+        for r in analysis["runs"]
+        if r["passed"] and "verified_edit" in r["tags"]
+    )
+    unverified_pass = sum(
+        1
+        for r in analysis["runs"]
+        if r["passed"] and "verified_edit" not in r["tags"]
+    )
+    print("-" * 72)
+    print(
+        f"passed with agent self-verification: {verified_pass} | "
+        f"passed on harness verification only: {unverified_pass}"
+    )
+
     for run in analysis["runs"]:
         if not run["passed"] and run["tags"]:
             print(f"\n[FAIL] {run['path']}")

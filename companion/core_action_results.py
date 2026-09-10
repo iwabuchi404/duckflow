@@ -165,7 +165,16 @@ def build_action_summary(action_list: Any) -> str:
     lines = []
     for action in action_list.actions:
         target = action.parameters.get("path", action.parameters.get("command", ""))
-        lines.append(f":: {action.name} @{target}" if target else f":: {action.name}")
+        line = f":: {action.name} @{target}" if target else f":: {action.name}"
+        # Body-bearing actions: record that content WAS passed (with its size)
+        # so the model does not later misread the summary as "no body given"
+        # and rewrite the same file. The full body lives in the tool result.
+        for key in ("content", "body", "text"):
+            value = action.parameters.get(key)
+            if isinstance(value, str) and value:
+                line += f" [+{len(value)} chars {key} passed, see result]"
+                break
+        lines.append(line)
     return "\n".join(lines)
 
 
