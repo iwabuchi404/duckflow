@@ -63,27 +63,38 @@ async def invoke_tool(
     resolved_tool_name = tool_name or getattr(func, "__name__", str(func))
     target = call_params.get("path", call_params.get("command", "task"))
 
-    # Recover block-style parameters: when the model wrote "key: value" lines
-    # directly in a <<<...>>> block, the parser maps the whole block to a
-    # "content" parameter the tool does not accept. Re-parse the block text
-    # scoped to this function's real parameter names and fill them in.
     sig = inspect.signature(func)
     valid = {
         name
         for name, param in sig.parameters.items()
         if param.kind != inspect.Parameter.VAR_KEYWORD
     }
+
+    # Recover block-style parameters: when the model wrote "key: value" lines
+    # directly in a <<<...>>> block, the parser maps the whole block to a
+    # "content" parameter the tool does not accept. Re-parse the block text
+    # scoped to this function's real parameter names and fill them in.
+    # A remaining non-key body is assigned to "body" when the tool has one
+    # (e.g. replace_function with inline name= + raw code block).
     if "content" in parameters and "content" not in valid:
         from companion.utils.sym_ops import extract_bare_key_params
 
         block = parameters["content"]
         if isinstance(block, str) and block.strip():
-            recovered, _ = extract_bare_key_params(block, valid_keys=valid)
+            recovered, remaining = extract_bare_key_params(block, valid_keys=valid)
             for key, value in recovered.items():
                 if key not in call_params or not call_params[key]:
                     call_params[key] = value
+            if (
+                remaining.strip()
+                and "body" in valid
+                and not call_params.get("body")
+            ):
+                call_params["body"] = remaining
+                recovered["body"] = remaining
+            consumed = "content" if recovered else None
             dropped = dropped - set(recovered.keys())
-            if "content" in dropped and recovered:
+            if consumed:
                 dropped.discard("content")
             if recovered:
                 logger.info(

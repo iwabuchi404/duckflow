@@ -302,12 +302,54 @@ def tag_rewrote_tests(history: list[dict[str, Any]]) -> bool:
     return False
 
 
+def tag_verified_edit_success(history: list[dict[str, Any]]) -> bool:
+    """Detect an edit followed by a *successful* verification command.
+
+    verified_edit only requires a check action to exist; this strict variant
+    requires evidence of success (a run_command result with exit_code 0
+    after the last edit). Splits "checked" from "verified".
+
+    Args:
+        history: transcript conversation_history.
+
+    Returns:
+        True when a post-edit verification demonstrably succeeded.
+    """
+    sequence = _extract_action_sequence(history)
+    edits = [
+        i
+        for i, (name, _) in enumerate(sequence)
+        if name in ("edit_file", "write_file", "replace_in_file", "replace_function")
+    ]
+    if not edits:
+        return False
+    # Assistant summaries after the last edit bound the search window;
+    # tool results are user messages — scan all user content for a
+    # successful run_command result. Approximate by position: user messages
+    # appearing after the last edit summary.
+    summaries = [
+        i for i, m in enumerate(history) if m.get("role") == "assistant"
+    ]
+    if len(summaries) <= edits[-1]:
+        return False
+    for m in history[summaries[edits[-1]] + 1 :]:
+        content = m.get("content", "")
+        if (
+            m.get("role") == "user"
+            and "run_command" in content
+            and "exit_code: 0" in content
+        ):
+            return True
+    return False
+
+
 def tag_verified_edit(history: list[dict[str, Any]]) -> bool:
     """Detect an edit followed by a verification action (positive marker).
 
     Verification = run_command / read_file / grep_files after the last edit.
     This is the core loop this project wants to establish, so it is tracked
-    as a positive signal rather than a failure.
+    as a positive signal rather than a failure. See tag_verified_edit_success
+    for the strict variant requiring evidence of success.
 
     Args:
         history: transcript conversation_history.
@@ -356,6 +398,7 @@ def tag_example_contamination(transcript: dict[str, Any]) -> bool:
 TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "api_error": tag_api_error,
     "verified_edit": tag_verified_edit,
+    "verified_edit_success": tag_verified_edit_success,
     "rewrote_tests": tag_rewrote_tests,
     "output_echo": tag_output_echo,
     "investigation_reentry": tag_investigation_reentry,
@@ -449,16 +492,17 @@ def print_report(analysis: dict[str, Any]) -> None:
 
     # Artifact-pass vs self-verified split: passed by the harness's own
     # verify_command does not imply the agent verified by itself.
-    # verified_edit marks runs where an edit was followed by a check action.
+    # verified_edit_success marks runs where a post-edit check demonstrably
+    # succeeded (exit_code 0); the loose verified_edit is behavior-only.
     verified_pass = sum(
         1
         for r in analysis["runs"]
-        if r["passed"] and "verified_edit" in r["tags"]
+        if r["passed"] and "verified_edit_success" in r["tags"]
     )
     unverified_pass = sum(
         1
         for r in analysis["runs"]
-        if r["passed"] and "verified_edit" not in r["tags"]
+        if r["passed"] and "verified_edit_success" not in r["tags"]
     )
     print("-" * 72)
     print(

@@ -81,6 +81,9 @@ class CoreActions:
         Execute a shell command with mandatory user approval.
         実行前に必ずユーザーに確認ダイアログを表示する。
         拒否された場合はエラーメッセージを返す。
+        Commands already run inside the agent workspace root: use
+        workspace-relative paths directly (e.g. "pytest test_calc.py -v").
+        Do NOT cd anywhere — there is no /workspace directory.
 
         Args:
             command: 実行するシェルコマンド文字列
