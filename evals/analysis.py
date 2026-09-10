@@ -156,16 +156,28 @@ def tag_empty_response(history: list[dict[str, Any]]) -> bool:
 
 
 def tag_repeated_command(history: list[dict[str, Any]]) -> bool:
-    """Detect the same command target executed two or more times.
+    """Detect the same command repeated without progress in between.
+
+    A re-run separated by an edit is a legitimate verify loop, not
+    degeneration — only flag repeats with no edit (or other state-changing
+    action) between them.
 
     Args:
         history: transcript conversation_history.
 
     Returns:
-        True when any run_command target repeats.
+        True when any run_command target repeats without an edit between.
     """
-    commands = [t for n, t in _extract_action_sequence(history) if n == "run_command"]
-    return len(commands) != len(set(commands))
+    last_seen: dict[str, int] = {}
+    edit_names = {"edit_file", "write_file", "replace_in_file", "replace_function"}
+    for i, (name, target) in enumerate(_extract_action_sequence(history)):
+        if name in edit_names:
+            last_seen.clear()
+        elif name == "run_command":
+            if target in last_seen:
+                return True
+            last_seen[target] = i
+    return False
 
 
 def tag_duck_call(history: list[dict[str, Any]]) -> bool:
@@ -307,7 +319,8 @@ def tag_verified_edit_success(history: list[dict[str, Any]]) -> bool:
 
     verified_edit only requires a check action to exist; this strict variant
     requires evidence of success (a run_command result with exit_code 0
-    after the last edit). Splits "checked" from "verified".
+    after the last edit). Splits "checked" from "verified". Target-specific
+    verification (did THE test pass) stays scenario-side (verify_command).
 
     Args:
         history: transcript conversation_history.
@@ -323,16 +336,20 @@ def tag_verified_edit_success(history: list[dict[str, Any]]) -> bool:
     ]
     if not edits:
         return False
-    # Assistant summaries after the last edit bound the search window;
-    # tool results are user messages — scan all user content for a
-    # successful run_command result. Approximate by position: user messages
-    # appearing after the last edit summary.
-    summaries = [
-        i for i, m in enumerate(history) if m.get("role") == "assistant"
-    ]
-    if len(summaries) <= edits[-1]:
+    # Map the last edit to its history position: find the last assistant
+    # summary that actually contains an edit action (summaries cover whole
+    # turns, so sequence indices do not align with history indices).
+    edit_names = {"edit_file", "write_file", "replace_in_file", "replace_function"}
+    boundary = -1
+    for i, m in enumerate(history):
+        if m.get("role") != "assistant":
+            continue
+        names = {n for n, _ in _extract_action_sequence([m])}
+        if names & edit_names:
+            boundary = i
+    if boundary < 0:
         return False
-    for m in history[summaries[edits[-1]] + 1 :]:
+    for m in history[boundary + 1 :]:
         content = m.get("content", "")
         if (
             m.get("role") == "user"

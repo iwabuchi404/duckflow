@@ -193,6 +193,70 @@ def _run_verify_command(command: str, workspace: Path) -> dict[str, Any]:
     }
 
 
+def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
+    """Record the exact experiment conditions for reproducibility.
+
+    Captures git commit, uncommitted diff stat, model/provider settings,
+    few-shot framing, and a hash of the scenario definition. Comparisons
+    across runs are only valid when these match.
+
+    Args:
+        scenario: Scenario definition dict.
+
+    Returns:
+        Metadata dict stored in result.json and transcript.json.
+    """
+    import hashlib
+    import os
+    import subprocess
+
+    meta: dict[str, Any] = {}
+    try:
+        meta["git_commit"] = (
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(REPO_ROOT),
+            ).stdout.strip()
+            or "unknown"
+        )
+        meta["git_dirty"] = (
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=str(REPO_ROOT),
+            ).stdout.strip()
+            or ""
+        )
+    except Exception:
+        meta["git_commit"] = "unknown"
+        meta["git_dirty"] = "unknown"
+    meta["few_shot_framing"] = os.getenv("DUCKFLOW_FEW_SHOT_FRAMING", "bare")
+    try:
+        from companion.config.config_loader import config as _cfg
+
+        meta["llm_settings"] = {
+            "temperature": _cfg.get("llm.temperature"),
+            "top_p": _cfg.get("llm.top_p"),
+            "max_output_tokens": _cfg.get("llm.max_output_tokens"),
+            "reasoning": _cfg.get("llm.reasoning"),
+        }
+    except Exception:
+        meta["llm_settings"] = "unknown"
+    scenario_text = json.dumps(
+        {k: v for k, v in scenario.items() if not k.startswith("_")},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    meta["scenario_id"] = scenario.get("id")
+    meta["scenario_sha"] = hashlib.sha256(scenario_text.encode("utf-8")).hexdigest()[:12]
+    return meta
+
+
 async def run_scenario(
     scenario: dict[str, Any],
     provider: str,
@@ -341,6 +405,7 @@ async def run_scenario(
         "scenario_id": scenario_id,
         "provider": provider,
         "model": model,
+        "experiment": _collect_experiment_meta(scenario),
         "run": run_index,
         "status": status,
         "passed": passed,
