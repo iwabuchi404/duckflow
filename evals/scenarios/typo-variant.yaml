@@ -1,0 +1,13 @@
+id: typo-variant
+task: "string_utils.py の formt_greeting という関数にタイポがあります。正しい綴りに修正してください（引数・中身は変更しないこと）。完了したら報告してください。"
+fixture: fixtures/typov2_ws
+max_loops: 12
+timeout_seconds: 300
+verify_command: "{python} -c \"from string_utils import format_greeting; assert format_greeting('A') == 'Hi, A!'\""
+checks:
+  - type: file_contains
+    path: string_utils.py
+    text: "def format_greeting"
+  - type: file_not_contains
+    path: string_utils.py
+    text: "def formt_greeting"

@@ -1,0 +1,19 @@
+id: multi-file-rename
+task: "compute_sum という関数名を calculate_total に変更してください。定義とすべての呼び出し元を更新し、テストで確認まで行ってください。完了したら報告してください。"
+fixture: fixtures/multifile_ws
+max_loops: 15
+timeout_seconds: 420
+verify_command: "{python} -m pytest test_app.py -q"
+checks:
+  - type: file_contains
+    path: core.py
+    text: "def calculate_total"
+  - type: file_contains
+    path: app.py
+    text: "calculate_total"
+  - type: file_not_contains
+    path: core.py
+    text: "compute_sum"
+  - type: file_not_contains
+    path: app.py
+    text: "compute_sum"

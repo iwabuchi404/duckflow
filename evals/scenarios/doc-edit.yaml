@@ -1,0 +1,18 @@
+id: doc-edit
+task: "README.md のインストール手順に誤りがあります。正しいパッケージ名は duckflow-plus です。該当箇所だけ修正し、他の記述は保持してください。完了したら報告してください。"
+fixture: fixtures/docedit_ws
+max_loops: 12
+timeout_seconds: 300
+checks:
+  - type: file_contains
+    path: README.md
+    text: "pip install duckflow-plus"
+  - type: file_not_contains
+    path: README.md
+    text: "pip install duckflow "
+  - type: file_contains
+    path: README.md
+    text: "## 使い方"
+  - type: file_contains
+    path: README.md
+    text: "## ライセンス"

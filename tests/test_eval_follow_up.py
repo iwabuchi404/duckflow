@@ -28,7 +28,7 @@ def test_task_then_exit_without_plan() -> None:
     Regression test: a fixed [task, "exit"] queue exits before any
     follow-up logic runs, so follow-ups must be decided per request.
     """
-    provider = _make_input_provider("do thing", ["go ahead"], {"agent": _FakeAgent(AgentState())})
+    provider = _make_input_provider("do thing", ["go ahead"], None, {"agent": _FakeAgent(AgentState())})
 
     assert _run(provider) == "do thing"
     assert _run(provider) == "exit"
@@ -42,7 +42,7 @@ def test_follow_up_served_when_stepped_plan_exists() -> None:
     plan.add_step(title="investigate", description="find the cause")
     state.current_plan = plan
 
-    provider = _make_input_provider("do thing", ["go ahead"], {"agent": _FakeAgent(state)})
+    provider = _make_input_provider("do thing", ["go ahead"], None, {"agent": _FakeAgent(state)})
 
     assert _run(provider) == "do thing"
     # Queue exhausted; stepped plan exists -> follow-up, not exit.
@@ -58,7 +58,7 @@ def test_follow_up_served_for_plan_like_response() -> None:
         "calc.py 修正の計画は次の通りです。\n1. テストを実行して失敗を確認する\n2. 原因を調査して特定する\n3. 修正を適用して再実行する",
     )
 
-    provider = _make_input_provider("do thing", ["go ahead"], {"agent": _FakeAgent(state)})
+    provider = _make_input_provider("do thing", ["go ahead"], None, {"agent": _FakeAgent(state)})
 
     assert _run(provider) == "do thing"
     assert _run(provider) == "go ahead"

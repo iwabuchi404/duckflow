@@ -211,6 +211,43 @@ def tag_no_edit_applied(history: list[dict[str, Any]]) -> bool:
     }
 
 
+def tag_asked_question(history: list[dict[str, Any]]) -> bool:
+    """Detect the agent asking the user something before editing.
+
+    A duck_call, or a question mark in an assistant message preceding the
+    first edit action, counts as asking. Used for collaboration scenarios.
+
+    Args:
+        history: transcript conversation_history.
+
+    Returns:
+        True when a question preceded the first edit (or no edit ran).
+    """
+    sequence = _extract_action_sequence(history)
+    first_edit = next(
+        (
+            i
+            for i, (name, _) in enumerate(sequence)
+            if name
+            in ("edit_file", "write_file", "replace_in_file", "replace_function")
+        ),
+        len(sequence),
+    )
+    if any(name == "duck_call" for name, _ in sequence[: first_edit + 1]):
+        return True
+    n_actions = 0
+    for m in history:
+        if m.get("role") != "assistant":
+            continue
+        text = m.get("content", "")
+        if "?" in text or "？" in text:
+            return True
+        n_actions += len(_ACTION_RE.findall(text))
+        if n_actions >= first_edit:
+            break
+    return False
+
+
 def tag_api_error(history: list[dict[str, Any]]) -> bool:
     """Detect environment/API failures (not model behavior).
 
@@ -436,6 +473,7 @@ TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "api_error": tag_api_error,
     "verified_edit": tag_verified_edit,
     "verified_edit_success": tag_verified_edit_success,
+    "asked_question": tag_asked_question,
     "rewrote_tests": tag_rewrote_tests,
     "output_echo": tag_output_echo,
     "investigation_reentry": tag_investigation_reentry,

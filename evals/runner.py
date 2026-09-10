@@ -55,18 +55,21 @@ def load_scenarios(paths: list[Path]) -> list[dict[str, Any]]:
 
 
 def _make_input_provider(
-    task: str, follow_ups: list[str] | None, agent_ref: dict[str, Any]
+    task: str,
+    follow_ups: list[str] | None,
+    user_script: list[str] | None,
+    agent_ref: dict[str, Any],
 ) -> Callable[[], Any]:
-    """Build a get_user_input replacement with content-aware follow-ups.
+    """Build a get_user_input replacement with scripted user behavior.
 
-    Primary inputs (task, then 'exit') are served first. Once they run out,
-    follow-up inputs are served ONLY while the agent's last assistant message
-    looks like a presented plan (see analysis.looks_like_plan). This avoids
-    replying "go ahead" to error messages or silent failures.
+    Serves the task first, then unconditional user_script lines (for
+    collaboration scenarios where the user answers questions), then
+    plan-conditional follow-ups, then exit.
 
     Args:
         task: Scenario task sent as the first user input.
-        follow_ups: Follow-up user inputs for plan-presentation turns.
+        follow_ups: Follow-up inputs for plan-presentation turns.
+        user_script: Unconditional follow-up inputs, in order.
         agent_ref: Mutable dict holding the agent under key "agent"; filled
             in later by run_scenario once the agent exists.
 
@@ -76,16 +79,14 @@ def _make_input_provider(
     from evals.analysis import looks_like_plan
 
     queue = [task]
+    script = list(user_script or [])
 
     async def _next_input() -> str:
-        """Return the task first, then follow-up or exit.
-
-        After the task is consumed, every subsequent input request decides:
-        follow-up while a presented/stepped plan awaits go-ahead, else exit.
-        (A fixed [task, "exit"] queue would exit before follow-ups run.)
-        """
+        """Return the next scripted input, with plan-aware follow-ups."""
         if queue:
             return queue.pop(0)
+        if script:
+            return script.pop(0)
         if follow_ups:
             agent = agent_ref.get("agent")
             if agent is not None:
@@ -109,35 +110,46 @@ def _make_input_provider(
     return _next_input
 
 
-def _patch_ui(task: str, follow_ups: list[str] | None, agent_ref: dict[str, Any]) -> None:
+def _patch_ui(
+    task: str,
+    follow_ups: list[str] | None,
+    user_script: list[str] | None,
+    agent_ref: dict[str, Any],
+) -> None:
     """Patch the UI module: scripted input and auto-approval.
 
     Args:
         task: Scenario task sent as the first user input.
         follow_ups: Follow-up inputs for plan-presentation turns.
+        user_script: Unconditional follow-up inputs, in order.
         agent_ref: Mutable dict receiving the agent instance.
     """
     from companion.ui import ui as ui_instance
 
-    ui_instance.get_user_input = _make_input_provider(task, follow_ups, agent_ref)
+    ui_instance.get_user_input = _make_input_provider(
+        task, follow_ups, user_script, agent_ref
+    )
     ui_instance.request_confirmation = lambda warning: True
 
 
 def _run_checks(
-    checks: list[dict[str, Any]], workspace: Path
+    checks: list[dict[str, Any]], workspace: Path, fixture: Path | None = None
 ) -> list[dict[str, Any]]:
     """Evaluate mechanical checks against the run workspace.
 
     Supported check types: file_exists, file_not_exists, file_contains,
-    file_not_contains.
+    file_not_contains, unmodified (byte-identical to the fixture file).
 
     Args:
         checks: Check dicts from the scenario YAML.
         workspace: Run workspace root.
+        fixture: Fixture directory (required for unmodified checks).
 
     Returns:
         List of {check, passed} results.
     """
+    import hashlib
+
     results = []
     for check in checks or []:
         kind = check.get("type")
@@ -153,6 +165,15 @@ def _run_checks(
             passed = text in content
         elif kind == "file_not_contains":
             passed = text not in content
+        elif kind == "unmodified":
+            original = fixture / check.get("path", "") if fixture else None
+            passed = (
+                original is not None
+                and original.is_file()
+                and path.is_file()
+                and hashlib.sha256(path.read_bytes()).hexdigest()
+                == hashlib.sha256(original.read_bytes()).hexdigest()
+            )
         else:
             passed = False
 
@@ -302,7 +323,12 @@ async def run_scenario(
         shutil.copytree(fixture, workspace, dirs_exist_ok=True)
 
     agent_ref: dict[str, Any] = {}
-    _patch_ui(scenario["task"], scenario.get("follow_up_inputs"), agent_ref)
+    _patch_ui(
+        scenario["task"],
+        scenario.get("follow_up_inputs"),
+        scenario.get("user_script"),
+        agent_ref,
+    )
     file_ops.set_workspace_root(str(workspace))
 
     # Align every workspace-root consumer with the run workspace.
@@ -382,7 +408,12 @@ async def run_scenario(
         agent.running = False
     duration = time.monotonic() - start
 
-    checks = _run_checks(scenario.get("checks"), workspace)
+    fixture_dir = Path(scenario["_path"]).parent / scenario.get("fixture", "")
+    checks = _run_checks(
+        scenario.get("checks"),
+        workspace,
+        fixture=fixture_dir if fixture_dir.is_dir() else None,
+    )
     verify_command = scenario.get("verify_command")
     if verify_command:
         try:

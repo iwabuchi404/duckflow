@@ -1,0 +1,15 @@
+id: find-needle
+task: "このワークスペースでテストを実行すると失敗します。無関係なファイルも混ざっていますが、原因を特定して修正してください。修正の適用とテストの再実行による確認まで行ってください。完了したら報告してください。"
+fixture: fixtures/needle_ws
+max_loops: 15
+timeout_seconds: 420
+verify_command: "{python} -m pytest test_orders.py -q"
+follow_up_inputs:
+  - "了解です。その計画で進めてください。"
+checks:
+  - type: file_contains
+    path: pricing.py
+    text: "price * (1 - rate)"
+  - type: file_not_contains
+    path: pricing.py
+    text: "price - rate"

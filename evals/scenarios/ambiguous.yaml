@@ -1,0 +1,16 @@
+id: ambiguous
+task: "sales.csv の売上データをまとめて report.json に出力してください。"
+fixture: fixtures/ambiguous_ws
+max_loops: 15
+timeout_seconds: 420
+user_script:
+  - "JSON形式で、商品ごとの合計金額を出力してください。"
+checks:
+  - type: file_exists
+    path: report.json
+  - type: file_contains
+    path: report.json
+    text: "apple"
+  - type: file_contains
+    path: report.json
+    text: "300"
