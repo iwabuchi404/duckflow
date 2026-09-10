@@ -56,6 +56,11 @@ def test_verified_success_requires_exit_zero() -> None:
         {"role": "assistant", "content": ":: edit_file @calc.py"},
         {
             "role": "user",
+            "content": "[TOOL_RESULT]\n::status ok\n::edit_file @calc.py\n"
+            "<<<\nedited\n>>>\n[/TOOL_RESULT]",
+        },
+        {
+            "role": "user",
             "content": "[TOOL_RESULT]\n::status ok\n::run_command @pytest\n"
             "<<<\n2 passed\nexit_code: 0\n>>>\n[/TOOL_RESULT]",
         },

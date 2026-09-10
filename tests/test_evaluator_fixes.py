@@ -54,9 +54,14 @@ def test_verified_success_multi_action_ordering() -> None:
     ) + [
         {
             "role": "user",
+            "content": "[TOOL_RESULT]\n::status ok\n::edit_file @calc.py\n"
+            "<<<\nedited\n>>>\n[/TOOL_RESULT]",
+        },
+        {
+            "role": "user",
             "content": "[TOOL_RESULT]\n::run_command @pytest test_calc.py\n"
             "<<<\n2 passed\nexit_code: 0\n>>>\n[/TOOL_RESULT]",
-        }
+        },
     ]
 
     assert tag_verified_edit_success(history) is True

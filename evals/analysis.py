@@ -199,10 +199,16 @@ def tag_no_edit_applied(history: list[dict[str, Any]]) -> bool:
         history: transcript conversation_history.
 
     Returns:
-        True when no edit_file/write_file/replace_in_file action ran.
+        True when no edit_file/write_file/replace_in_file/replace_function
+        action ran.
     """
     names = {n for n, _ in _extract_action_sequence(history)}
-    return not names & {"edit_file", "write_file", "replace_in_file"}
+    return not names & {
+        "edit_file",
+        "write_file",
+        "replace_in_file",
+        "replace_function",
+    }
 
 
 def tag_api_error(history: list[dict[str, Any]]) -> bool:
@@ -349,7 +355,21 @@ def tag_verified_edit_success(history: list[dict[str, Any]]) -> bool:
             boundary = i
     if boundary < 0:
         return False
-    for m in history[boundary + 1 :]:
+    # Within-turn ordering: a success counts only if its result message comes
+    # AFTER the last edit's own result message. Find the last user message
+    # carrying an edit result, then require a successful run_command later.
+    edit_result_idx = -1
+    for i, m in enumerate(history):
+        if m.get("role") != "user":
+            continue
+        content = m.get("content", "")
+        if "::status" not in content:
+            continue
+        if any(f"::{name} @" in content for name in edit_names):
+            edit_result_idx = i
+    if edit_result_idx < 0:
+        return False
+    for m in history[edit_result_idx + 1 :]:
         content = m.get("content", "")
         if (
             m.get("role") == "user"

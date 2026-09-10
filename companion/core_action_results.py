@@ -163,19 +163,23 @@ def build_action_summary(action_list: Any) -> str:
         Assistant-role summary text, or an empty string.
     """
     lines = []
+    notes = []
     for action in action_list.actions:
         target = action.parameters.get("path", action.parameters.get("command", ""))
-        line = f":: {action.name} @{target}" if target else f":: {action.name}"
-        # Body-bearing actions: record that content WAS passed (with its size)
-        # so the model does not later misread the summary as "no body given"
-        # and rewrite the same file. The full body lives in the tool result.
+        lines.append(f":: {action.name} @{target}" if target else f":: {action.name}")
+        # Body-bearing actions: record on a SEPARATE line that content WAS
+        # passed (with its size). Appending to the action line itself caused
+        # models to copy the note into the next @target ("File not found").
+        # The full body lives in the tool result.
         for key in ("content", "body", "text"):
             value = action.parameters.get(key)
             if isinstance(value, str) and value:
-                line += f" [+{len(value)} chars {key} passed, see result]"
+                notes.append(
+                    f"履歴注記：{action.name} の本文{len(value)}文字を送信済み。"
+                    "本文は省略。確認は実行結果で行うこと。"
+                )
                 break
-        lines.append(line)
-    return "\n".join(lines)
+    return "\n".join(lines + notes)
 
 
 def build_action_exception_syntax_error(

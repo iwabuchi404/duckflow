@@ -29,7 +29,27 @@ def test_summary_notes_body_size() -> None:
     summary = build_action_summary(action_list)
 
     assert ":: write_file @f.py" in summary
-    assert "+373 chars content passed" in summary
+    assert "373" in summary
+    assert "送信済み" in summary
+
+
+def test_summary_note_on_separate_line() -> None:
+    """The body note must not share the action line (copy-paste safety)."""
+    action_list = ActionList(
+        reasoning="test",
+        actions=[
+            Action(
+                name="write_file",
+                parameters={"path": "f.py", "content": "x" * 10},
+            )
+        ],
+    )
+
+    lines = build_action_summary(action_list).split("\n")
+
+    assert lines[0] == ":: write_file @f.py"
+    assert len(lines) == 2
+    assert lines[1].startswith("履歴注記")
 
 
 def test_summary_without_body_unchanged() -> None:
