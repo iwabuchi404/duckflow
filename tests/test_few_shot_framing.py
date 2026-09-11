@@ -81,14 +81,22 @@ async def test_builder_respects_framing_env(monkeypatch) -> None:
     systems = [m for m in messages if m.get("role") == "system"]
     assert any("参考例" in m.get("content", "") for m in systems)
 
-    monkeypatch.delenv("DUCKFLOW_FEW_SHOT_FRAMING")
+    monkeypatch.delenv("DUCKFLOW_FEW_SHOT_FRAMING", raising=False)
     builder = PromptBuilder(AgentState())
     messages = builder.build_messages("read_file: test tool")
-    assert not any(
+    # Default is framed: examples packed as reference, no bare Hello.
+    assert any(
         "参考例" in m.get("content", "")
         for m in messages
         if m.get("role") == "system"
     )
+    assert not any(
+        m.get("role") == "user" and m.get("content") == "Hello" for m in messages
+    )
+
+    monkeypatch.setenv("DUCKFLOW_FEW_SHOT_FRAMING", "bare")
+    builder = PromptBuilder(AgentState())
+    messages = builder.build_messages("read_file: test tool")
     assert any(
         m.get("role") == "user" and m.get("content") == "Hello" for m in messages
     )
