@@ -24,6 +24,12 @@ class ApprovalTool:
         
         # Set phase to AWAITING_USER so the loop prompts for input next
         self.state.phase = AgentPhase.AWAITING_USER
-        
+
+        # Keep the question text in the tool result so the question and the
+        # user's later answer stay connected in conversation history.
+        # Without this, history shows only "Paused for user input" and the
+        # model may re-ask or lose the original request after answering.
+        if message and message.strip():
+            return f"Paused for user input. Question was: {message.strip()}"
         return "Paused for user input."
 

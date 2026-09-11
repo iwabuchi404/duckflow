@@ -90,14 +90,26 @@ def _make_input_provider(
             return queue.pop(0)
         if script:
             # For question-scenarios (script_after_question), serve the
-            # scripted answer only while the agent is awaiting user input
-            # after a question (duck_call). Otherwise the agent guessed
-            # without asking and the run should end.
+            # scripted answer while the agent is awaiting user input after
+            # a duck_call pause, or when its latest message asks a question
+            # via ::response. Otherwise the agent guessed without asking
+            # and the run should end.
             if script_after_question:
                 agent = agent_ref.get("agent")
                 from companion.state.agent_state import AgentPhase
 
-                if agent is None or agent.state.phase != AgentPhase.AWAITING_USER:
+                awaiting = (
+                    agent is not None
+                    and agent.state.phase == AgentPhase.AWAITING_USER
+                )
+                if not awaiting and agent is not None:
+                    recent = [
+                        m["content"]
+                        for m in agent.state.conversation_history
+                        if m.get("role") == "assistant"
+                    ][-2:]
+                    awaiting = any("?" in c or "？" in c for c in recent)
+                if not awaiting:
                     return "exit"
             return script.pop(0)
         if follow_ups:

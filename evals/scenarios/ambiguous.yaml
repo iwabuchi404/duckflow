@@ -18,3 +18,4 @@ checks:
   - type: file_not_contains
     path: report.json
     text: "cherry"
+verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('banana')==150 and 'cherry' not in d, d\""

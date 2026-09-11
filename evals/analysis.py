@@ -535,6 +535,9 @@ def analyze_dir(results_dir: Path) -> dict[str, Any]:
             continue
         entry = tag_transcript(transcript)
         entry["path"] = str(path)
+        entry["scenario_sha"] = transcript.get("result", {}).get(
+            "experiment", {}
+        ).get("scenario_sha", "n/a")
         runs.append(entry)
         counts = tag_counts.setdefault(entry["scenario_id"], Counter())
         for tag in entry["tags"]:
@@ -563,7 +566,9 @@ def print_report(analysis: dict[str, Any]) -> None:
         for r in runs:
             counts.update(r["tags"])
         top = ", ".join(f"{t}:{c}" for t, c in counts.most_common(4)) or "-"
-        print(f"{scenario:<24}{len(runs):<6}{passed:<6} {top}")
+        shas = sorted({r.get("scenario_sha", "n/a") for r in runs})
+        sha_note = f" [sha:{','.join(shas)}]" if len(shas) > 1 else ""
+        print(f"{scenario:<24}{len(runs):<6}{passed:<6} {top}{sha_note}")
 
     # Artifact-pass vs self-verified split: passed by the harness's own
     # verify_command does not imply the agent verified by itself.
