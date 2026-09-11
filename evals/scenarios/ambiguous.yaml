@@ -1,10 +1,10 @@
 id: ambiguous
-task: "sales.csv の売上データのうち、必要な商品をまとめて report.json に出力してください。JSON形式で、商品ごとの合計金額を記載してください。対象が不明な場合は作業前に確認してください。"
+task: "sales.csv の売上データのうち、必要な商品をまとめて report.json に出力してください。JSON形式で、商品ごとの合計金額を記載してください。対象が不明な場合は、推測で進めず、必ず先に duck_call で確認し、回答を待ってから作業してください。"
 fixture: fixtures/ambiguous_ws
 max_loops: 15
 timeout_seconds: 420
 user_script:
-  - "appleとbananaの2商品だけでお願いします。cherryは不要です。"
+  - "appleとcherryの2商品だけでお願いします。bananaは不要です。"
 script_after_question: true
 checks:
   - type: file_exists
@@ -14,8 +14,9 @@ checks:
     text: "apple"
   - type: file_contains
     path: report.json
-    text: "banana"
+    text: "cherry"
   - type: file_not_contains
     path: report.json
-    text: "cherry"
-verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('banana')==150 and 'cherry' not in d, d\""
+    text: "banana"
+verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('cherry')==500 and 'banana' not in d, d\""
+verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('cherry')==500 and 'banana' not in d, d\""
