@@ -44,5 +44,5 @@ async def test_write_file_allows_nested_workspace_paths(file_ops: FileOps, tmp_p
     """A normal nested workspace path should still be writable."""
     result = await file_ops.write_file("src/app.py", "print('ok')\n")
 
-    assert result == "Successfully wrote to src/app.py"
+    assert result == "Successfully wrote 11 bytes to src/app.py"
     assert (tmp_path / "src" / "app.py").read_text(encoding="utf-8") == "print('ok')"

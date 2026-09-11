@@ -376,7 +376,8 @@ class FileOps:
         full_path.parent.mkdir(parents=True, exist_ok=True)
         with open(full_path, "w", encoding="utf-8") as f:
             f.write(clean_content)
-        return f"Successfully wrote to {path}"
+        size = full_path.stat().st_size
+        return f"Successfully wrote {size} bytes to {path}"
 
     async def append_file(self, path: str, content: str, start: bool = False) -> str:
         """

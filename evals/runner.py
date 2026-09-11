@@ -59,6 +59,7 @@ def _make_input_provider(
     follow_ups: list[str] | None,
     user_script: list[str] | None,
     agent_ref: dict[str, Any],
+    script_after_question: bool = False,
 ) -> Callable[[], Any]:
     """Build a get_user_input replacement with scripted user behavior.
 
@@ -72,6 +73,8 @@ def _make_input_provider(
         user_script: Unconditional follow-up inputs, in order.
         agent_ref: Mutable dict holding the agent under key "agent"; filled
             in later by run_scenario once the agent exists.
+        script_after_question: When True, serve script lines only while the
+            agent awaits user input after a question (duck_call phase).
 
     Returns:
         Async callable returning the next input.
@@ -86,6 +89,16 @@ def _make_input_provider(
         if queue:
             return queue.pop(0)
         if script:
+            # For question-scenarios (script_after_question), serve the
+            # scripted answer only while the agent is awaiting user input
+            # after a question (duck_call). Otherwise the agent guessed
+            # without asking and the run should end.
+            if script_after_question:
+                agent = agent_ref.get("agent")
+                from companion.state.agent_state import AgentPhase
+
+                if agent is None or agent.state.phase != AgentPhase.AWAITING_USER:
+                    return "exit"
             return script.pop(0)
         if follow_ups:
             agent = agent_ref.get("agent")
@@ -115,6 +128,7 @@ def _patch_ui(
     follow_ups: list[str] | None,
     user_script: list[str] | None,
     agent_ref: dict[str, Any],
+    script_after_question: bool = False,
 ) -> None:
     """Patch the UI module: scripted input and auto-approval.
 
@@ -123,11 +137,12 @@ def _patch_ui(
         follow_ups: Follow-up inputs for plan-presentation turns.
         user_script: Unconditional follow-up inputs, in order.
         agent_ref: Mutable dict receiving the agent instance.
+        script_after_question: Serve script only after a question.
     """
     from companion.ui import ui as ui_instance
 
     ui_instance.get_user_input = _make_input_provider(
-        task, follow_ups, user_script, agent_ref
+        task, follow_ups, user_script, agent_ref, script_after_question
     )
     ui_instance.request_confirmation = lambda warning: True
 
@@ -328,6 +343,7 @@ async def run_scenario(
         scenario.get("follow_up_inputs"),
         scenario.get("user_script"),
         agent_ref,
+        bool(scenario.get("script_after_question", False)),
     )
     file_ops.set_workspace_root(str(workspace))
 
