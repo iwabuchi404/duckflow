@@ -1135,7 +1135,24 @@ class LLMClient:
             # not reasoning-derived thoughts. Reasoning models that hit
             # max_tokens during reasoning produce no body content, and
             # surfacing raw reasoning as a response is not useful.
-            if not actions and result.thoughts:
+            from companion.utils.sym_ops import VAGUE_ACTION_WARNING
+
+            parse_error_type = None
+            parse_error_detail = None
+            if VAGUE_ACTION_WARNING in result.warnings:
+                # The output referenced a tool with @target but carried no
+                # explicit "::action" syntax (e.g. ">> read_file @x"). The
+                # plain-text fallback must not fabricate a terminating
+                # response for these — route to the Correction Guide so the
+                # model retries with explicit syntax.
+                logger.warning(
+                    "Vague action attempt: action-like text without explicit "
+                    "::action syntax. Routing to Correction Guide."
+                )
+                actions = []
+                parse_error_type = "vague_action"
+                parse_error_detail = content[:300]
+            elif not actions and result.thoughts:
                 logger.warning(
                     f"Thought-only response: {len(result.thoughts)} body thoughts, "
                     f"0 actions. Converting thoughts to response action."
@@ -1167,9 +1184,12 @@ class LLMClient:
                     )
                 )
 
-            parse_error_type = None
-            parse_error_detail = None
-            if not actions and not result.thoughts and not reasoning_thoughts_text:
+            if (
+                not actions
+                and not result.thoughts
+                and not reasoning_thoughts_text
+                and parse_error_type is None
+            ):
                 # Genuinely empty: no actions, no thoughts, no reasoning block.
                 # Preserve strict-parser diagnostics when fuzzy parsing also
                 # found nothing so the next Correction Guide can show the

@@ -58,6 +58,12 @@ _PARSE_ERROR_HINTS = {
         "Every turn must end with either another `::tool_name` action or "
         "`::response @...` to hand control back to the user."
     ),
+    "vague_action": (
+        "The previous output mentioned a tool with @target but used no "
+        "explicit `::action` syntax (e.g. `>> read_file @x` is a thought, "
+        "not an action). To act, write `::tool_name @target` on its own "
+        "line — for example `::read_file @test_app.py`."
+    ),
 }
 
 

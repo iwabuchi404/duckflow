@@ -494,6 +494,42 @@ class DuckAgent:
                                 self.pacemaker.reset()
                                 break
                         else:
+                            # Empty actions with a recorded parse error: the
+                            # Correction Guide was just stored for the next
+                            # turn — continue so the model can retry instead
+                            # of ending the turn on a misunderstanding.
+                            # Count it as no-progress to avoid infinite loops.
+                            if getattr(action_list, "parse_error_type", None):
+                                logger.info(
+                                    "Autonomous loop continuing: parse feedback "
+                                    "recorded, giving the model another turn."
+                                )
+                                no_progress_count += 1
+                                if no_progress_count >= MAX_NO_PROGRESS:
+                                    logger.warning(
+                                        "Autonomous loop: repeated parse failures. "
+                                        "Forcing duck_call."
+                                    )
+                                    await self.execute_actions(
+                                        ActionList(
+                                            reasoning="Parse-failure fallback",
+                                            actions=[
+                                                Action(
+                                                    name="duck_call",
+                                                    parameters={
+                                                        "message": (
+                                                            "出力の形式が定まらず進行できません。\n"
+                                                            "方針の確認をお願いします。"
+                                                        )
+                                                    },
+                                                    thought="Parse failures exceeded, forcing duck_call",
+                                                )
+                                            ],
+                                        )
+                                    )
+                                    self.pacemaker.reset()
+                                    break
+                                continue
                             logger.info("Autonomous loop ending: no actions proposed")
                             self.pacemaker.reset()
                             break

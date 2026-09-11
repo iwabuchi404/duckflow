@@ -13,6 +13,23 @@ logger = logging.getLogger(__name__)
 # "||" — splitting them corrupts the command body.
 _NO_DEPENDENCY_SPLIT = {"run_command"}
 
+# Marker warning: the output looked like an action attempt (tool verb with
+# @target) but carried no explicit "::action" syntax. The plain-text fallback
+# must not fabricate a terminating response for these — the caller routes
+# them to the Correction Guide instead.
+VAGUE_ACTION_WARNING = "VagueActionAttempt: action-like text without explicit ::action"
+
+# Tool verbs that, followed by @target, indicate an action attempt even
+# without the "::" prefix.
+_ACTION_ATTEMPT_RE = re.compile(
+    r"\b(read_file|write_file|edit_file|delete_file|delete_lines|"
+    r"run_command|grep_files|list_files|find_symbol|replace_function|"
+    r"investigate|submit_hypothesis|finish_investigation|propose_plan|"
+    r"generate_tasks|execute_tasks|complete_step|execute_batch|"
+    r"analyze_structure|generate_code|search_archives|duck_call|"
+    r"response|note)\s*@\s*\S"
+)
+
 
 @dataclass
 class Action:
@@ -1377,8 +1394,20 @@ class SymOpsProcessor:
 
         # Phase 0: Plain Markdown/Text Detection & Conversion
         converted, was_converted = self.markdown_converter.convert(raw_output)
+        pre_conversion = raw_output
         if was_converted:
             raw_output = converted
+
+        # Phase 0b: Vague action attempts.
+        # The converter only runs when the output has no "::" markers, so any
+        # response action it synthesizes was never explicitly chosen. When the
+        # original text references a tool with @target (e.g. ">> read_file
+        # @x"), the model attempted an action in the wrong shape — fabricating
+        # a terminating response would end the turn on a misunderstanding.
+        # Flag it so the caller routes to the Correction Guide instead.
+        vague_attempt = was_converted and bool(
+            _ACTION_ATTEMPT_RE.search(pre_conversion)
+        )
 
         # Phase 1: Preprocessing (remove preamble, unwrap markdown)
         preprocessed, corrections = self.preprocessor.preprocess(raw_output)
@@ -1393,6 +1422,11 @@ class SymOpsProcessor:
                 parsed.warnings.append("Reasoning tags stripped (<think>)")
             if was_converted:
                 parsed.warnings.append("Converted from plain markdown/text")
+            if vague_attempt:
+                parsed.actions = [
+                    a for a in parsed.actions if a.type != "response"
+                ]
+                parsed.warnings.append(VAGUE_ACTION_WARNING)
             if corrections:
                 parsed.warnings.append(f"Preprocessing: {', '.join(corrections)}")
             return parsed
@@ -1403,6 +1437,11 @@ class SymOpsProcessor:
         partial = self.parser.fuzzy_parse(repaired)
         partial.warnings.append("Partial parse used")
         partial.warnings.append(f"Strict parse failed: {strict_error}")
+        if vague_attempt:
+            partial.actions = [
+                a for a in partial.actions if a.type != "response"
+            ]
+            partial.warnings.append(VAGUE_ACTION_WARNING)
         if reasoning_stripped:
             partial.warnings.append("Reasoning tags stripped (<think>)")
         if was_converted:
