@@ -55,16 +55,25 @@ def truncate_history(
 
 
 async def probe(
-    transcript_path: Path, before: int, provider: str, model: str, mode: str
+    transcript_path: Path,
+    before: int,
+    provider: str,
+    model: str,
+    mode: str,
+    llm_call: int | None = None,
 ) -> dict[str, Any]:
     """Run one think-decide step on truncated history.
 
     Args:
         transcript_path: Source transcript.json.
-        before: Truncation point (see truncate_history).
+        before: Truncation point (see truncate_history). Ignored when
+            llm_call is given.
         provider: LLM provider.
         model: Model identifier.
         mode: Agent mode for tool descriptions.
+        llm_call: When given, resend the exact saved messages of the Nth
+            recorded LLM call verbatim (no prompt rebuilding). Old
+            transcripts without llm_calls fall back to rebuilt prompts.
 
     Returns:
         Dict with proposed reasoning, actions and vitals.
@@ -75,10 +84,40 @@ async def probe(
     from companion.state.agent_state import ActionList, AgentMode
 
     transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+
+    llm = LLMClient(provider=provider, model=model)
+    if llm_call is not None:
+        calls = transcript.get("llm_calls") or []
+        if llm_call < 0:
+            llm_call = len(calls) + llm_call
+        if not (0 <= llm_call < len(calls)):
+            raise SystemExit(
+                f"llm_call {llm_call} out of range (have {len(calls)} calls)"
+            )
+        saved = calls[llm_call]
+        settings = saved.get("settings", {}) or {}
+        action_list: ActionList = await llm.chat(
+            saved["messages"],
+            response_model=ActionList,
+            temperature=settings.get("temperature"),
+            max_tokens=settings.get("max_tokens"),
+        )
+        return {
+            "model": model,
+            "verbatim": True,
+            "input_sha": saved.get("input_sha"),
+            "reasoning": action_list.reasoning,
+            "actions": [
+                {"name": a.name, "parameters": a.parameters}
+                for a in action_list.actions
+            ],
+            "vitals": action_list.vitals,
+            "parse_error": action_list.parse_error_type,
+        }
+
     history = transcript.get("conversation_history", [])
     prefix = truncate_history(history, before)
 
-    llm = LLMClient(provider=provider, model=model)
     agent = DuckAgent(llm_client=llm, session_manager=None)
     agent.state.conversation_history = prefix
     try:
@@ -110,6 +149,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Replay a transcript prefix")
     parser.add_argument("--transcript", required=True)
     parser.add_argument("--before", type=int, default=-1)
+    parser.add_argument("--llm-call", type=int, default=None,
+                        help="Resend the Nth recorded LLM call verbatim")
     parser.add_argument("--provider", default="openrouter")
     parser.add_argument("--model", required=True)
     parser.add_argument("--mode", default="task")
@@ -117,7 +158,14 @@ def main() -> None:
 
     logging.basicConfig(level=logging.WARNING)
     result = asyncio.run(
-        probe(Path(args.transcript), args.before, args.provider, args.model, args.mode)
+        probe(
+            Path(args.transcript),
+            args.before,
+            args.provider,
+            args.model,
+            args.mode,
+            args.llm_call,
+        )
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

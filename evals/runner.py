@@ -397,7 +397,12 @@ async def run_scenario(
     # Record every raw LLM response for post-hoc heuristic analysis.
     # Failed / empty calls are recorded as "<chat_error: ...>" markers so
     # that turn counts in the log match actual LLM invocations.
+    # llm_calls stores the exact sent messages + generation settings per
+    # call (with an input hash) so replay can resend them verbatim.
+    import hashlib as _hashlib
+
     raw_responses: list[str] = []
+    llm_calls: list[dict[str, Any]] = []
     _original_chat = llm.chat
 
     async def _chat_and_record(messages: Any, response_model: Any = None, **kw: Any) -> Any:
@@ -409,6 +414,21 @@ async def run_scenario(
             raise
         raw = getattr(llm, "last_raw_response", "")
         raw_responses.append(raw if raw else "<empty response>")
+        try:
+            dumped = json.dumps(messages, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            dumped = str(messages)
+        llm_calls.append(
+            {
+                "messages": messages,
+                "response_model": getattr(response_model, "__name__", str(response_model)),
+                "settings": {
+                    "temperature": kw.get("temperature"),
+                    "max_tokens": kw.get("max_tokens"),
+                },
+                "input_sha": _hashlib.sha256(dumped.encode("utf-8")).hexdigest()[:16],
+            }
+        )
         return result
 
     llm.chat = _chat_and_record  # type: ignore[method-assign]
@@ -492,6 +512,7 @@ async def run_scenario(
             for err in agent.state.last_syntax_errors
         ],
         "raw_responses": raw_responses,
+        "llm_calls": llm_calls,
         "vitals": agent.state.vitals.model_dump()
         if hasattr(agent.state.vitals, "model_dump")
         else vars(agent.state.vitals),
