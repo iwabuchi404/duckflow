@@ -59,9 +59,9 @@ class PromptBuilder:
         # 3. モード固有の Few-shot 例
         # 既定は framed（例を参考資料として明示し、実履歴との混同を防ぐ）。
         # DUCKFLOW_FEW_SHOT_FRAMING=bare/minimal で切替可（実験用）。
-        import os
+        from companion.prompts.few_shot import get_effective_framing
 
-        few_shot_framing = os.getenv("DUCKFLOW_FEW_SHOT_FRAMING", "framed")
+        few_shot_framing = get_effective_framing()
         few_shots = get_examples_for_mode(mode, framing=few_shot_framing)
         if few_shots:
             # 最後の Few-shot メッセージにキャッシュマーカーを付与（Anthropic/OpenRouter用）

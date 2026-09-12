@@ -36,6 +36,43 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SCENARIO_DIR = Path(__file__).resolve().parent / "scenarios"
 
 
+def _load_yaml_no_duplicates(path: Path) -> dict[str, Any]:
+    """Load a YAML file, rejecting duplicate keys.
+
+    PyYAML silently keeps the last of duplicated keys, which hides editing
+    mistakes in scenario files (e.g. two verify_command entries).
+
+    Args:
+        path: YAML file path.
+
+    Returns:
+        Parsed content.
+
+    Raises:
+        ValueError: On duplicate keys.
+    """
+
+    class _UniqueLoader(yaml.SafeLoader):
+        pass
+
+    def _construct_mapping(loader, node, deep=False):
+        seen: set[str] = set()
+        for key_node, _ in node.value:
+            key = loader.construct_object(key_node, deep=True)
+            if key in seen:
+                raise ValueError(f"Duplicate key {key!r} in {path}")
+            seen.add(key)
+        return yaml.constructor.SafeConstructor.construct_mapping(
+            loader, node, deep
+        )
+
+    _UniqueLoader.add_constructor(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping
+    )
+    with open(path, encoding="utf-8") as f:
+        return yaml.load(f, Loader=_UniqueLoader)
+
+
 def load_scenarios(paths: list[Path]) -> list[dict[str, Any]]:
     """Load scenario definitions from YAML files.
 
@@ -47,8 +84,7 @@ def load_scenarios(paths: list[Path]) -> list[dict[str, Any]]:
     """
     scenarios = []
     for path in paths:
-        with open(path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = _load_yaml_no_duplicates(path)
         data["_path"] = str(path)
         scenarios.append(data)
     return scenarios
@@ -255,7 +291,6 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
         Metadata dict stored in result.json and transcript.json.
     """
     import hashlib
-    import os
     import subprocess
 
     meta: dict[str, Any] = {}
@@ -283,7 +318,9 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         meta["git_commit"] = "unknown"
         meta["git_dirty"] = "unknown"
-    meta["few_shot_framing"] = os.getenv("DUCKFLOW_FEW_SHOT_FRAMING", "bare")
+    from companion.prompts.few_shot import get_effective_framing
+
+    meta["few_shot_framing"] = get_effective_framing()
     try:
         from companion.config.config_loader import config as _cfg
 
@@ -418,14 +455,28 @@ async def run_scenario(
             dumped = json.dumps(messages, ensure_ascii=False, sort_keys=True)
         except (TypeError, ValueError):
             dumped = str(messages)
+        # Resolve effective generation settings: explicit kwargs win,
+        # otherwise fall back to configured defaults (never store nulls —
+        # replay must reproduce the actual conditions).
+        settings: dict[str, Any] = {
+            "temperature": kw.get("temperature"),
+            "max_tokens": kw.get("max_tokens"),
+        }
+        try:
+            from companion.config.config_loader import config as _cfg
+
+            if settings["temperature"] is None:
+                settings["temperature"] = _cfg.get("llm.temperature")
+            if settings["max_tokens"] is None:
+                settings["max_tokens"] = _cfg.get("llm.max_output_tokens")
+            settings["reasoning"] = _cfg.get("llm.reasoning")
+        except Exception:
+            pass
         llm_calls.append(
             {
                 "messages": messages,
                 "response_model": getattr(response_model, "__name__", str(response_model)),
-                "settings": {
-                    "temperature": kw.get("temperature"),
-                    "max_tokens": kw.get("max_tokens"),
-                },
+                "settings": settings,
                 "input_sha": _hashlib.sha256(dumped.encode("utf-8")).hexdigest()[:16],
             }
         )

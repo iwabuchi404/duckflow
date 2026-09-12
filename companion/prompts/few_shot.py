@@ -210,6 +210,21 @@ Remaining hypothesis attempts before duck_call: 4"""},
 ::finish_investigation @Root cause: auth.py:42 calls user.id without checking if user is None. Fix: add null guard before login()."""}
 ]
 
+def get_effective_framing() -> str:
+    """Return the framing actually used for example injection.
+
+    Single source of truth shared by prompt building and experiment
+    records. Reads DUCKFLOW_FEW_SHOT_FRAMING, defaulting to "framed".
+
+    Returns:
+        One of "bare", "framed", "minimal".
+    """
+    import os
+
+    framing = os.getenv("DUCKFLOW_FEW_SHOT_FRAMING", "framed")
+    return framing if framing in ("bare", "framed", "minimal") else "framed"
+
+
 def get_examples_for_mode(mode: str, framing: str = "bare") -> list:
     """Return a compact set of examples relevant to the current mode.
 

@@ -19,4 +19,3 @@ checks:
     path: report.json
     text: "banana"
 verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('cherry')==500 and 'banana' not in d, d\""
-verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('cherry')==500 and 'banana' not in d, d\""
