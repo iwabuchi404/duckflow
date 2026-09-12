@@ -1,5 +1,5 @@
-id: ambiguous
-task: "sales.csv の売上データのうち、必要な商品をまとめて report.json に出力してください。JSON形式で、商品ごとの合計金額を記載してください。対象が不明な場合は、推測で進めず、必ず先に duck_call で確認し、回答を待ってから作業してください。"
+id: ambiguous-spontaneous
+task: "sales.csv の売上データのうち、必要な商品をまとめて report.json に出力してください。JSON形式で、商品ごとの合計金額を記載してください。"
 fixture: fixtures/ambiguous_ws
 max_loops: 15
 timeout_seconds: 420
