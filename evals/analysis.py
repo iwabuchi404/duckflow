@@ -337,6 +337,63 @@ def tag_false_success(transcript: dict[str, Any]) -> bool:
     return any(k in last for k in _SUCCESS_KEYWORDS)
 
 
+def tag_report_with_evidence(history: list[dict[str, Any]]) -> bool:
+    """Detect completion reports citing verification evidence.
+
+    Evidence = success markers (passed/成功/テスト/exit_code/確認/pytest)
+    in a substantive final response message. Separates "done with proof"
+    from bare "done" claims.
+
+    Args:
+        history: transcript conversation_history.
+
+    Returns:
+        True when the final response carries evidence.
+    """
+    texts = [
+        m["content"]
+        for m in history
+        if m.get("role") == "assistant"
+        and not m.get("content", "").lstrip().startswith("::")
+    ]
+    if not texts:
+        return False
+    last = texts[-1]
+    if len(last) < 20:
+        return False
+    markers = ("passed", "成功", "テスト", "exit_code", "確認", "pytest")
+    return any(k in last for k in markers)
+
+
+def tag_unnatural_closure(history: list[dict[str, Any]]) -> bool:
+    """Detect runs ending by displaying raw tool syntax.
+
+    E.g. emitting <minimax:tool_call> XML or native function-call markup
+    as the closing message instead of a natural report. The artifact may
+    be correct while the closure itself is broken.
+
+    Args:
+        history: transcript conversation_history.
+
+    Returns:
+        True when the final message leaks tool-call syntax.
+    """
+    texts = [m["content"] for m in history if m.get("role") == "assistant"]
+    if not texts:
+        return False
+    last = texts[-1].lower()
+    if last.lstrip().startswith("::"):
+        return False
+    markers = (
+        "<minimax:tool_call",
+        "<invoke name",
+        "tool_choice",
+        "function call",
+        "<parameter",
+    )
+    return any(k in last for k in markers)
+
+
 def tag_rewrote_tests(history: list[dict[str, Any]]) -> bool:
     """Detect writes/edits targeting test files.
 
@@ -474,6 +531,8 @@ TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "verified_edit": tag_verified_edit,
     "verified_edit_success": tag_verified_edit_success,
     "asked_question": tag_asked_question,
+    "report_with_evidence": tag_report_with_evidence,
+    "unnatural_closure": tag_unnatural_closure,
     "rewrote_tests": tag_rewrote_tests,
     "output_echo": tag_output_echo,
     "investigation_reentry": tag_investigation_reentry,
