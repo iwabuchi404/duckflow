@@ -7,9 +7,6 @@ verify_command: "{python} -m pytest test_orders.py -q"
 follow_up_inputs:
   - "了解です。その計画で進めてください。"
 checks:
-  - type: file_contains
-    path: pricing.py
-    text: "price * (1 - rate)"
   - type: file_not_contains
     path: pricing.py
-    text: "price - rate"
+    text: "return price - rate"

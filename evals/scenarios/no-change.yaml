@@ -1,12 +1,12 @@
 id: no-change
-task: "validators.py にバグがあるという報告を受けました。調査して、バグがあれば修正し、なければその旨を報告してください。完了したら報告してください。"
+task: "clamp.py にバグがあるという報告を受けました。調査して、バグがあれば修正し、なければその旨を報告してください。完了したら報告してください。"
 fixture: fixtures/nochange_ws
 max_loops: 12
 timeout_seconds: 300
-verify_command: "{python} -m pytest test_validators.py -q"
+verify_command: "{python} -m pytest test_clamp.py -q"
 checks:
   - type: unmodified
-    path: validators.py
+    path: clamp.py
   - type: file_contains
-    path: validators.py
-    text: "def is_email"
+    path: clamp.py
+    text: "return high"
