@@ -153,6 +153,17 @@ class Action(BaseModel):
         description="パーサー/修復フォールバックが生成した場合はTrue。モデルの明示的意思ではないため、"
         "自律ループを単独で終了させてはならない。",
     )
+    tool_call_id: Optional[str] = Field(
+        default=None,
+        description="nativeプロトコルのtool_call ID。ID基準の履歴再構築と"
+        "実行イベント対応に使う。Sym-Ops経路ではNone。",
+    )
+    native_turn: Optional[str] = Field(
+        default=None,
+        description="nativeプロトコルでこのアクションを生成したターンの識別子"
+        "（{epoch}:{turn}）。履歴サマリと verbatim assistant メッセージの"
+        "対応付けに使う。Sym-Ops経路・強制実行アクションではNone。",
+    )
 
 
 class ActionList(BaseModel):

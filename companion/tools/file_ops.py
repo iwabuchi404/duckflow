@@ -745,12 +745,16 @@ class FileOps:
                 (
                     f"Reason: No find/replace details found in content block.\n"
                     f"Received Content Snippet: [ {snippet} ]\n"
-                    f"Fix: Ensure 'find:' and 'replace:' keys are clearly defined. Use | for multi-line blocks.\n"
+                    f"Fix: Send the edit body with SEARCH/REPLACE markers (recommended) "
+                    f"or 'find:'/'replace:' keys. Do not resend an action without a body.\n"
+                    f"Next: run ::read_file @{path} to confirm current content, then retry "
+                    f"::edit_file with the body below.\n"
                     f"Example:\n"
-                    f"find: |\n"
-                    f"    old code\n"
-                    f"replace: |\n"
-                    f"    new code"
+                    f"<<<<<<< SEARCH\n"
+                    f"    old code (copied exactly from the file)\n"
+                    f"=======\n"
+                    f"    new code\n"
+                    f">>>>>>> REPLACE"
                 ),
             )
 
@@ -796,7 +800,10 @@ class FileOps:
                         f"Message: The specified find snippet was not found in {path}.\n"
                         f"Candidates near the first line of 'find':\n{cand_str}\n"
                         f"{diff_hint}\n"
-                        f"Hint: Ensure the 'find' block exactly matches the characters in the file, including spaces and punctuation."
+                        f"Hint: Ensure the 'find' block exactly matches the characters in the file, including spaces and punctuation.\n"
+                        f"Next: run ::read_file @{path} to confirm the current content, then retry "
+                        f"::edit_file with the SEARCH block copied exactly from that output. "
+                        f"Do not resend the same SEARCH text unchanged."
                     ),
                 )
             resolved.append((match[0], match[1], r))

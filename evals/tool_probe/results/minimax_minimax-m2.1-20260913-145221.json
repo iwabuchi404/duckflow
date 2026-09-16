@@ -1,0 +1,17 @@
+{
+  "model": "minimax/minimax-m2.1",
+  "provider": "openrouter",
+  "probed_at_utc": "2026-09-13T14:52:14.838879+00:00",
+  "outcome": "round_trip_ok",
+  "calls": [
+    {
+      "id": "call_function_uodj92871ncf_1",
+      "name": "probe_echo",
+      "arguments": {
+        "message": "duckflow-probe-123"
+      }
+    }
+  ],
+  "follow_up": "The probe_echo function was called successfully with the message 'duckflow-probe-123'. The function returned:\n\n**Echo:** duckflow-probe-123",
+  "error": null
+}

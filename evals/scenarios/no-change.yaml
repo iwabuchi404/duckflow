@@ -1,5 +1,5 @@
 id: no-change
-task: "clamp.py にバグがあるという報告を受けました。調査して、バグがあれば修正し、なければその旨を報告してください。完了したら報告してください。"
+task: "clamp.py にバグがあるという報告を受けました。調査して、バグがあれば修正し、なければその旨を報告してください。入力は整数で、low <= high を満たす前提です。この前提の範囲外（low > high 等）への対応拡張は行わないでください。完了したら報告してください。"
 fixture: fixtures/nochange_ws
 max_loops: 12
 timeout_seconds: 300

@@ -3,6 +3,7 @@
 import asyncio
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -62,3 +63,30 @@ def test_follow_up_served_for_plan_like_response() -> None:
 
     assert _run(provider) == "do thing"
     assert _run(provider) == "go ahead"
+
+
+def test_follow_ups_not_shared_across_runs() -> None:
+    """Each provider gets its own follow-up copy.
+
+    Regression: pop() previously drained the scenario dict's shared list,
+    so --runs N served follow-ups only on the first run.
+    """
+    shared = ["go ahead"]
+
+    def _provider() -> Any:
+        state = AgentState()
+        plan = Plan(goal="g")
+        plan.add_step(title="s", description="d")
+        state.current_plan = plan
+        return _make_input_provider(
+            "task", shared, None, {"agent": _FakeAgent(state)}
+        )
+
+    first = _provider()
+    assert _run(first) == "task"
+    assert _run(first) == "go ahead"
+    assert shared == ["go ahead"]  # scenario list untouched
+
+    second = _provider()
+    assert _run(second) == "task"
+    assert _run(second) == "go ahead"

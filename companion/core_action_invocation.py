@@ -128,14 +128,26 @@ async def invoke_tool(
                         ),
                         dropped,
                     )
+                hint = (
+                    f"Required parameter '{name}' is missing for tool "
+                    f"'{resolved_tool_name}'. Provide the parameter in your action."
+                )
+                if resolved_tool_name == "write_file":
+                    hint += (
+                        "\nNext: send the file body in a <<< >>> block, "
+                        "then retry ::write_file. "
+                        "Do not resend the action without a body.\n"
+                        "Example:\n"
+                        "::write_file @path/to/file.py\n"
+                        "<<<\n"
+                        "file content here (exact text to write)\n"
+                        ">>>"
+                    )
                 return (
                     ToolResult.error(
                         resolved_tool_name,
                         target,
-                        (
-                            f"Required parameter '{name}' is missing for tool "
-                            f"'{resolved_tool_name}'. Provide the parameter in your action."
-                        ),
+                        hint,
                     ),
                     dropped,
                 )

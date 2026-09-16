@@ -1,0 +1,24 @@
+id: feature-pagination
+task: "このワークスペースの list_items() にページネーション機能（page/per_page 引数）を追加してください。既存の全件取得呼び出し（引数なし）は壊さないでください（後方互換を維持）。page=2, per_page=2 のとき3〜4件目を返し、範囲外のpageでは空配列を返してください。app.py の既存呼び出しも動くことを pytest で確認してください。計画の提示だけで終了せず、修正の適用とテストの再実行による確認まで行ってください。完了したら報告してください。"
+fixture: fixtures/pagination_ws
+max_loops: 20
+timeout_seconds: 600
+expects_question: false
+verify_command: "{python} -m pytest test_api.py -q"
+checks:
+  - type: file_contains
+    path: api.py
+    text: "per_page"
+  - type: file_contains
+    path: api.py
+    text: "page"
+  - type: file_contains
+    path: api.py
+    text: "def list_items"
+  # Tamper guards: verification runs the mutable test file, so both the
+  # test file and the no-arg caller must stay byte-identical to the
+  # fixture or the scenario passes by weakening the spec.
+  - type: unmodified
+    path: test_api.py
+  - type: unmodified
+    path: app.py

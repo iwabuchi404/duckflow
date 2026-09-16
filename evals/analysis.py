@@ -526,6 +526,118 @@ def tag_example_contamination(transcript: dict[str, Any]) -> bool:
     return False
 
 
+def load_question_expectations(scenario_dir: Path) -> dict[str, bool | None]:
+    """Load each scenario's expects_question flag.
+
+    Scenarios declaring expects_question state whether the request is
+    incomplete (True: must ask before editing) or already complete
+    (False: must not ask). Scenarios without the flag yield None.
+
+    Args:
+        scenario_dir: Directory containing scenario YAML files.
+
+    Returns:
+        Mapping of scenario id to True/False/None.
+    """
+    import yaml
+
+    expectations: dict[str, bool | None] = {}
+    for path in sorted(scenario_dir.glob("*.yaml")):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except (OSError, ValueError):
+            continue
+        sid = data.get("id", path.stem)
+        flag = data.get("expects_question")
+        expectations[sid] = flag if isinstance(flag, bool) else None
+    return expectations
+
+
+def classify_end_state(transcript: dict[str, Any]) -> str:
+    """Classify how a run ended from its transcript.
+
+    End states: reported (a substantive assistant message closes the run),
+    awaiting_user (ends paused on a duck_call or a trailing question),
+    timeout (harness status), empty (no assistant messages), unknown
+    (actions ran but no report, e.g. an empty response ended the turn).
+
+    An empty history or a consultation pause is NOT a completion report —
+    only reported runs qualify for the natural-completion check.
+
+    Args:
+        transcript: Parsed transcript.json content.
+
+    Returns:
+        One of reported/awaiting_user/timeout/empty/unknown.
+    """
+    result = transcript.get("result", {})
+    if result.get("status") == "timeout":
+        return "timeout"
+    history = transcript.get("conversation_history", [])
+    assistant = [
+        m.get("content", "") for m in history if m.get("role") == "assistant"
+    ]
+    if not assistant:
+        return "empty"
+    texts = [
+        t
+        for t in assistant
+        if not t.lstrip().startswith(("::", "履歴注記")) and len(t.strip()) >= 4
+    ]
+    if texts and (texts[-1].rstrip().endswith(("?", "？"))):
+        return "awaiting_user"
+    sequence = _extract_action_sequence(history)
+    if sequence and sequence[-1][0] == "duck_call":
+        return "awaiting_user"
+    if texts:
+        return "reported"
+    return "unknown"
+
+
+def stage_summary(
+    transcript: dict[str, Any], expects_question: bool | None = None
+) -> dict[str, Any]:
+    """Summarize collaboration completion in three stages.
+
+    Stage 1 (confirmed): questioning matched the scenario expectation —
+    asked before editing when required, stayed silent when the request
+    was already complete. None when the scenario declares no expectation.
+    Stage 2 (artifact_ok): harness checks passed.
+    Stage 3 (natural_completion): a completion report exists AND shows no
+    tool-syntax leak. None when the run did not end with a report
+    (awaiting_user/timeout/empty/unknown) — absence of a leak is not
+    evidence of a report.
+
+    Args:
+        transcript: Parsed transcript.json content.
+        expects_question: Scenario's expects_question flag (None = unknown).
+
+    Returns:
+        Dict with confirmed (bool|None), artifact_ok (bool),
+        natural_completion (bool|None).
+    """
+    history = transcript.get("conversation_history", [])
+    result = transcript.get("result", {})
+    asked = tag_asked_question(history)
+    if expects_question is True:
+        confirmed: bool | None = asked
+    elif expects_question is False:
+        confirmed = not asked
+    else:
+        confirmed = None
+    end_state = classify_end_state(transcript)
+    if end_state == "reported":
+        natural: bool | None = not tag_unnatural_closure(history)
+    else:
+        natural = None
+    return {
+        "confirmed": confirmed,
+        "artifact_ok": bool(result.get("passed", False)),
+        "natural_completion": natural,
+    }
+
+
 TAGS: dict[str, Callable[[list[dict[str, Any]]], bool]] = {
     "api_error": tag_api_error,
     "verified_edit": tag_verified_edit,
@@ -587,6 +699,13 @@ def analyze_dir(results_dir: Path) -> dict[str, Any]:
     """
     runs = []
     tag_counts: dict[str, Counter] = {}
+    stage_counts: dict[str, Counter] = {}
+    end_counts: dict[str, Counter] = {}
+    expectations = load_question_expectations(
+        results_dir.parent / "scenarios"
+        if (results_dir.parent / "scenarios").is_dir()
+        else Path(__file__).resolve().parent / "scenarios"
+    )
     for path in sorted(results_dir.glob("*/*/transcript.json")):
         try:
             transcript = json.loads(path.read_text(encoding="utf-8"))
@@ -594,16 +713,37 @@ def analyze_dir(results_dir: Path) -> dict[str, Any]:
             continue
         entry = tag_transcript(transcript)
         entry["path"] = str(path)
-        entry["scenario_sha"] = transcript.get("result", {}).get(
-            "experiment", {}
-        ).get("scenario_sha", "n/a")
+        experiment = transcript.get("result", {}).get("experiment", {})
+        entry["scenario_sha"] = experiment.get("scenario_sha", "n/a")
+        # Prefer the expectation saved at run time; fall back to the
+        # current scenario files (which may have changed since the run).
+        saved = experiment.get("expects_question")
+        expected = (
+            saved
+            if isinstance(saved, bool)
+            else expectations.get(entry["scenario_id"])
+        )
+        stages = stage_summary(transcript, expected)
+        entry["stages"] = stages
+        end_state = classify_end_state(transcript)
+        entry["end_state"] = end_state
+        entry["tool_protocol"] = experiment.get("tool_protocol", "?")
         runs.append(entry)
         counts = tag_counts.setdefault(entry["scenario_id"], Counter())
         for tag in entry["tags"]:
             counts[tag] += 1
+        scounts = stage_counts.setdefault(entry["scenario_id"], Counter())
+        for name, value in stages.items():
+            if value is True:
+                scounts[name] += 1
+            elif value is False:
+                scounts[f"{name}_miss"] += 1
+        end_counts.setdefault(entry["scenario_id"], Counter())[end_state] += 1
     return {
         "runs": runs,
         "tag_counts": {k: dict(v) for k, v in tag_counts.items()},
+        "stage_counts": {k: dict(v) for k, v in stage_counts.items()},
+        "end_counts": {k: dict(v) for k, v in end_counts.items()},
     }
 
 
@@ -628,6 +768,48 @@ def print_report(analysis: dict[str, Any]) -> None:
         shas = sorted({r.get("scenario_sha", "n/a") for r in runs})
         sha_note = f" [sha:{','.join(shas)}]" if len(shas) > 1 else ""
         print(f"{scenario:<24}{len(runs):<6}{passed:<6} {top}{sha_note}")
+
+    print("-" * 72)
+    print("stages: confirmed/question-handling | artifact | natural-closure")
+    by_protocol: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for scenario, runs in by_scenario.items():
+        for run in runs:
+            by_protocol.setdefault(
+                (scenario, run.get("tool_protocol", "?")), []
+            ).append(run)
+    for (scenario, protocol), runs in sorted(by_protocol.items()):
+        confirmed = sum(1 for r in runs if r["stages"]["confirmed"] is True)
+        confirmed_miss = sum(1 for r in runs if r["stages"]["confirmed"] is False)
+        artifact = sum(1 for r in runs if r["stages"]["artifact_ok"])
+        natural = sum(1 for r in runs if r["stages"]["natural_completion"] is True)
+        natural_miss = sum(
+            1 for r in runs if r["stages"]["natural_completion"] is False
+        )
+        print(
+            f"{scenario:<24}{protocol:<8}{len(runs):<6}"
+            f" confirmed:{confirmed}"
+            f"(miss:{confirmed_miss})"
+            f" artifact:{artifact}"
+            f" natural:{natural}"
+            f"(miss:{natural_miss})"
+        )
+
+    print("-" * 72)
+    print("end states: reported | awaiting_user | timeout | empty | unknown")
+    for scenario in sorted(by_scenario):
+        ec = analysis.get("end_counts", {}).get(scenario, {})
+        parts = " ".join(
+            f"{name}:{ec.get(name, 0)}"
+            for name in (
+                "reported",
+                "awaiting_user",
+                "timeout",
+                "empty",
+                "unknown",
+            )
+            if ec.get(name, 0)
+        )
+        print(f"{scenario:<24}{parts or '-'}")
 
     # Artifact-pass vs self-verified split: passed by the harness's own
     # verify_command does not imply the agent verified by itself.

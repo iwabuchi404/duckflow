@@ -293,6 +293,7 @@ class DuckAgent:
                     self.llm.tier_profile
                 )
                 self.pacemaker.loop_count = 0
+                self.llm.reset_native_log()
 
                 ui.print_vitals(
                     self.state.vitals,
@@ -322,9 +323,22 @@ class DuckAgent:
                         # 2. Think & Decide Phase
                         self.state.phase = AgentPhase.THINKING
 
+                        from companion.base.native_protocol import (
+                            build_native_tools,
+                            resolve_protocol,
+                        )
+
+                        tool_protocol = resolve_protocol()
+                        mode_value = self.state.current_mode.value
                         prompt_builder = PromptBuilder(self.state, self.llm.tier_profile)
                         base_messages = prompt_builder.build_messages(
-                            self.get_tool_descriptions(self.state.current_mode.value)
+                            self.get_tool_descriptions(mode_value),
+                            protocol=tool_protocol,
+                        )
+                        native_tools = (
+                            build_native_tools(self.tools, mode_value)
+                            if tool_protocol == "native"
+                            else None
                         )
                         self.state.last_syntax_errors = []
 
@@ -338,7 +352,7 @@ class DuckAgent:
 
                             try:
                                 intervention_prompt = build_intervention_prompt(
-                                    intervention, summary
+                                    intervention, summary, protocol=tool_protocol
                                 )
                                 messages = (
                                     base_messages
@@ -347,9 +361,13 @@ class DuckAgent:
                                 )
                                 with ui.create_spinner("Analyzing intervention..."):
                                     action_list = await self.llm.chat(
-                                        messages, response_model=ActionList
+                                        messages,
+                                        response_model=ActionList,
+                                        native_tools=native_tools,
                                     )
-                                record_parse_error_if_any(self.state, action_list)
+                                record_parse_error_if_any(
+                                    self.state, action_list, protocol=tool_protocol
+                                )
                             except Exception as e:
                                 logger.warning(
                                     f"Intervention LLM call failed: {e}, using fallback"
@@ -371,9 +389,13 @@ class DuckAgent:
                                     base_messages + self.state.conversation_history
                                 )
                                 action_list = await self.llm.chat(
-                                    messages, response_model=ActionList
+                                    messages,
+                                    response_model=ActionList,
+                                    native_tools=native_tools,
                                 )
-                            record_parse_error_if_any(self.state, action_list)
+                            record_parse_error_if_any(
+                                self.state, action_list, protocol=tool_protocol
+                            )
 
                             logger.info(
                                 f"Agent proposed actions: {[a.name for a in action_list.actions]}"

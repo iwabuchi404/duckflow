@@ -27,6 +27,7 @@ from companion.core_action_results import (
     build_tool_result_message,
     get_approval_request,
 )
+from companion.base.native_protocol import sanitize_tool_references
 from companion.core_action_invocation import invoke_tool
 from companion.tool_history_policy import compress_for_history
 from companion.execution.result_pipeline import summarize_result
@@ -78,8 +79,34 @@ async def execute_actions(agent, action_list) -> list:
             return
         history_flushed = True
         action_summary = build_action_summary(action_list)
+        # Stamp the native turn id so history rebuild pairs this summary
+        # with the correct verbatim assistant log entry by identity
+        # instead of position (stable across task resets, pruning, and
+        # non-LLM forced executions).
+        turn = next(
+            (
+                a.native_turn
+                for a in action_list.actions
+                if getattr(a, "native_turn", None)
+            ),
+            None,
+        ) or next(
+            (
+                a.native_turn
+                for a in proposed_actions
+                if getattr(a, "native_turn", None)
+            ),
+            None,
+        )
+        if not action_summary and turn is not None:
+            # Every proposed call was filtered/dropped before execution,
+            # leaving no action lines. Still anchor the turn so its
+            # journal results reach the rebuilt native history.
+            action_summary = ":: (all proposed actions filtered)"
         if action_summary:
             agent.state.add_message("assistant", action_summary)
+            if turn is not None:
+                agent.state.conversation_history[-1]["_native_turn"] = turn
         for content in pending_user_messages:
             agent.state.add_message("user", content)
 
@@ -89,21 +116,69 @@ async def execute_actions(agent, action_list) -> list:
     else:
         mode_tools = agent.UNIVERSAL_TOOLS
 
+    # Snapshot the proposed actions before filter/limit mutations so every
+    # native tool_call can be accounted for in the execution journal — an
+    # unrecorded call would reach the API as an orphaned tool_call.
+    proposed_actions = list(action_list.actions)
+    recorded_call_ids: set = set()
+
+    def _record_native_event(action, status, executed, body) -> None:
+        """Record a native tool-call outcome for ID-based history rebuild.
+
+        No-op for actions without a tool_call_id (Sym-Ops path and
+        text-derived control actions).
+        """
+        call_id = getattr(action, "tool_call_id", None)
+        if not call_id:
+            return
+        recorded_call_ids.add(call_id)
+        record = getattr(agent.llm, "record_native_event", None)
+        if callable(record):
+            # Tool-result bodies were written for the Sym-Ops surface and
+            # may embed "::name @target" guidance; rewrite those references
+            # so the native model is not taught to emit Sym-Ops text.
+            record(
+                call_id,
+                action.name,
+                status,
+                executed,
+                sanitize_tool_references(str(body)),
+            )
+
+    # filter_known_actions removes unknown actions in place, so the
+    # pre-filter snapshot is what identifies which calls were dropped.
     removed_tools = filter_known_actions(
         action_list,
         agent.tools.keys(),
         mode_tools,
         agent.state.last_syntax_errors,
     )
+    removed_names = set(removed_tools)
     for tool_name in removed_tools:
         ui.print_warning(f"Unknown tool '{tool_name}' was ignored.")
+    for action in proposed_actions:
+        if action.name in removed_names:
+            _record_native_event(
+                action,
+                "filtered",
+                False,
+                f"Unknown or unavailable tool '{action.name}' was ignored.",
+            )
 
     # --- Action Count Limiter ---
+    pre_limit_actions = list(action_list.actions)
     dropped = limit_actions_per_turn(action_list)
     if dropped:
         ui.print_warning(
             f"アクション数が上限(6)を超えたため、末尾{dropped}件を切り捨てました。"
         )
+        for action in pre_limit_actions[len(pre_limit_actions) - dropped:]:
+            _record_native_event(
+                action,
+                "dropped",
+                False,
+                "Not executed: exceeded the per-turn action limit.",
+            )
 
     # --- Fail-fast: consecutive error counter ---
     consecutive_errors = 0
@@ -111,9 +186,10 @@ async def execute_actions(agent, action_list) -> list:
     # Move terminal actions to the end
     move_terminal_actions_to_end(action_list)
 
-    def _handle_error(action, error_content, t0, t1):
+    def _handle_error(action, error_content, t0, t1, executed=True):
         """Record a tool/action error, update history, and check fail-fast."""
         nonlocal consecutive_errors
+        _record_native_event(action, "error", executed, str(error_content))
         error_msg = f"Action '{action.name}' failed: {error_content}"
         logger.error(error_msg)
         agent.state.last_action_result = error_msg
@@ -187,6 +263,12 @@ async def execute_actions(agent, action_list) -> list:
             if action.name == "investigate" and _current_mode == "investigation":
                 logger.warning("Skipping investigate: already in investigation mode")
                 ui.print_warning("investigate: 既にInvestigation Modeです。::read_file等で観察してください")
+                _record_native_event(
+                    action,
+                    "skipped",
+                    False,
+                    "Already in investigation mode; observe with read_file instead.",
+                )
                 continue
 
             # --- Investigation Mode Guard ---
@@ -201,6 +283,7 @@ async def execute_actions(agent, action_list) -> list:
                     f"during Investigation Mode"
                 )
                 block = build_investigation_edit_block(action)
+                _record_native_event(action, "blocked", False, block.message)
                 agent.state.last_syntax_errors.append(block.syntax_error)
                 _queue_user_message(
                     build_tool_result_message(
@@ -221,8 +304,12 @@ async def execute_actions(agent, action_list) -> list:
                     ui.print_result(msg, is_error=True)
                     agent.state.last_action_result = msg
 
+                    denial_context = build_denial_context(
+                        action, approval_request.warning
+                    )
+                    _record_native_event(action, "denied", False, denial_context)
                     _queue_user_message(
-                        build_denial_context(action, approval_request.warning),
+                        denial_context,
                     )
 
                     agent.pacemaker.update_vitals(action, msg, is_error=True)
@@ -285,6 +372,9 @@ async def execute_actions(agent, action_list) -> list:
                             action.name, result_str, agent
                         )
 
+                        _record_native_event(
+                            action, "ok", True, history_content or result_str
+                        )
                         _queue_user_message(
                             build_tool_result_message(
                                 action,
@@ -351,13 +441,28 @@ async def execute_actions(agent, action_list) -> list:
                     f"Available tools: {available_tools}. "
                     f"Please use one of the available tools."
                 )
-                if _handle_error(action, error_content, _t0, time.monotonic()):
+                if _handle_error(
+                    action, error_content, _t0, time.monotonic(), executed=False
+                ):
                     break
     except KeyboardInterrupt:
         ui.print_warning("Execution interrupted by user.")
         _queue_user_message(
             "[System: Execution was interrupted by the user (Ctrl+C). Please wait for new instructions.]",
         )
+
+    # Account for calls that never reached a record point (fail-fast
+    # break, interruption) so no tool_call is left unanswered in the
+    # rebuilt native history.
+    for action in proposed_actions:
+        call_id = getattr(action, "tool_call_id", None)
+        if call_id and call_id not in recorded_call_ids:
+            _record_native_event(
+                action,
+                "skipped",
+                False,
+                "Not executed: the turn was aborted before this call ran.",
+            )
 
     _flush_history()
 

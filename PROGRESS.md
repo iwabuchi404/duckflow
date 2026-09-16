@@ -1,3 +1,25 @@
+### 2026-09-16: eval 試行条件共有バグ修正＋シナリオスナップショット保存
+- 背景: 504run比較の精度向上のための前置修正。`follow_up_inputs` が試行間で共有されており、2試行目以降はfollow-upが供給されない欠陥があった。
+- 修正（`evals/runner.py`）:
+  - `_make_input_provider` で `follow_ups` を `list(follow_ups or [])` でコピー（`user_script` と同様）。`pop(0)` が scenario dict の共有リストを枯渇させる問題を解消。影響シナリオ: double-bug / find-and-fix / find-needle（`user_script` 型の ambiguous-* は非影響）。
+  - `_collect_experiment_meta` に `meta["scenario"]` を追加し、実行時点の解決済みシナリオ設定（follow-ups/checks/verify_command等）を result.json/transcript.json にスナップショット保存。後からYAMLが変わっても実行条件を復元可能。
+- テスト: `tests/test_eval_follow_up.py` に `test_follow_ups_not_shared_across_runs` を追加（同一リストから2プロバイダが各々follow-upを受け取り、元リストが不変であることを検証）。
+- 検証: `uv run python -X utf8 -m pytest tests/ -q` → 全緑。
+
+### 2026-09-16: native tool-calling レビュー修正（履歴再構成の堅牢化＋Sym-Opsリーク対策＋E2E強化）
+- 背景: native tool-calling 経路（Phase A）のレビューで、journal未記録callによる孤児tool_call（API 400）と、タスクリセット・強制実行・pruning での履歴サマリ位置ずれ、nativeプロンプトへのSym-Ops文法リーク、feature-pagination シナリオのテスト改ざん耐性不足を指摘。
+- 履歴再構成（`companion/base/native_protocol.py` / `core_action_executor.py` / `llm_client.py` / `agent_state.py`）:
+  - 対応付けを位置消費から**ターンID基準**へ変更。`LLMClient` が `{epoch}:{turn}`（epoch=プロセス毎uuid、turn=単調増加・リセット非対象）をログエントリ `_turn` と `Action.native_turn` に付与。executor が履歴サマリへ `_native_turn` をスタンプし、`build_native_messages` がID一致でのみpairing。前タスクのサマリ・強制duck_call・pruning挿入サマリがエントリを食い違わせる問題を解消。
+  - journal未記録callへは合成toolメッセージを返しAPI妥当性を担保。executor側は実行前スナップショットで filtered/dropped を記録し、fail-fast・中断残分を終末スイープで `skipped` 記録（全終端点をカバーする二重防御）。
+  - テキストのみターンはassistant contentを復元。全件フィルタ時はアンカーサマリ `":: (all proposed actions filtered)"` を挿入。
+- Sym-Opsリーク対策（`prompts/builder.py` / `prompts/templates.py` / `core_loop_helpers.py` / executor）:
+  - native時はFew-shot不送（全例が `::`/`<<<>>>` 構文を含むため）。Correction Guideのhint・fallback例とジャーナルbodyは `sanitize_tool_references()` で `::name @target` → `name` 変換（`std::vector` 等を壊さない境界条件付き）。`NATIVE_TOOL_PREAMBLE` に「結果内の `::name` 表記は同名ツールへの言及」と明記。`build_intervention_prompt` にprotocol引数追加。
+  - スキーマの引数descriptionをツールdocstringの `Args:` 節から生成（`_BLOCK_PARAMS` デッドコード廃止）。
+- E2E強化（`evals/scenarios/feature-pagination.yaml` / `evals/runner.py`）:
+  - `expects_question: false` を追加（協業段階集計のno-question対照）。`test_api.py`/`app.py` に `unmodified` チェックを追加し、テスト弱化によるパスを封鎖。fixtureコピーで `__pycache__`/`*.pyc` を除外し、コミット済み `__pycache__` を削除。
+- テスト: `test_native_protocol.py`（placeholder合成・ターンID対応・stale turn非pairing・sanitize境界・param doc・native build_messages非汚染）、`test_core_execute_actions_minimal.py`（filtered/dropped/skipped journal・`_native_turn` スタンプ）を追加・更新。
+- 検証: `uv run python -X utf8 -m pytest tests/ -q` → **765 passed / 2 skipped**（754から11件増）。
+
 ### 2026-09-09: ライブモデル評価ハーネス (evals/) + 製品バグ修正
 - 背景: 弱いモデルの実挙動を測るE2E評価が存在しなかったため、実LLMでシナリオを実行・対話履歴を蓄積・ヒューリスティック分析する土台を新設。単体テストの重要ギャップ（承認ゲート・ループ制御）も補填。
 - 単体テスト追加（Step 0）:
@@ -462,3 +484,87 @@
 - [ ] `learnings.md` 実装（長期記憶）
 - [ ] セッション間履歴の永続化
 - [ ] ユーザーの好みの自動学習
+### 2026-09-11: 比較評価用モデルの追加
+- `duckflow.yaml` の選択候補に `minimax/minimax-m2.5` を追加。既定モデルは変更せず、評価時に明示指定する。
+- OpenRouter公開モデルAPIでM2.1と同じ入力/出力単価を確認。公開ベンチマーク値はハーネス条件が異なるため、Duckflowでの性能保証とは扱わない。
+- 計画反復の調査で、Pacemakerが `propose_plan` を停滞検知から明示除外していることを確認。制御変更とモデル変更を同時に比較しない方針で、今回の制御コードは変更なし。
+
+### 2026-09-13: 評価仕様の確定・編集回復ガイド・自発的確認の拡張（施策1〜3）
+- 施策1（評価仕様の確定）: `ambiguous-explicit`/`ambiguous-spontaneous` の依頼にトップレベル形式と階層禁止を明記し、verifyの `summary` 特例を廃止して厳密一致化。`no-change` の依頼に入力前提（整数・low <= high）と範囲外拡張の禁止を明記。以後は構造と協業を混ぜずに測れる。
+- 施策2（編集回復ガイドの具体化）: MiniMaxのmulti-file失敗（本文欠落の反復・SEARCH不一致後の立て直し失敗）を受け、`file_ops.py` の本文欠落・find不一致エラーを「::read_file→逐語コピー→同一文再送禁止」の次手順付きに変更。`core_action_results.py` のhintと`builder.py` のCorrection例示もSEARCH/REPLACE表現へ統一。
+- 施策3（自発的確認の拡張）: 不足情報の別種3課題（`ambiguous-period`/`ambiguous-output`/`ambiguous-unit`）と対照課題（`complete-no-question`）を追加。period用fixture（`fixtures/period_ws/sales.csv`）は月絞り込み可能。シナリオは13→17件。
+- テスト: `tests/test_eval_spec_narrowing.py`（13件）・`tests/test_edit_recovery_guide.py`（4件）を追加。`uv run python -X utf8 -m pytest tests/ -q` → **709 passed / 2 skipped**。
+- 次は MiniMax + DeepSeek で新4課題の各5試行比較（質問実施率・不要質問率・回答後完遂率）。
+
+### 2026-09-13: 新4課題×2モデル×9回＝72試行の比較結果
+- 条件: commit `d0f423a`（dirty: 施策1〜3の未commit分あり）＋厳密化後の採点。framed既定。
+- 結果: MiniMax 35/36、DeepSeek 35/36。内訳は period 9/9・output 8/9・unit 9/9・complete 9/9 で両モデル同一。
+- periodは推測不能な設計が機能: 両モデルとも質問が必須で、MiniMax 8/9・DeepSeek 9/9 が編集前に質問。MiniMaxの1件（`ambiguous-period/20260913-095505-r4`）は先に全期間集計を書き込んでから質問し直して上書き成功。成果物は正しいが無駄手間で、`asked_question` タグ（編集前質問のみ計上）は正しくFalseを付けた。
+- output/unitは正解の推測が可能: 出力先report.json・合計金額は例示から自明なため、質問なし完遂（DeepSeek output asked 1/9・unit 6/9、MiniMax output 4/9）が合理的行動として混在。「質問しなかった＝失敗」ではない。質問行動を測るにはperiod型の推測不能設計が必要という設計知見。
+- 両モデルの失敗は共にoutputの早期終了（ファイル未生成）で、機序は異なる: MiniMaxは `<minimax:tool_call>` XMLを通常応答として表示して終了（`ambiguous-output/20260913-095244-r6`、2loops）、DeepSeekはread後に空の `:: response` で終了（`ambiguous-output/20260913-100243-r4`、2loops）。採点起因ではなく実失敗。
+- 対照課題は両モデルとも質問0/9で全完遂。情報が揃えば質問過多にならない。
+- トークン中央値は period で MiniMax 30,553 / DeepSeek 27,986、complete で 19,525 / 20,942。今回の軽量課題では multi-file のような効率差は出ない。
+- 次: output/unitを推測不能化（例: 出力先・集計種別を自明でない選択肢にする）し、質問必須性をperiod並みに引き上げる。「編集してから質問」の検出タグ（asked-late）を検討。
+
+### 2026-09-13: 施策1〜3の実装（不足情報の隠蔽・3段階集計・編集回復の前後比較）
+- 施策1（不足情報を本当に隠す）: `ambiguous-output` の依頼文から `report.json` を除去し、回答で初めて `summary.json` を伝える構成へ（checks/verifyも追従）。回答複数パターンとして `ambiguous-output-alt`（回答totals.json）・`ambiguous-period-feb`（回答2月分: apple 50/cherry 500）・`ambiguous-unit-count`（回答行数: apple 2/banana 1/cherry 1）を追加。シナリオは17→20件。全variantのverifyは正誤両方向の動作確認済み。
+- 施策2（合格の3段階集計）: シナリオに `expects_question`（協業8種+変種=true、対照=false）を宣言し、`evals/analysis.py` に `load_question_expectations()`・`stage_summary()`（confirmed/artifact_ok/natural_completion）を追加。`analyze_dir` は各runに `stages` を付与し `stage_counts` を集計、`print_report` に段階表を表示。`tests/test_eval_stages.py`（7件）で回帰化。
+- 施策3（編集回復の前後比較）: MiniMax `multi-file-rename` ×9を新ガイドで実行し、旧ガイド時の4/9と比較 → **6/9**。ただしn=9ずつのため改善断定は不可。失敗3件の内訳: r3/r7は本文欠落の反復（新ガイド文面は到達したが同一の空編集を再送）、r9は未読でのSEARCH推測→mismatch→fail-fast後に1ループで終了（再試行なし）。本文欠落は文面理解ではなくプロトコル遵守の問題で、文面改善だけでは反復が止まらないことを確認。なお本文欠落エラーはToolResult経路のみで `last_syntax_errors`（Correction Guide）には載らない非対称も残る。
+- テスト: `uv run python -X utf8 -m pytest tests/ -q` → **716 passed / 2 skipped**（709から7件追加）。
+- 次（施策4）: XML要求の完了応答化と途中経過responseの対策を別々に比較。response継続化は正常な質問を壊すため一括変更しない。
+
+### 2026-09-13: variant3件＋隠蔽後output×2モデル×9回＝72試行（3段階集計の初適用）
+- 条件: 施策1・2の未commit分あり。outputは回答をsummary.jsonへ変更後の再測定。
+- 成果物合格: MiniMax 32/36、DeepSeek 35/36。3段階（confirmed/artifact/natural）は以下。
+  - output（隠蔽後）: 両モデルとも9/9かつconfirmed 9/9。隠蔽が機能し、推測完遂は消滅。
+  - output-alt: 両モデルとも9/9・3段階完全。回答違い（totals.json）への追従を確認。
+  - period-feb: DeepSeekは9/9・3段階完全。MiniMaxは質問9/9だが成果物7/9。失敗2件は質問後に正しい内容の初回書き込み→空本文の再送反復→ファイル未生成（multi-fileのr3/r7と同型）。
+  - unit-count: MiniMaxは質問8/9・成果物7/9（r9は金額推測のまま終了）。DeepSeekは成果物8/9だが質問は4/9。残り4件の合格は「金額で先書き→質問→件数で上書き」の事後修正で、r1は完了報告で自己違反を自認（「本来は集計方法を先に確認すべき」）。r8は金額のまま終了し不合格。
+- 自然な完了報告: 72/72でXML漏れ・空終了なし。今回の範囲では終了処理の問題は再現せず。
+- 知見: (1) 推測不能化は質問必須化に有効（output隠蔽で確認）。(2) 成果物合格は事後修正で水増しされるため、confirmed分離が必須（DeepSeek unit-countが典型）。(3) MiniMaxの空本文反復は文面到達後も継続し、ガイド文面の限界を再確認。
+- 次（施策4）: XML要求の完了応答化と途中経過responseの対策を別々に比較。加えて空本文反復への対策（ToolResult経路のCorrection Guide化など）を検討。
+
+### 2026-09-13: 終了判定修正・write_file回復例・例示中立化＋MiniMax 3課題の再評価（優先1〜4）
+- 優先1（終了判定の修正）: `evals/analysis.py` に `classify_end_state()`（reported/awaiting_user/timeout/empty/unknown）を追加。stage3は報告あり＋漏れなしのときのみTrue、報告なしはNone（従来は空履歴・相談終了もTrueだった）。`analyze_dir` は各runに `end_state` を付与し `end_counts` を集計・表示。`evals/runner.py` のexperiment記録に `expects_question` を保存し、分析は試行時値を優先（現行ファイルへの retroactive 適用を解消）。`tests/test_eval_stages.py` に6件追加。
+- 優先2（write_file本文欠落の回復例）: `companion/core_action_invocation.py` の必須引数欠落エラーで、対象がwrite_fileの場合に `<<< >>>` 複数行形式の再送例を返す。他ツールは汎用文のまま。`tests/test_core_action_invocation.py` に2件追加。
+- 優先3（例示の中立化）: `ambiguous-unit`/`ambiguous-unit-count` の例示を `{"apple": 300}` から `{"商品名": 集計値}` へ変更。`tests/test_eval_spec_narrowing.py` に1件追加。
+- 優先4（変更部分のみ再評価・MiniMax×3課題×9＝27試行）: period-feb 7/9（前回同値）、unit-count 8/9（前回7/9）、multi-file 7/9（前回6/9）。r1/r3（feb）は質問なしの全期間推測、unit r2は質問後にシングルクォートJSONを書き込み（形式隣接失敗）、multi r4はXML漏れ表示つき未完、r9は相談終了。unit-countは質問9/9（前回8/9）で中立化が質問率に寄与した可能性。新write_file案内はfeb r2で2回到達し、その後本文付き再送で完遂（回復の直接証拠1件）。unit r4は成果物合格ながら相談終了でstage3=Noneとなり、新判定が機能。
+- テスト: `uv run python -X utf8 -m pytest tests/ -q` → **725 passed / 2 skipped**（716から9件追加）。
+- 次（施策4）: XML漏れ完了応答と途中経過responseの個別対策を別々に比較。multi r4でXML漏れパターンが再現したため素材あり。
+
+### 2026-09-13: Tool Calling検証プローブの実装（research §4の能力確認）
+- `evals/tool_probe/fetch_catalog.py`: 公開モデルAPIの取得→抽出→保存を再現可能化。yaml登録ID＋E2E明示3件＋既知extras＋対照2件を対象化。再取得で既存スナップショットとID・フラグ完全一致を確認。実装中に検出・修正した落とし穴: yamlだけではE2E主力（M2.1/GLM有料/V4.1F）が対象外になるため `EVAL_IDS` で明示（初版は10件に縮小していた）。
+- `evals/tool_probe/probe.py`: 副作用なし `probe_echo` ツールの送受信→tool_call_id付き結果返送→通常応答までの往復を記録。no_callは所見、API失敗はerror（非対応に分類しない）。主ループ不変。
+- 実機確認: MiniMax-M2.1で `round_trip_ok`（名前・引数・ID受信→結果返送→追従応答）。結果は `evals/tool_probe/results/` に保存。
+- テスト: `tests/test_tool_probe.py`（10件、実APIなし・fake注入）。`uv run python -X utf8 -m pytest tests/ -q` → **735 passed / 2 skipped**（725から10件追加）。
+- 次: 他モデル（DeepSeek等）の往復確認、M2.1のSym-Ops対native A/Bは別途設計合意が必要。
+
+### 2026-09-14: 差し替え機構の実装（Phase A）＋初回A/B（M2.1・output/multifile各9）
+- 機構: `companion/base/native_protocol.py` 新設（スキーマ自動生成・tool_calls→ActionList変換・履歴のターンごと再構成・環境切替）。`LLMClient.chat()` にnative分岐（`native_tools` 引数、共通kwargs/usage化のため `_build_request_kwargs`・`_record_usage` を抽出、verbatim応答ログ＋`reset_native_log()`）。`PromptBuilder.build_messages()` にprotocol指定（native時はツール説明ブロックを `NATIVE_TOOL_PREAMBLE` へ置換・Few-shotはminimal固定）。`core.py` で配線（2経路＋新規タスク時リセット）。`evals/runner.py --tool-protocol`＋experiment記録、分析は試行時値を優先・段階表をprotocol別表示。
+- 設計からの逸脱1件: プロンプトのツール説明ブロック置換は「本文変更なし」に反するが、Sym-Ops指示とnative定義の併送は実験を無効化するため最小置換を実施（§6の「入力差はツール説明の形式に限定」と整合）。
+- テスト: `tests/test_native_protocol.py`（10件）。`uv run python -X utf8 -m pytest tests/ -q` → **745 passed / 2 skipped**。
+- A/B結果（M2.1）: outputはsymops 9/9・native 6/9、multifileは両方式9/9。native outputの失敗3件は散文での質問（表＋「ファイル名を指定してください」）に `?` がなく、ハーネスの回答供給条件（duck_call待機または `?`）に掛からず回答なし終了。機構の不具合ではなく、質問検出の方式差。nativeはトークン中央値がoutput 15,232（symops 24,800）・multifile 22,186（27,534）と軽量。
+- symops outputの2件は成果物合格後にPacemaker STAGNATION介入のduck_callで待機終了し、stage3=Noneが完了認定を正しく保留（新終了判定の動作確認）。
+- 注意: multifileのsymops 9/9は過去6〜7/9とのばらつき範囲（n=9）。方式の優劣断定はしない。
+- 次（Phase C判断材料）: native質問文への `?` 付与（preamble強化）か、ハーネス側の散文質問検出のいずれかを単独比較。併せて他モデルでの再現確認。
+
+### 2026-09-14: レビュー指摘の優先1〜4を実装（native完成度の引き上げ）
+- 優先1（プロンプト分離）: `templates.py` にNATIVE版テンプレート要素（Unified Action・reasoning行・tools節・3モード指示）を追加。`builder._native_template()` はアンカー不一致で loudly 失敗。`_build_mode_static`・`_build_error_feedback` にprotocol指定（native例示はSym-Ops文法なし）。テストで静的部分のマーカー漏れを回帰化。
+- 優先2（質問待ちの内部明示）: `native_text_to_action()` が文末 `?` を内部 `duck_call` アクションへ変換（API定義に含めない、LLM呼び出し追加なし）。`tag_asked_question`/runner検出と同基準。
+- 優先3（ID基準化）: `Action.tool_call_id` 追加、`LLMClient` に実行ジャーナル（turn/tool_name/status/executed/body）＋`record_native_event()`、`execute_actions` の5終端点（filter/block/deny/error/success＋investigate skip）で記録。`build_native_messages` はjournal優先・順序zipはフォールバック。純粋エンベロープ文はnative再構成で除去（重複防止）。
+- 優先4（APIエラー分離）: `_chat_native` の例外は actions空＋`parse_error_type="api_error"`（完了応答にしない）。引数JSON破損は `tool_call_parse_error` を付与しつつ実行継続。`_PARSE_ERROR_HINTS`・Correction例示にnative文言を追加（Sym-Ops側の同種経路は凍結・不変）。
+- テスト: `uv run python -X utf8 -m pytest tests/ -q` → **754 passed / 2 skipped**（745から9件追加）。
+- 制限: nativeを既定化しない（実験経路のまま）。項目5・6の実機比較はクレジット不足（402）のため未実施、追加後に再開。
+
+### 2026-09-16: 全21シナリオ×4モデル×3回×2protocol計504run比較（クレジット追加後）
+- 条件: `evals/results/full/<モデル>_<protocol>/` に8条件を逐次実行（01:46〜06:03、EXIT=0）。モデルはyaml登録のOpenRouter 4件（minimax-m2.5 / deepseek-v4-flash-0731 / z-ai/glm-4.5-air / gemini-2.5-flash）。スモークで `:free` 版が404提供終了を確認し有料版に置換。
+- 総合: **439/504（87%）**。条件別: DS-native 60/63・GLM-symops 58・DS-symops 56・M2.5-symops 56・M2.5-native 54・Gemini-symops 52・GLM-native 52・Gemini-native 51。3段階はconfirmed 200 / artifact 439 / natural 468。
+- 最大の発見: **ambiguous-spontaneous が全条件で 1/24**。モデル・方式を問わず壊滅のため、シナリオ/採点側の問題が濃厚（要調査）。
+- 新規 feature-pagination は 22/24。no-change / create-fizzbuzz / find-needle / ambiguous-unit-count は 24/24。
+- 次: spontaneous失敗の原因切り分け、Phase C判断材料として本結果を使用。
+
+### 2026-09-16: 504run全分析（モデル×方式×シナリオ横断）
+- モデル別: DeepSeek 116/126（92%）・M2.5 110/126（87%）・GLM 110/126（87%）・Gemini 103/126（82%）。方式別: native 217/252（86%）・symops 222/252（88%）でほぼ互角。
+- コスト: 中央値トークン native < symops（M2.5で14k vs 25k）。全消費 約1250万トークン。loops中央値は3〜6。
+- 失敗タグ全体: false_success 36・verified_edit 36が双璧（編集して検証したつもりで報告する型）。fabricated_tool_result 10はsymopsのみ・nativeゼロ。
+- false_successの内訳はspontaneous 15・explicit 5と協業系に集中。方式断定はn=3のため不可。

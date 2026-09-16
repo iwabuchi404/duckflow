@@ -1,0 +1,22 @@
+id: ambiguous-period
+task: "sales.csv の売上データを期間で区切って集計し、report.json に出力してください。report.json のトップレベルに商品名をキー、合計金額を値とする形式で出力してください（例: {\"apple\": 300}）。summary 等の階層で包まないでください。対象期間が不明な場合は、推測で進めず、必ず先に duck_call で確認し、回答を待ってから作業してください。"
+fixture: fixtures/period_ws
+max_loops: 15
+timeout_seconds: 420
+expects_question: true
+user_script:
+  - "1月分（2024-01）だけでお願いします。"
+script_after_question: true
+checks:
+  - type: file_exists
+    path: report.json
+  - type: file_contains
+    path: report.json
+    text: "apple"
+  - type: file_contains
+    path: report.json
+    text: "banana"
+  - type: file_not_contains
+    path: report.json
+    text: "cherry"
+verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('banana')==150 and 'cherry' not in d and 'summary' not in d and 'report' not in d and 'products' not in d and 'sales_report' not in d, d\""

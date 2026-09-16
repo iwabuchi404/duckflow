@@ -1,0 +1,277 @@
+{
+  "retrieved_at_utc": "2026-09-13T14:12:57.9935537Z",
+  "source": "https://openrouter.ai/api/v1/models",
+  "scope": "Configured OpenRouter IDs, evaluation models, and two catalog controls",
+  "live_tool_calls_tested": false,
+  "models": [
+    {
+      "id": "minimax/minimax-m2.5",
+      "found": true,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logit_bias",
+        "logprobs",
+        "max_tokens",
+        "min_p",
+        "presence_penalty",
+        "reasoning",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "minimax/minimax-m2.1",
+      "found": true,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": false
+    },
+    {
+      "id": "anthropic/claude-sonnet-4.5",
+      "found": true,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_completion_tokens",
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "anthropic/claude-3-5-sonnet-20241022",
+      "found": false,
+      "supported_parameters": [
+        null
+      ],
+      "tools_advertised": null,
+      "tool_choice_advertised": null,
+      "structured_outputs_advertised": null
+    },
+    {
+      "id": "anthropic/claude-haiku-4.5",
+      "found": true,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_completion_tokens",
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "google/gemini-2.5-flash",
+      "found": true,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "google/gemini-2.5-pro",
+      "found": true,
+      "supported_parameters": [
+        "include_reasoning",
+        "max_tokens",
+        "reasoning",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "z-ai/glm-4.5-air:free",
+      "found": false,
+      "supported_parameters": [
+        null
+      ],
+      "tools_advertised": null,
+      "tool_choice_advertised": null,
+      "structured_outputs_advertised": null
+    },
+    {
+      "id": "z-ai/glm-4.5-air",
+      "found": true,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "max_tokens",
+        "presence_penalty",
+        "reasoning",
+        "repetition_penalty",
+        "seed",
+        "stop",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": false
+    },
+    {
+      "id": "deepseek/deepseek-v4-flash-0731",
+      "found": true,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logit_bias",
+        "logprobs",
+        "max_tokens",
+        "min_p",
+        "parallel_tool_calls",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_a",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "deepseek/deepseek-v4.1-flash",
+      "found": true,
+      "supported_parameters": [
+        "frequency_penalty",
+        "include_reasoning",
+        "logit_bias",
+        "logprobs",
+        "max_tokens",
+        "min_p",
+        "presence_penalty",
+        "reasoning",
+        "reasoning_effort",
+        "repetition_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "tool_choice",
+        "tools",
+        "top_k",
+        "top_logprobs",
+        "top_p"
+      ],
+      "tools_advertised": true,
+      "tool_choice_advertised": true,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "inference-net/schematron-v2-small",
+      "found": true,
+      "supported_parameters": [
+        "frequency_penalty",
+        "logit_bias",
+        "max_tokens",
+        "min_p",
+        "presence_penalty",
+        "response_format",
+        "seed",
+        "stop",
+        "structured_outputs",
+        "temperature",
+        "top_k",
+        "top_p"
+      ],
+      "tools_advertised": false,
+      "tool_choice_advertised": false,
+      "structured_outputs_advertised": true
+    },
+    {
+      "id": "tencent/hy-mt2-1.8b",
+      "found": true,
+      "supported_parameters": [
+        "max_completion_tokens",
+        "max_tokens",
+        "stop",
+        "temperature"
+      ],
+      "tools_advertised": false,
+      "tool_choice_advertised": false,
+      "structured_outputs_advertised": false
+    }
+  ]
+}

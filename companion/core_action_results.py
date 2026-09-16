@@ -201,10 +201,12 @@ def build_action_exception_syntax_error(
             error_type="edit_find_mismatch",
             raw_snippet=str(error)[:300],
             correction_hint=(
-                "The find snippet did not match the file content. "
+                "The SEARCH block did not match the file content. "
                 "The file may have changed since read_file was called. "
-                "Re-run read_file, copy the target lines EXACTLY as they appear "
-                "(without line-number prefixes) into find:, then retry edit_file."
+                "Next: run ::read_file on the file, copy the target lines EXACTLY "
+                "as they appear (without line-number prefixes) into a new SEARCH "
+                "block, then retry ::edit_file. "
+                "Do not resend the identical SEARCH text unchanged."
             ),
         )
 

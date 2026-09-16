@@ -1,0 +1,22 @@
+id: ambiguous-output
+task: "sales.csv の全商品の売上データを商品ごとに集計し、合計金額をJSON形式で出力してください。出力形式はトップレベルに商品名をキー、合計金額を値とします（例: {\"apple\": 300}）。summary 等の階層で包まないでください。出力先のファイル名が不明な場合は、推測で進めず、必ず先に duck_call で確認し、回答を待ってから作業してください。"
+fixture: fixtures/ambiguous_ws
+max_loops: 15
+timeout_seconds: 420
+expects_question: true
+user_script:
+  - "summary.json に出力してください。"
+script_after_question: true
+checks:
+  - type: file_exists
+    path: summary.json
+  - type: file_contains
+    path: summary.json
+    text: "apple"
+  - type: file_contains
+    path: summary.json
+    text: "banana"
+  - type: file_contains
+    path: summary.json
+    text: "cherry"
+verify_command: "{python} -c \"import json; d=json.load(open('summary.json')); assert d.get('apple')==300 and d.get('banana')==150 and d.get('cherry')==500 and 'summary' not in d and 'report' not in d and 'products' not in d and 'sales_report' not in d, d\""

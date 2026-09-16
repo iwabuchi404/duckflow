@@ -1,6 +1,11 @@
 llm:
   provider: openrouter
   available_models:
+  - name: MiniMax M2.5 (evaluation reference)
+    provider: openrouter
+    model: minimax/minimax-m2.5
+    description: 比較評価用。既存モデルと同じ出力予算で使用
+    max_output_tokens: 24576
   - name: GPT-4o (OpenAI)
     provider: openai
     model: gpt-4o

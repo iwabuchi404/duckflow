@@ -64,10 +64,37 @@ _PARSE_ERROR_HINTS = {
         "not an action). To act, write `::tool_name @target` on its own "
         "line — for example `::read_file @test_app.py`."
     ),
+    "api_error": (
+        "The previous turn hit an API/transport error, not a format problem. "
+        "Retry the same actions without changing the output format."
+    ),
+    "tool_call_parse_error": (
+        "A previous tool call carried arguments that were not valid JSON. "
+        "Resend the call with properly quoted JSON arguments."
+    ),
 }
 
 
-def record_parse_error_if_any(state, action_list: ActionList) -> None:
+_NATIVE_PARSE_ERROR_HINTS = {
+    "empty_actions": (
+        "The previous output produced no tool call and no message. "
+        "Every turn must end with either another tool call or a final "
+        "plain-text message."
+    ),
+    "api_error": (
+        "The previous turn hit an API/transport error, not a format problem. "
+        "Retry the same actions without changing the output format."
+    ),
+    "tool_call_parse_error": (
+        "A previous tool call carried arguments that were not valid JSON. "
+        "Resend the call with properly quoted JSON arguments."
+    ),
+}
+
+
+def record_parse_error_if_any(
+    state, action_list: ActionList, protocol: str = "symops"
+) -> None:
     """Record a Sym-Ops parse failure so the next turn's Correction Guide
     tells the model what went wrong, instead of silently ending the turn.
 
@@ -78,14 +105,23 @@ def record_parse_error_if_any(state, action_list: ActionList) -> None:
     Args:
         state: AgentState to append the syntax error to.
         action_list: The ActionList just received from LLMClient.chat().
+        protocol: "symops" or "native". Native error types use
+            protocol-neutral hints.
     """
     if not action_list.parse_error_type:
         return
 
-    hint = _PARSE_ERROR_HINTS.get(
-        action_list.parse_error_type,
-        "The previous output was not usable. Follow the Sym-Ops format exactly.",
-    )
+    if protocol == "native":
+        hint = _NATIVE_PARSE_ERROR_HINTS.get(
+            action_list.parse_error_type,
+            "The previous output was not usable. "
+            "Re-read the tool definitions and retry.",
+        )
+    else:
+        hint = _PARSE_ERROR_HINTS.get(
+            action_list.parse_error_type,
+            "The previous output was not usable. Follow the Sym-Ops format exactly.",
+        )
     state.last_syntax_errors.append(
         SyntaxErrorInfo(
             error_type=action_list.parse_error_type,
@@ -95,16 +131,25 @@ def record_parse_error_if_any(state, action_list: ActionList) -> None:
     )
 
 
-def build_intervention_prompt(intervention, summary: str) -> str:
+def build_intervention_prompt(
+    intervention, summary: str, protocol: str = "symops"
+) -> str:
     """Build the prompt sent to LLM during a Pacemaker intervention.
 
     Args:
         intervention: Intervention object from Pacemaker.check_health().
         summary: Execution history summary from Pacemaker.
+        protocol: "symops" or "native"; controls how the model is told to
+            return its message (native has no ::response action).
 
     Returns:
         Prompt string for the LLM.
     """
+    reply_line = (
+        "返答はプレーンテキストのメッセージとして出力してください。"
+        if protocol == "native"
+        else "::response で返答してください。"
+    )
     return (
         "## Pacemaker Intervention\n"
         f"Type: {intervention.type} | Severity: {intervention.severity}\n"
@@ -115,7 +160,7 @@ def build_intervention_prompt(intervention, summary: str) -> str:
         "1. 何をしようとしていたか\n"
         "2. 何が問題だったか\n"
         "3. 続行/中止/方針変更の選択肢を提示\n"
-        "::response で返答してください。"
+        f"{reply_line}"
     )
 
 

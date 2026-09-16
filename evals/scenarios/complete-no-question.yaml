@@ -1,12 +1,9 @@
-id: ambiguous-spontaneous
-task: "sales.csv の売上データのうち、必要な商品をまとめて report.json に出力してください。report.json のトップレベルに商品名をキー、合計金額を値とする形式で出力してください（例: {\"apple\": 300}）。summary 等の階層で包まないでください。"
+id: complete-no-question
+task: "sales.csv の売上データのうち、appleとcherryの2商品だけを集計し、report.json に出力してください（bananaは不要です）。report.json のトップレベルに商品名をキー、合計金額を値とする形式で出力してください（例: {\"apple\": 300}）。summary 等の階層で包まないでください。"
 fixture: fixtures/ambiguous_ws
 max_loops: 15
 timeout_seconds: 420
-expects_question: true
-user_script:
-  - "appleとcherryの2商品だけでお願いします。bananaは不要です。"
-script_after_question: true
+expects_question: false
 checks:
   - type: file_exists
     path: report.json

@@ -119,6 +119,10 @@ def _make_input_provider(
 
     queue = [task]
     script = list(user_script or [])
+    # Copy per provider: pop() below must not drain the scenario dict's
+    # shared list, or runs after the first would silently get no
+    # follow-up inputs.
+    follow_ups = list(follow_ups or [])
 
     async def _next_input() -> str:
         """Return the next scripted input, with plan-aware follow-ups."""
@@ -339,6 +343,19 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
     )
     meta["scenario_id"] = scenario.get("id")
     meta["scenario_sha"] = hashlib.sha256(scenario_text.encode("utf-8")).hexdigest()[:12]
+    # Snapshot the resolved scenario so each run's exact conditions
+    # (follow-ups, checks, verify command) are recoverable without
+    # consulting the current YAML, which may have drifted since the run.
+    meta["scenario"] = json.loads(scenario_text)
+    flag = scenario.get("expects_question")
+    meta["expects_question"] = flag if isinstance(flag, bool) else None
+    import os as _os
+
+    from companion.base.native_protocol import resolve_protocol
+
+    meta["tool_protocol"] = (
+        _os.getenv("DUCKFLOW_TOOL_PROTOCOL") or resolve_protocol()
+    )
     return meta
 
 
@@ -384,7 +401,12 @@ async def run_scenario(
 
     fixture = Path(scenario["_path"]).parent / scenario.get("fixture", "")
     if fixture.is_dir():
-        shutil.copytree(fixture, workspace, dirs_exist_ok=True)
+        shutil.copytree(
+            fixture,
+            workspace,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
 
     agent_ref: dict[str, Any] = {}
     _patch_ui(
@@ -617,6 +639,13 @@ async def main() -> None:
         "(sets DUCKFLOW_FEW_SHOT_FRAMING; default keeps current behavior)",
     )
     parser.add_argument(
+        "--tool-protocol",
+        choices=["symops", "native"],
+        default=None,
+        help="Tool protocol experiment switch "
+        "(sets DUCKFLOW_TOOL_PROTOCOL; default keeps current behavior)",
+    )
+    parser.add_argument(
         "--results-dir",
         default=str(Path(__file__).resolve().parent / "results"),
     )
@@ -648,6 +677,10 @@ async def main() -> None:
         import os
 
         os.environ["DUCKFLOW_FEW_SHOT_FRAMING"] = args.few_shot
+    if args.tool_protocol:
+        import os
+
+        os.environ["DUCKFLOW_TOOL_PROTOCOL"] = args.tool_protocol
     results: list[dict[str, Any]] = []
     for scenario in scenarios:
         for run_index in range(1, args.runs + 1):

@@ -1,0 +1,22 @@
+id: ambiguous-unit
+task: "sales.csv の全商品の売上データを商品ごとに集計して report.json に出力してください。report.json のトップレベルに商品名をキー、集計値を値とする形式で出力してください（例: {\"商品名\": 集計値}）。summary 等の階層で包まないでください。合計金額で集計するか、件数（行数）で集計するか不明な場合は、推測で進めず、必ず先に duck_call で確認し、回答を待ってから作業してください。"
+fixture: fixtures/ambiguous_ws
+max_loops: 15
+timeout_seconds: 420
+expects_question: true
+user_script:
+  - "合計金額でお願いします。"
+script_after_question: true
+checks:
+  - type: file_exists
+    path: report.json
+  - type: file_contains
+    path: report.json
+    text: "apple"
+  - type: file_contains
+    path: report.json
+    text: "banana"
+  - type: file_contains
+    path: report.json
+    text: "cherry"
+verify_command: "{python} -c \"import json; d=json.load(open('report.json')); assert d.get('apple')==300 and d.get('banana')==150 and d.get('cherry')==500 and 'summary' not in d and 'report' not in d and 'products' not in d and 'sales_report' not in d, d\""

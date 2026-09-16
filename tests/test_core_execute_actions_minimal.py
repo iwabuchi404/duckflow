@@ -16,6 +16,40 @@ class DummyLLM:
     }
 
 
+class JournalLLM(DummyLLM):
+    """LLM stub that captures native execution-journal events."""
+
+    def __init__(self) -> None:
+        """Initialize an empty captured journal."""
+        self.journal: dict = {}
+
+    def record_native_event(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        status: str,
+        executed: bool,
+        body,
+    ) -> None:
+        """Capture journal events keyed by tool_call_id."""
+        self.journal[tool_call_id] = {
+            "tool_name": tool_name,
+            "status": status,
+            "executed": executed,
+            "body": body,
+        }
+
+
+def _native_action(name: str, call_id: str, **params) -> Action:
+    """Build an Action carrying native tool-call metadata."""
+    return Action(
+        name=name,
+        parameters=params,
+        tool_call_id=call_id,
+        native_turn="e:1",
+    )
+
+
 def _agent() -> DuckAgent:
     """Create a DuckAgent with an inert LLM client."""
     return DuckAgent(llm_client=DummyLLM())
@@ -322,3 +356,111 @@ async def test_execute_actions_orders_summary_before_results() -> None:
     assert "pong-1" in first_result["content"]
     assert second_result["role"] == "user"
     assert "pong-2" in second_result["content"]
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_journals_filtered_native_call() -> None:
+    """Unknown-tool filtering must still record the call in the journal.
+
+    An unrecorded tool_call would reach the next API request as an
+    orphaned tool_call (no tool result), which providers reject.
+    """
+    agent = DuckAgent(llm_client=JournalLLM())
+    action_list = ActionList(
+        reasoning="hallucinated tool",
+        actions=[_native_action("does_not_exist", "c1")],
+    )
+
+    await agent.execute_actions(action_list)
+
+    assert agent.llm.journal["c1"]["status"] == "filtered"
+    # The turn still needs an assistant anchor so its results reach the
+    # rebuilt native history.
+    summary = next(
+        m for m in agent.state.conversation_history if m["role"] == "assistant"
+    )
+    assert summary["_native_turn"] == "e:1"
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_journals_fail_fast_skipped() -> None:
+    """Actions aborted by fail-fast are journaled as skipped."""
+    agent = DuckAgent(llm_client=JournalLLM())
+
+    def fail_one() -> str:
+        raise RuntimeError("run ::read_file @x first")
+
+    def fail_two() -> str:
+        raise RuntimeError("second failure")
+
+    def should_not_run() -> str:
+        return "unexpected"
+
+    agent.register_tool("fail_one", fail_one)
+    agent.register_tool("fail_two", fail_two)
+    agent.register_tool("should_not_run", should_not_run)
+
+    action_list = ActionList(
+        reasoning="trigger fail-fast",
+        actions=[
+            _native_action("fail_one", "c1"),
+            _native_action("fail_two", "c2"),
+            _native_action("should_not_run", "c3"),
+        ],
+    )
+
+    await agent.execute_actions(action_list)
+
+    journal = agent.llm.journal
+    assert journal["c1"]["status"] == "error"
+    assert journal["c2"]["status"] == "error"
+    assert journal["c3"]["status"] == "skipped"
+    assert journal["c3"]["executed"] is False
+    # Journal bodies are de-Sym-Ops'd for native consumption.
+    assert "::" not in journal["c1"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_journals_dropped_over_limit() -> None:
+    """Calls dropped by the per-turn limit are journaled, not orphaned."""
+    agent = DuckAgent(llm_client=JournalLLM())
+
+    def ping() -> str:
+        return "pong"
+
+    agent.register_tool("ping", ping)
+    action_list = ActionList(
+        reasoning="too many calls",
+        actions=[
+            _native_action("ping", f"c{i}") for i in range(8)
+        ],
+    )
+
+    await agent.execute_actions(action_list)
+
+    journal = agent.llm.journal
+    assert journal["c5"]["status"] == "ok"
+    assert journal["c6"]["status"] == "dropped"
+    assert journal["c7"]["status"] == "dropped"
+
+
+@pytest.mark.asyncio
+async def test_execute_actions_stamps_native_turn_on_summary() -> None:
+    """The assistant summary carries the native turn id for pairing."""
+    agent = DuckAgent(llm_client=JournalLLM())
+
+    def ping() -> str:
+        return "pong"
+
+    agent.register_tool("ping", ping)
+    action_list = ActionList(
+        reasoning="one call",
+        actions=[_native_action("ping", "c1")],
+    )
+
+    await agent.execute_actions(action_list)
+
+    summary = next(
+        m for m in agent.state.conversation_history if m["role"] == "assistant"
+    )
+    assert summary["_native_turn"] == "e:1"

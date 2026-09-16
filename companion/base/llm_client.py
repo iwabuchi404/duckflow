@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import uuid
 import logging
 from typing import List, Dict, Any, Optional, Union, Tuple
 from openai import OpenAI, AsyncOpenAI, APIError
@@ -280,6 +281,21 @@ class LLMClient:
             "retry_successes": 0,
         }
 
+        # Verbatim assistant messages of the current native-protocol run,
+        # used to rebuild tool_calls history each turn. Reset per user task.
+        self._native_assistant_log: list = []
+        # Native execution journal keyed by tool_call_id:
+        # {id: {turn, tool_name, status, executed, body}}.
+        self._native_journal: dict = {}
+        # Monotonic per client instance (NOT reset per task): combined with
+        # the per-process epoch it forms the turn id stamped on log entries
+        # and Action.native_turn, so history summaries pair by identity,
+        # never by position. Ids can therefore never collide with restored
+        # or previous-task summaries.
+        self._native_turn: int = 0
+        self._native_epoch: str = uuid.uuid4().hex[:8]
+        self.last_raw_response: str = ""
+
         # get_context_length() が値をどこから得たか（"api"/"fallback"/"default"）。
         # "default" は未知モデルへの推測値であり、呼び出し側がユーザーに警告するために使う。
         self.context_length_source: str = "unknown"
@@ -458,6 +474,42 @@ class LLMClient:
             logger.error(f"❌ Connection test failed: {e}")
             return False
 
+    def reset_native_log(self) -> None:
+        """Clear native verbatim log and execution journal for a new task.
+
+        _native_turn intentionally stays monotonic: history summaries carry
+        "{epoch}:{turn}" ids, and resetting the counter would let a
+        previous task's summaries consume this task's log entries.
+        """
+        self._native_assistant_log = []
+        self._native_journal = {}
+
+    def record_native_event(
+        self,
+        tool_call_id: str,
+        tool_name: str,
+        status: str,
+        executed: bool,
+        body: Any,
+    ) -> None:
+        """Record a native tool-call outcome for ID-based history rebuild.
+
+        Args:
+            tool_call_id: API tool_call ID from the assistant message.
+            tool_name: Executed tool name.
+            status: Outcome status (ok/error/denied/blocked/filtered/skipped).
+            executed: Whether the tool implementation ran.
+            body: Result body text (capped for memory safety).
+        """
+        text = body if isinstance(body, str) else str(body)
+        self._native_journal[tool_call_id] = {
+            "turn": self._native_turn,
+            "tool_name": tool_name,
+            "status": status,
+            "executed": executed,
+            "body": text[:12000],
+        }
+
     def _refresh_tier_profile(self) -> None:
         """現在の model/provider から TierProfile を再解決して保持する。
 
@@ -617,6 +669,275 @@ class LLMClient:
                 )
                 await _asyncio.sleep(delay)
 
+    def _build_request_kwargs(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+    ) -> Dict[str, Any]:
+        """
+        Build shared chat-completion kwargs from config (both protocols).
+
+        Extracted verbatim from chat() so Sym-Ops and native requests use
+        identical tuning parameters.
+
+        Args:
+            messages: Message list for the API call.
+            temperature: Explicit temperature or None for config default.
+            max_tokens: Explicit limit or None for config/model default.
+
+        Returns:
+            Kwargs dict for _call_with_retry().
+        """
+        extra_headers = {}
+        if self.provider == "openrouter":
+            extra_headers["HTTP-Referer"] = "https://github.com/duckflow/duckflow"
+            extra_headers["X-Title"] = "Duckflow Agent"
+
+        if temperature is None:
+            temperature = config.get("llm.temperature", 0.7)
+
+        # Pull additional tuning parameters from config
+        top_p = config.get("llm.top_p", 0.9)
+        presence_penalty = config.get("llm.presence_penalty", 0.1)
+
+        # Ensure max_tokens is pulled reliably, default to 8192 for long code generation
+        # Priority: explicit arg > model-specific config > llm.max_output_tokens > default
+        max_tokens = (
+            max_tokens
+            or _get_model_max_tokens(config, self.model, self.provider)
+            or config.get("llm.max_output_tokens")
+            or config.get("max_output_tokens", 8192)
+        )
+
+        # Build reasoning parameter for OpenRouter reasoning models
+        # (Qwen3, DeepSeek-R1, Kimi K2, GLM, etc.) to prevent infinite
+        # reasoning loops by capping reasoning tokens at the API level.
+        # NOTE: effort and max_tokens are mutually exclusive per OpenRouter API.
+        reasoning_param = None
+        reasoning_cfg = config.get("llm.reasoning", {})
+        if reasoning_cfg and self.provider == "openrouter":
+            if reasoning_cfg.get("enabled", False):
+                effort = reasoning_cfg.get("effort")
+                rmax = reasoning_cfg.get("max_tokens")
+                if effort and rmax:
+                    logger.warning(
+                        f"reasoning.effort='{effort}' and reasoning.max_tokens={rmax} "
+                        f"are mutually exclusive. Using max_tokens (ignoring effort)."
+                    )
+                    reasoning_param = {"max_tokens": int(rmax)}
+                elif effort:
+                    reasoning_param = {"effort": effort}
+                elif rmax:
+                    reasoning_param = {"max_tokens": int(rmax)}
+                else:
+                    reasoning_param = {"enabled": True}
+            else:
+                # Explicitly disable reasoning for thinking models
+                # that have it ON by default (Qwen3, DeepSeek-R1, etc.)
+                reasoning_param = {"enabled": False}
+
+            if reasoning_param:
+                logger.info(f"🧠 Reasoning control: {reasoning_param}")
+
+        # OpenAI SDKを使用してリクエスト送信 (with retry)
+        request_kwargs = dict(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            top_p=top_p,
+            presence_penalty=presence_penalty,
+            max_tokens=max_tokens,
+            extra_headers=extra_headers,
+        )
+        if reasoning_param is not None:
+            request_kwargs["extra_body"] = {"reasoning": reasoning_param}
+        return request_kwargs
+
+    def _record_usage(self, response: Any) -> None:
+        """
+        Accumulate token usage statistics from a response.
+
+        Args:
+            response: Chat completion response with optional usage.
+        """
+        if response.usage:
+            self.usage_stats["input_tokens"] += response.usage.prompt_tokens
+            self.usage_stats["output_tokens"] += response.usage.completion_tokens
+            self.usage_stats["total_tokens"] += response.usage.total_tokens
+
+    async def _chat_native(
+        self,
+        processed_messages: List[Dict[str, Any]],
+        native_tools: List[Dict[str, Any]],
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ) -> ActionList:
+        """
+        Main-agent turn via API-native tool calling.
+
+        Sends rebuilt native messages with tool definitions, converts
+        tool_calls into the internal ActionList container, and records
+        the verbatim assistant message for next-turn history rebuild.
+        Plain text without calls becomes a response action, except a
+        trailing question which becomes an internal duck_call action
+        (never sent as an API tool). Empty output sets parse_error_type
+        for the Correction Guide path. API failures return no actions
+        with parse_error_type="api_error" so they never look completed.
+
+        Args:
+            processed_messages: Text-form message list.
+            native_tools: Tool definitions for the current mode.
+            temperature: Explicit temperature or None for config default.
+            max_tokens: Explicit limit or None for config/model default.
+
+        Returns:
+            ActionList for execute_actions().
+        """
+        from companion.base.native_protocol import (
+            build_native_messages,
+            native_text_to_action,
+            tool_calls_to_actions,
+        )
+
+        MAX_EMPTY_RETRIES = 2
+        self._native_turn += 1
+        turn_id = f"{self._native_epoch}:{self._native_turn}"
+        message = None
+        try:
+            logger.debug(
+                f"Sending native request to {self.model} via {self.base_url or 'default'}"
+            )
+            for attempt in range(1, MAX_EMPTY_RETRIES + 2):
+                native_messages = build_native_messages(
+                    processed_messages,
+                    self._native_assistant_log,
+                    self._native_journal,
+                )
+                request_kwargs = self._build_request_kwargs(
+                    native_messages, temperature, max_tokens
+                )
+                request_kwargs["tools"] = native_tools
+                request_kwargs["tool_choice"] = "auto"
+                response = await self._call_with_retry(**request_kwargs)
+                self._record_usage(response)
+                message = response.choices[0].message
+                content = message.content or ""
+                calls = tool_calls_to_actions(message)
+                if content.strip() or calls:
+                    break
+                logger.warning(
+                    f"Empty native response (attempt {attempt}/{MAX_EMPTY_RETRIES + 1})."
+                )
+                if attempt <= MAX_EMPTY_RETRIES:
+                    import asyncio as _asyncio
+
+                    await _asyncio.sleep(1.0)
+                    temperature = min((temperature or 0.7) + 0.1, 1.0)
+            else:
+                message = None
+        except APIError as e:
+            logger.error(f"LLM API Error: {e}")
+            return ActionList(
+                reasoning="Native API error; not a completion.",
+                actions=[],
+                parse_error_type="api_error",
+                parse_error_detail=f"{type(e).__name__}: {e}",
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error in LLMClient: {e}")
+            return ActionList(
+                reasoning="Native call failed; not a completion.",
+                actions=[],
+                parse_error_type="api_error",
+                parse_error_detail=f"{type(e).__name__}: {e}",
+            )
+
+        if message is None:
+            return ActionList(
+                reasoning="Empty native response after retries.",
+                actions=[],
+                parse_error_type="empty_actions",
+                parse_error_detail="No content and no tool calls.",
+            )
+
+        content = message.content or ""
+        raw_calls = getattr(message, "tool_calls", None) or []
+        entry: Dict[str, Any] = {
+            "role": "assistant",
+            "content": content,
+            "_turn": turn_id,
+        }
+        if raw_calls:
+            entry["tool_calls"] = [
+                {
+                    "id": getattr(call, "id", None),
+                    "type": "function",
+                    "function": {
+                        "name": getattr(getattr(call, "function", None), "name", None),
+                        "arguments": getattr(
+                            getattr(call, "function", None), "arguments", ""
+                        )
+                        or "",
+                    },
+                }
+                for call in raw_calls
+            ]
+        self._native_assistant_log.append(entry)
+
+        calls = tool_calls_to_actions(message)
+        self.last_raw_response = content + (
+            f"\n[tool_calls: {json.dumps(calls, ensure_ascii=False)}]" if calls else ""
+        )
+        # Defensive: the retry loop above only exits with non-empty
+        # content/calls (or message=None, handled earlier), so this is
+        # unreachable unless that invariant changes.
+        if not content.strip() and not calls:
+            return ActionList(
+                reasoning="Empty native response.",
+                actions=[],
+                parse_error_type="empty_actions",
+                parse_error_detail="No content and no tool calls.",
+            )
+        parse_error_type = None
+        parse_error_detail = ""
+        for call in raw_calls:
+            raw_args = getattr(getattr(call, "function", None), "arguments", "") or ""
+            try:
+                parsed = json.loads(raw_args) if raw_args else {}
+                if not isinstance(parsed, dict):
+                    raise ValueError("arguments are not an object")
+            except (ValueError, TypeError):
+                parse_error_type = "tool_call_parse_error"
+                parse_error_detail = f"Unparseable arguments: {raw_args[:200]}"
+                break
+        actions = [
+            Action(
+                name=c["name"],
+                parameters=c["parameters"],
+                thought=c["thought"],
+                tool_call_id=c.get("call_id"),
+                native_turn=turn_id,
+            )
+            for c in calls
+        ]
+        if not actions and content.strip():
+            terminal = native_text_to_action(content.strip())
+            actions = [
+                Action(
+                    name=terminal["name"],
+                    parameters=terminal["parameters"],
+                    thought=terminal["thought"],
+                    native_turn=turn_id,
+                )
+            ]
+        return ActionList(
+            reasoning=content.strip()[:500],
+            actions=actions,
+            parse_error_type=parse_error_type,
+            parse_error_detail=parse_error_detail,
+        )
+
     async def chat(
         self,
         messages: List[Dict[str, str]],
@@ -624,6 +945,7 @@ class LLMClient:
         temperature: Optional[float] = None,
         raw: bool = False,
         max_tokens: Optional[int] = None,
+        native_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[Dict[str, Any], ActionList, str]:
         """
         Send messages to the LLM and parse the response.
@@ -633,6 +955,10 @@ class LLMClient:
         is parsed as Sym-Ops and converted into ActionList. Other response
         models are treated as structured JSON/Pydantic responses for auxiliary
         calls.
+
+        When DUCKFLOW_TOOL_PROTOCOL=native and native_tools are provided,
+        main-agent calls take the native tool-calling path instead
+        (docs/tool_protocol_swap_design.md).
 
         Supports prompt caching for OpenRouter and Anthropic.
         """
@@ -650,11 +976,20 @@ class LLMClient:
                 del m["cache_control"]
             processed_messages.append(m)
 
-        # 2. 追加のヘッダー（OpenRouter用）
-        extra_headers = {}
-        if self.provider == "openrouter":
-            extra_headers["HTTP-Referer"] = "https://github.com/duckflow/duckflow"
-            extra_headers["X-Title"] = "Duckflow Agent"
+        # 2. Native-protocol branch (experiment switch, main-agent path only)
+        from companion.base.native_protocol import resolve_protocol
+
+        if (
+            resolve_protocol() == "native"
+            and native_tools
+            and (response_model is None or response_model is ActionList)
+        ):
+            return await self._chat_native(
+                processed_messages,
+                native_tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
 
         MAX_EMPTY_RETRIES = 2
 
@@ -663,86 +998,25 @@ class LLMClient:
                 f"Sending request to {self.model} via {self.base_url or 'default'}"
             )
 
-            if temperature is None:
-                temperature = config.get("llm.temperature", 0.7)
-
-            # Pull additional tuning parameters from config
-            top_p = config.get("llm.top_p", 0.9)
-            presence_penalty = config.get("llm.presence_penalty", 0.1)
-
-            # Ensure max_tokens is pulled reliably, default to 8192 for long code generation
-            # Priority: explicit arg > model-specific config > llm.max_output_tokens > default
-            max_tokens = (
-                max_tokens
-                or _get_model_max_tokens(config, self.model, self.provider)
-                or config.get("llm.max_output_tokens")
-                or config.get("max_output_tokens", 8192)
+            request_kwargs = self._build_request_kwargs(
+                processed_messages, temperature, max_tokens
             )
-
-            # Build reasoning parameter for OpenRouter reasoning models
-            # (Qwen3, DeepSeek-R1, Kimi K2, GLM, etc.) to prevent infinite
-            # reasoning loops by capping reasoning tokens at the API level.
-            # NOTE: effort and max_tokens are mutually exclusive per OpenRouter API.
-            reasoning_param = None
-            reasoning_cfg = config.get("llm.reasoning", {})
-            if reasoning_cfg and self.provider == "openrouter":
-                if reasoning_cfg.get("enabled", False):
-                    effort = reasoning_cfg.get("effort")
-                    rmax = reasoning_cfg.get("max_tokens")
-                    if effort and rmax:
-                        logger.warning(
-                            f"reasoning.effort='{effort}' and reasoning.max_tokens={rmax} "
-                            f"are mutually exclusive. Using max_tokens (ignoring effort)."
-                        )
-                        reasoning_param = {"max_tokens": int(rmax)}
-                    elif effort:
-                        reasoning_param = {"effort": effort}
-                    elif rmax:
-                        reasoning_param = {"max_tokens": int(rmax)}
-                    else:
-                        reasoning_param = {"enabled": True}
-                else:
-                    # Explicitly disable reasoning for thinking models
-                    # that have it ON by default (Qwen3, DeepSeek-R1, etc.)
-                    reasoning_param = {"enabled": False}
-
-                if reasoning_param:
-                    logger.info(
-                        f"🧠 Reasoning control: {reasoning_param}"
-                    )
 
             content = None
             for attempt in range(1, MAX_EMPTY_RETRIES + 2):
                 # OpenAI SDKを使用してリクエスト送信 (with retry)
-                request_kwargs = dict(
-                    model=self.model,
-                    messages=processed_messages,
-                    temperature=temperature,
-                    top_p=top_p,
-                    presence_penalty=presence_penalty,
-                    max_tokens=max_tokens,
-                    extra_headers=extra_headers,
-                )
-                if reasoning_param is not None:
-                    request_kwargs["extra_body"] = {"reasoning": reasoning_param}
-
                 response = await self._call_with_retry(
                     **request_kwargs
                 )
 
-                # Update usage stats
+                self._record_usage(response)
+
+                # キャッシュヒット情報をログに記録（OpenRouter/Anthropic拡張）
+                if response.usage and hasattr(response.usage, "extra_fields"):
+                    # OpenRouter might put cache info here
+                    pass
+
                 if response.usage:
-                    self.usage_stats["input_tokens"] += response.usage.prompt_tokens
-                    self.usage_stats[
-                        "output_tokens"
-                    ] += response.usage.completion_tokens
-                    self.usage_stats["total_tokens"] += response.usage.total_tokens
-
-                    # キャッシュヒット情報をログに記録（OpenRouter/Anthropic拡張）
-                    if hasattr(response.usage, "extra_fields"):
-                        # OpenRouter might put cache info here
-                        pass
-
                     # Log caching info if available in response
                     usage_dict = response.usage.model_dump()
                     cache_read = usage_dict.get("prompt_tokens_details", {}).get(
