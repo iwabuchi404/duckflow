@@ -630,3 +630,8 @@
 - Nativeはedit-multi-hunkで編集本文に不正な `%%%` 区切りを送り、エラー後にSEARCH/REPLACEで回復。fix-typoも短いfind指定の失敗後に全文行指定で回復。外側のtool callingではなく編集引数の問題。
 - Nativeのedit-multi-hunkは完了後の追加質問がduck_call扱いになり待機終了。再実行FizzBuzzの完了文に `<task_complete>` が残った。成果物合格と終了品質は別。
 - 製品コード・設定変更なし。並列評価はresults-dirを分けても一時workspaceが衝突し得るため、修正までは同一シナリオを逐次実行する。
+
+### 2026-09-19: E-3 run 手順の歪み除去
+- `evals/runner.py`: `_ensure_clean_env()` を追加。fixture の `requirements.txt` に宣言されたパッケージを各 run 前に `pip show` / `pip uninstall -y` で除去。recover-quad の `tabulate` が前 run でインストールされた状態を残し、r2/r3 が依存不足条件を bypass するのを防ぐ。
+- `evals/scenarios/gauntlet/needle-wide.yaml`: `timeout_seconds` を 600 → 900 に引上げ。DS needle r2 が 600 秒 wall timeout で打ち切られていたため、探索迷走時の余裕を確保。
+- 検証: `uv run python -X utf8 -m pytest tests/test_gauntlet_scenarios.py tests/test_eval_analysis.py tests/test_eval_follow_up.py tests/test_eval_stages.py -q` → 29 passed / 1 warning。

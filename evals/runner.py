@@ -200,6 +200,47 @@ def _patch_ui(
     ui_instance.request_confirmation = lambda warning: True
 
 
+def _ensure_clean_env(fixture: Path | None) -> None:
+    """Uninstall packages declared in fixture/requirements.txt before each run.
+
+    Scenarios that rely on a missing dependency being installed during the
+    run (e.g. recover-quad) lose their failure condition if a previous run
+    left the package installed in the shared Python environment. This reset
+    keeps every run independent.
+
+    Args:
+        fixture: Fixture directory for the scenario.
+    """
+    if not fixture:
+        return
+    req_path = fixture / "requirements.txt"
+    if not req_path.is_file():
+        return
+    packages = [
+        line.strip()
+        for line in req_path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    for pkg in packages:
+        pkg_name = pkg.split("=")[0].split(">")[0].split("<")[0].strip()
+        if not pkg_name:
+            continue
+        show = subprocess.run(
+            [sys.executable, "-m", "pip", "show", pkg_name],
+            capture_output=True,
+            text=True,
+        )
+        if show.returncode != 0:
+            continue
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y", pkg_name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            logger.warning(f"Failed to uninstall {pkg_name}: {result.stderr}")
+
+
 def _run_checks(
     checks: list[dict[str, Any]], workspace: Path, fixture: Path | None = None
 ) -> list[dict[str, Any]]:
@@ -412,6 +453,11 @@ async def run_scenario(
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
         )
+
+    # Reset any dependency that a previous run may have installed, so
+    # scenarios that require the agent to discover and install a missing
+    # package start from the intended failure state every time.
+    _ensure_clean_env(fixture)
 
     agent_ref: dict[str, Any] = {}
     _patch_ui(
