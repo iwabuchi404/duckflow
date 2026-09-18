@@ -21,15 +21,18 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import yaml
 
+logger = logging.getLogger(__name__)
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
@@ -63,9 +66,7 @@ def _load_yaml_no_duplicates(path: Path) -> dict[str, Any]:
             if key in seen:
                 raise ValueError(f"Duplicate key {key!r} in {path}")
             seen.add(key)
-        return yaml.constructor.SafeConstructor.construct_mapping(
-            loader, node, deep
-        )
+        return yaml.constructor.SafeConstructor.construct_mapping(loader, node, deep)
 
     _UniqueLoader.add_constructor(
         yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_mapping
@@ -140,8 +141,7 @@ def _make_input_provider(
                 from companion.state.agent_state import AgentPhase
 
                 awaiting = (
-                    agent is not None
-                    and agent.state.phase == AgentPhase.AWAITING_USER
+                    agent is not None and agent.state.phase == AgentPhase.AWAITING_USER
                 )
                 if not awaiting and agent is not None:
                     recent = [
@@ -264,7 +264,9 @@ def _run_checks(
         kind = check.get("type")
         path = workspace / check.get("path", "")
         text = check.get("text", "")
-        content = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        content = (
+            path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        )
 
         if kind == "file_exists":
             passed = path.exists()
@@ -384,7 +386,9 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
         sort_keys=True,
     )
     meta["scenario_id"] = scenario.get("id")
-    meta["scenario_sha"] = hashlib.sha256(scenario_text.encode("utf-8")).hexdigest()[:12]
+    meta["scenario_sha"] = hashlib.sha256(scenario_text.encode("utf-8")).hexdigest()[
+        :12
+    ]
     # Snapshot the resolved scenario so each run's exact conditions
     # (follow-ups, checks, verify command) are recoverable without
     # consulting the current YAML, which may have drifted since the run.
@@ -395,9 +399,7 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
 
     from companion.base.native_protocol import resolve_protocol
 
-    meta["tool_protocol"] = (
-        _os.getenv("DUCKFLOW_TOOL_PROTOCOL") or resolve_protocol()
-    )
+    meta["tool_protocol"] = _os.getenv("DUCKFLOW_TOOL_PROTOCOL") or resolve_protocol()
     return meta
 
 
@@ -484,9 +486,7 @@ async def run_scenario(
     if provider == "openrouter":
         api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
-        raise SystemExit(
-            f"API key for provider '{provider}' is not set. Check .env"
-        )
+        raise SystemExit(f"API key for provider '{provider}' is not set. Check .env")
 
     llm = LLMClient(provider=provider, model=model)
     agent = DuckAgent(llm_client=llm, session_manager=None)
@@ -514,7 +514,9 @@ async def run_scenario(
     llm_calls: list[dict[str, Any]] = []
     _original_chat = llm.chat
 
-    async def _chat_and_record(messages: Any, response_model: Any = None, **kw: Any) -> Any:
+    async def _chat_and_record(
+        messages: Any, response_model: Any = None, **kw: Any
+    ) -> Any:
         """Call the original chat and archive the raw response or error."""
         try:
             result = await _original_chat(messages, response_model=response_model, **kw)
@@ -547,7 +549,9 @@ async def run_scenario(
         llm_calls.append(
             {
                 "messages": messages,
-                "response_model": getattr(response_model, "__name__", str(response_model)),
+                "response_model": getattr(
+                    response_model, "__name__", str(response_model)
+                ),
                 "settings": settings,
                 "input_sha": _hashlib.sha256(dumped.encode("utf-8")).hexdigest()[:16],
             }
@@ -612,9 +616,7 @@ async def run_scenario(
         "status": status,
         "passed": passed,
         "duration_seconds": round(duration, 1),
-        "loops_used": max(
-            _last_loop_count["value"], agent.pacemaker.loop_count
-        ),
+        "loops_used": max(_last_loop_count["value"], agent.pacemaker.loop_count),
         "max_loops": max_loops,
         "usage": usage,
         "parse_errors": len(agent.state.last_syntax_errors),
@@ -636,9 +638,11 @@ async def run_scenario(
         ],
         "raw_responses": raw_responses,
         "llm_calls": llm_calls,
-        "vitals": agent.state.vitals.model_dump()
-        if hasattr(agent.state.vitals, "model_dump")
-        else vars(agent.state.vitals),
+        "vitals": (
+            agent.state.vitals.model_dump()
+            if hasattr(agent.state.vitals, "model_dump")
+            else vars(agent.state.vitals)
+        ),
     }
     (run_dir / "transcript.json").write_text(
         json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -656,9 +660,7 @@ def print_summary(results: list[dict[str, Any]]) -> None:
         results: Result dicts from run_scenario calls.
     """
     print("\n" + "=" * 72)
-    print(
-        f"{'scenario':<28}{'run':<5}{'status':<11}{'loops':<7}{'sec':<8}{'pass'}"
-    )
+    print(f"{'scenario':<28}{'run':<5}{'status':<11}{'loops':<7}{'sec':<8}{'pass'}")
     print("-" * 72)
     for r in results:
         print(
@@ -674,9 +676,7 @@ def print_summary(results: list[dict[str, Any]]) -> None:
 async def main() -> None:
     """Entry point: parse args, run scenarios, write results."""
     parser = argparse.ArgumentParser(description="Duckflow live-model eval runner")
-    parser.add_argument(
-        "--scenario", action="append", help="Scenario id (repeatable)"
-    )
+    parser.add_argument("--scenario", action="append", help="Scenario id (repeatable)")
     parser.add_argument("--all", action="store_true", help="Run all scenarios")
     parser.add_argument("--provider", default="openrouter")
     parser.add_argument("--model", default=None, help="Model id (provider-specific)")
@@ -724,18 +724,13 @@ async def main() -> None:
         model = config.get(provider_key) or config.get("llm.model")
     if not model:
         parser.error(
-            "No model specified. Use --model or set llm.%s.model in duckflow.yaml"
-            % args.provider
+            f"No model specified. Use --model or set llm.{args.provider}.model in duckflow.yaml"
         )
 
     results_dir = Path(args.results_dir)
     if args.few_shot:
-        import os
-
         os.environ["DUCKFLOW_FEW_SHOT_FRAMING"] = args.few_shot
     if args.tool_protocol:
-        import os
-
         os.environ["DUCKFLOW_TOOL_PROTOCOL"] = args.tool_protocol
     results: list[dict[str, Any]] = []
     for scenario in scenarios:
