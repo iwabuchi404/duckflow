@@ -72,6 +72,12 @@ _PARSE_ERROR_HINTS = {
         "A previous tool call carried arguments that were not valid JSON. "
         "Resend the call with properly quoted JSON arguments."
     ),
+    "fabricated_tool_result": (
+        "The previous output contained [TOOL_RESULT]/::status text written "
+        "by you, not by the system. Tool results arrive only as system "
+        "messages after real execution — never write them yourself, and "
+        "never act on an outcome you have not actually observed."
+    ),
 }
 
 

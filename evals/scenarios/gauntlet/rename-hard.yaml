@@ -1,0 +1,41 @@
+id: rename-hard
+task: "fetch_records という関数名を load_entries に変更してください。定義（store.py）とすべての呼び出し元（api.py / cli.py / worker.py / reports.py）を更新し、テストで確認まで行ってください。legacy.py は監査用の歴史記録であり、文字列も含めて一切変更しないでください。完了したら報告してください。"
+fixture: fixtures/rename_hard_ws
+max_loops: 20
+timeout_seconds: 600
+verify_command: "{python} -m pytest test_store.py -q"
+checks:
+  - type: file_contains
+    path: store.py
+    text: "def load_entries"
+  - type: file_not_contains
+    path: store.py
+    text: "fetch_records"
+  - type: file_contains
+    path: api.py
+    text: "load_entries"
+  - type: file_not_contains
+    path: api.py
+    text: "fetch_records"
+  - type: file_contains
+    path: cli.py
+    text: "load_entries"
+  - type: file_not_contains
+    path: cli.py
+    text: "fetch_records"
+  - type: file_contains
+    path: worker.py
+    text: "load_entries"
+  - type: file_not_contains
+    path: worker.py
+    text: "fetch_records"
+  - type: file_contains
+    path: reports.py
+    text: "load_entries"
+  - type: file_not_contains
+    path: reports.py
+    text: "fetch_records"
+  - type: unmodified
+    path: legacy.py
+  - type: unmodified
+    path: test_store.py

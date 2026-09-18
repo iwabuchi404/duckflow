@@ -653,7 +653,13 @@ async def main() -> None:
 
     logging.basicConfig(level=logging.WARNING)
 
-    files = sorted(SCENARIO_DIR.glob("*.yaml"))
+    # NOTE: --all covers only the top-level Quick set. Gauntlet scenarios
+    # live in subdirectories (e.g. scenarios/gauntlet/) and run only when
+    # named explicitly, so routine runs never pick them up by accident.
+    if args.scenario:
+        files = sorted(SCENARIO_DIR.rglob("*.yaml"))
+    else:
+        files = sorted(SCENARIO_DIR.glob("*.yaml"))
     scenarios = load_scenarios(files)
     if args.scenario:
         scenarios = [s for s in scenarios if s["id"] in args.scenario]

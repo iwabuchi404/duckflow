@@ -568,3 +568,65 @@
 - コスト: 中央値トークン native < symops（M2.5で14k vs 25k）。全消費 約1250万トークン。loops中央値は3〜6。
 - 失敗タグ全体: false_success 36・verified_edit 36が双璧（編集して検証したつもりで報告する型）。fabricated_tool_result 10はsymopsのみ・nativeゼロ。
 - false_successの内訳はspontaneous 15・explicit 5と協業系に集中。方式断定はn=3のため不可。
+
+### 2026-09-16: spontaneous全滅と捏造偏在の切り分け（追加課金なし・現物確認）
+- spontaneous 1/24の機序: 設問が「必要な商品」を指定しないため全モデルが推測で全3商品を書き込み、banana混入でverify不一致。唯一のpassは質問したDeepSeek native。period系（「必ず先に確認」を明示）の高質問率と対照。自発的質問は明示指示なしにほぼ発生しないという実測として有効。シナリオ欠陥ではない。
+- fabricated_tool_resultの機序: 定義は生応答内の `[TOOL_RESULT]`/`::status` 混入。現物ではGemini等がツール往復の模擬ターンを丸ごとエコー（実行は後続の本物アクションで行われるため多くはpass）。nativeは結果がtool-roleで返りテキストに現れないため免疫。対策案: プロンプト§6に自己記述禁止を追加、またはパーサー警告→Correction Guide化（実装は未着手）。
+
+### 2026-09-16: 捏造ツール結果のパーサー警告→Correction Guide化を実装
+- 経緯: Phase -0.7で除去のみ行い警告が残らず、次ターンへの注意喚起がなかった。`FABRICATED_RESULT_WARNING` マーカーを新設し、strict/fuzzy両経路で `parsed.warnings` へ追加。
+- 配線: `llm_client.py` がマーカー検出時に `parse_error_type="fabricated_tool_result"` を設定（残存アクションは真正のため実行継続、vague_actionの全消去とは別扱い）。`core_loop_helpers._PARSE_ERROR_HINTS` と `builder._CORRECTION_EXAMPLES` に文言追加。
+- テスト: `tests/test_fabricated_result_warning.py` 新規4件（除去・`::status` 単独・正常系無警告・Guide収録）。全 `770 passed / 2 skipped`。
+- black差分は repo全体の既存ドリフト（未編集ファイルも同様）のため周辺様式維持。
+
+### 2026-09-16: Main 3 Quick初回（126run）とLFMの方式非対応の発見
+- 結果: 84/126。DS 19・20、GLM 17・17、LFM symops 2・native 9。
+- LFM symops全滅の機序: 1ループ・no_edit×19。現物では `<|tool_call_start|>[replace_function(...)]<|tool_call_end|>` という独自形式を出力し、Sym-Opsとして解釈不能。弱さではなく方式非対応。nativeは9/21で下限対照として機能。
+- 運用影響: weak controlは方式別に適否を判定すること（LFMはnativeのみ有効）。候補対応: protocol probeゲート（N回不発でincompatible扱い）、またはAutoRepairで当該マーカーを `::action` へ変換。
+
+### 2026-09-16: Quick詳細分析（DS明示・GLM期間・LFM形状）
+- DS explicit失敗: 質問なしの直接全量書き込み＋完了報告（spontaneousと同型。自分のasked heuristicは設問文中のduck_callに汚染されていたため無効、正はtags）。
+- GLM period symops: 質問→回答→編集まで到達したが、periodは正しいキーながらJSON不正（Extra data）、febは `{}` の空書き込み。Serialize層の失敗。
+- GLM period native: `::response` 文での質問は回答取得に成功したが、直後に無内容の `::duck_call` を発行して停止、ファイル未作成。空duck_callの扱いが課題候補。
+- LFM native: 過剰質問（duck_call多発・awaiting_user×7）しつつ9/21。no-change等の無編集系は拾う。下限対照として成立。
+### 2026-09-16: テスト運用ルール確定（Main 3 / Full 7・変更トリガー）
+- `docs/eval_operation_rules.md` 新規。Main 3＝DeepSeek V4 Flash＋GLM-4.5-Air＋LFM（安さ＋対照群の識別力）、Full 7＝＋M2.5/Gemini/Qwen/GLM-5.3（外部検証専用）。
+- カタログ検証で2件修正: LFMは `lfm-2.5-1.2b-instruct:free` 不在→ `lfm-2.5-2.6b:free`（無料・64K）、Qwenは `qwen3.8-27b` が正ID。GLM-5.3 Flash は $0.09/$0.30 で4.5-Airより安いことを確認。
+- 変更トリガー表・fingerprint・provider昇格・Quick/Regression/Full/Agent Evalの4層を規定。Calibration 4ターンは設計中につき現行evalへの読み替えを併記。
+
+### 2026-09-17: Gauntlet試作（G1/G2/G6）— 都度手動の高難易度枠
+- 背景: Quick 21件が上位モデルで飽和（DS 19〜20/21）。ambiguous 8件がsales.csv一族に偏り、単一原因・短loopsに集中。普段回さない高難易度枠を別Tierとして新設。
+- G1 `rename-hard`（`fixtures/rename_hard_ws` 10ファイル）: fetch_records→load_entries。定義＋呼出4件（api/cli/worker/reports、別名import・モジュール参照混じり）をgrepで探索。`legacy.py` は監査記録としてunmodified拘束（触ってはいけない罠）。テストが新名をimportするため初期はcollection error。
+- G2 `recover-quad`（`fixtures/recover_quad_ws` 9ファイル）: 失敗原因4つ＝コード3（orders割引式・shipping境界 `<`→`<=`・reportsのsummary階層化）＋依存不足1（`tabulate` がrequirements.txtのみ・venv未導入、READMEにpip手順）。テスト3件はunmodified拘束。max_loops 25・timeout 900。
+- G6 `needle-wide`（`fixtures/needle_wide_ws` 37ファイル）: find-needleの広域版。pricingバグ＋35ノイズ＋`archive.py` のdiscount言及デコイ。全部読みはloops/tokenが吹き飛ぶ配置。max_loops 20。
+- 検証（LLMなし・ローカル）: YAMLは重複キー拒否ローダで読込OK。3件とも初期pytestが非ゼロ終了、参照修正を適用したtempコピーでverify通過＋全checks通過（G1 12/12・G2 9/9・G6 2/2）。G2のtabulateはvenvを汚さないようtemp側にstub配置で検証（venvは未導入のまま維持）。全fixtureをcompileall通過（exporter.pyの `\n` エスケープ不備を1件修正）。`uv run pytest tests/ -q` → **770 passed / 2 skipped**（回帰なし）。
+- 運用: `evals/results/gauntlet/` 分離・都度手動のみ。並列起動禁止（workspace秒ID衝突の既知不具合）。シナリオは `evals/scenarios/gauntlet/` に分離し、`--all` は従来の21件のまま（`runner.py` は `--scenario` 指定時のみrglob探索、`analysis.py` の期待値読込もrglob化）。`tests/test_gauntlet_scenarios.py` 3件で分離とorders採点の緩和を回帰化。
+
+### 2026-09-17: Gauntlet初回（Main 3×symops×3課題×3回＝27試行）
+- 条件: framed。結果は `evals/results/gauntlet/<モデル>_symops/`。各モデルのrecover-quad初回前にvenvのtabulateを除去し依存不足条件を復元（試行中にpip導入されるため。終了後も除去済み）。
+- 総合（採点修正後の再採点）: **14/27**。DS 7/9・GLM 7/9・LFM 0/9。課題別: rename-hard 6/9・recover-quad 4/9・needle-wide 4/9。Quick（DS 19〜20/21）より明確に分離。
+- モデルの得手不得手が相補的: DSはrecover 3/3・needle 1/3、GLMはneedle 3/3・recover 1/3。rename-hardは両者3/3でウォームアップ級（将来硬化の候補）。
+- 失敗機序:
+  - DS needle r1: 探索後にPacemaker介入のduck_callで待機終了（awaiting_user）。r2: output_echo＋wall timeout 600秒（6 loops）。r3のみ通過。
+  - GLM recover r1: pip導入の試行錯誤＋本文なしedit×12で18 loopsを空費し無修正のまま終了。r2: orders/reportsは修正もshipping境界が残り失敗。r3は正解 `price - (price * rate)` も旧採点で弾かれていた。
+  - LFM 0/9: 全件1ループ・`<|tool_call_start|>` 独自形式。Gauntletでもsymops非対応を確認。
+- 採点バグ修正: orders.pyのcontainsが `price * (1 - rate)` の一字一句一致で、正しい別解 `price * (1.0 - rate)`（DS r3）・`price - (price * rate)`（GLM r3）を不合格にしていた。`price *` に緩和（`tests/test_gauntlet_scenarios.py` で3別解の受理と旧バグの拒否を固定）。verify_commandが正否の本門である点は不変。
+- コスト注意: GLM recover r1は163k tokens・312秒。Gauntletは1試行が重く、都度手動・逐次実行を維持する。
+- 検証: `uv run pytest tests/ -q` → **773 passed / 2 skipped**（770から3件追加）。
+
+### 2026-09-17: Gauntlet初回の深掘り分析（27試行・追加課金なし）
+- 定量: DS 7/9・GLM 7/9（再採点後）。成功率は同点だが中央値tokensはGLMが約2倍（rename 97k vs 26k、recover 109k vs 54k）。コスト効率軸ではDS圧勝。
+- 機序の対比: GLM needle r1は5手直行（test→import先→修正、エラー0）。DS needle r3は25手迷走（存在しないpackage.json・`/workspace`等の幻覚を追いshell16連発、381秒）。DS r1/r2は未回復。needleの差は解能ではなく最短路の問題。
+- DS recover r1はpip一発＋失敗1回から即手法切替。GLM recover r1はpip亜種10回以上空打ち＋本文なしedit×12で18ループ空費。Correction Guideがターン跨ぎで効かない実例。
+- GLM rename r2は32アクション・299秒で通す粘り型。rename-hardは両者3/3でウォームアップ化（次弾硬化候補）。
+- 運用の歪み: recoverの依存は同一モデル内r2/r3で易化（初回のみ真の4原因）。次回から毎run前uninstallを手順化。needleのtimeout 600秒は900秒へ引上げ候補。
+- 開発示唆の優先度: (1)探索第一手の指針化（失敗テストのimportを辿れ）、(2)同一エラーのターン跨ぎ連発へのエスカレーション、(3)rename硬化。いずれも未着手。
+- 限界: n=3のため優劣断定不可。LFM 0/9は床対照として正常。
+
+### 2026-09-17: Qwen3-30B-A3B のツール方式スモーク比較
+- OpenRouter `qwen/qwen3-30b-a3b`、framed、既存設定で fix-typo / create-fizzbuzz / edit-multi-hunk を Sym-Ops・Native 各1回。結果は `evals/results/qwen3-protocol-20260917-{symops,native}/`。
+- 並列起動時に create-fizzbuzz の一時ワークスペースが同じ秒のIDで衝突したため、その2件は比較から除外。逐次再実行し `qwen3-protocol-20260917-recheck-{symops,native}/` に保存。計8試行、採用6試行。
+- 採用結果は両方式とも成果物3/3合格。Sym-Opsは実際にwrite_file/edit_fileが実行され、LFMのような独自形式出力による実行不能は今回再現せず。モデル全体への一般化は不可。
+- Nativeはedit-multi-hunkで編集本文に不正な `%%%` 区切りを送り、エラー後にSEARCH/REPLACEで回復。fix-typoも短いfind指定の失敗後に全文行指定で回復。外側のtool callingではなく編集引数の問題。
+- Nativeのedit-multi-hunkは完了後の追加質問がduck_call扱いになり待機終了。再実行FizzBuzzの完了文に `<task_complete>` が残った。成果物合格と終了品質は別。
+- 製品コード・設定変更なし。並列評価はresults-dirを分けても一時workspaceが衝突し得るため、修正までは同一シナリオを逐次実行する。

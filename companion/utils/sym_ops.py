@@ -19,6 +19,15 @@ _NO_DEPENDENCY_SPLIT = {"run_command"}
 # them to the Correction Guide instead.
 VAGUE_ACTION_WARNING = "VagueActionAttempt: action-like text without explicit ::action"
 
+# Marker warning: the output contained model-authored [TOOL_RESULT]/::status
+# segments (Phase -0.7 strips them). Tool results are produced exclusively by
+# the system — a model-authored segment is always a fabrication, and acting on
+# imagined outcomes must be corrected. The caller routes these to the
+# Correction Guide instead of silently dropping them.
+FABRICATED_RESULT_WARNING = (
+    "FabricatedToolResult: model-authored [TOOL_RESULT]/::status segment(s) stripped"
+)
+
 # Tool verbs that, followed by @target, indicate an action attempt even
 # without the "::" prefix.
 _ACTION_ATTEMPT_RE = re.compile(
@@ -1387,7 +1396,6 @@ class SymOpsProcessor:
                 f"⚠️ Stripped {fabricated_count} fabricated [TOOL_RESULT]/::status "
                 "segment(s) from model output"
             )
-
         # Phase -0.5: Repetition detection — LLMが同じ行を異常に繰り返している場合、
         # 最初の数回だけ保持して残りを切り詰める（パーサーの負荷と無意味なアクション実行を防ぐ）
         raw_output = self._truncate_repetition(raw_output)
@@ -1427,6 +1435,8 @@ class SymOpsProcessor:
                     a for a in parsed.actions if a.type != "response"
                 ]
                 parsed.warnings.append(VAGUE_ACTION_WARNING)
+            if fabricated_count:
+                parsed.warnings.append(FABRICATED_RESULT_WARNING)
             if corrections:
                 parsed.warnings.append(f"Preprocessing: {', '.join(corrections)}")
             return parsed
@@ -1442,6 +1452,8 @@ class SymOpsProcessor:
                 a for a in partial.actions if a.type != "response"
             ]
             partial.warnings.append(VAGUE_ACTION_WARNING)
+        if fabricated_count:
+            partial.warnings.append(FABRICATED_RESULT_WARNING)
         if reasoning_stripped:
             partial.warnings.append("Reasoning tags stripped (<think>)")
         if was_converted:

@@ -1409,10 +1409,25 @@ class LLMClient:
             # not reasoning-derived thoughts. Reasoning models that hit
             # max_tokens during reasoning produce no body content, and
             # surfacing raw reasoning as a response is not useful.
-            from companion.utils.sym_ops import VAGUE_ACTION_WARNING
+            from companion.utils.sym_ops import (
+                FABRICATED_RESULT_WARNING,
+                VAGUE_ACTION_WARNING,
+            )
 
             parse_error_type = None
             parse_error_detail = None
+            if FABRICATED_RESULT_WARNING in result.warnings:
+                # The output embedded model-authored [TOOL_RESULT]/::status
+                # segments (already stripped before parsing). The remaining
+                # actions are genuine, so they still execute — but the next
+                # turn's Correction Guide must tell the model never to author
+                # tool results itself, or it will act on imagined outcomes.
+                logger.warning(
+                    "Fabricated tool result: model-authored [TOOL_RESULT]/"
+                    "::status stripped. Routing notice to Correction Guide."
+                )
+                parse_error_type = "fabricated_tool_result"
+                parse_error_detail = content[:300]
             if VAGUE_ACTION_WARNING in result.warnings:
                 # The output referenced a tool with @target but carried no
                 # explicit "::action" syntax (e.g. ">> read_file @x"). The

@@ -542,7 +542,7 @@ def load_question_expectations(scenario_dir: Path) -> dict[str, bool | None]:
     import yaml
 
     expectations: dict[str, bool | None] = {}
-    for path in sorted(scenario_dir.glob("*.yaml")):
+    for path in sorted(scenario_dir.rglob("*.yaml")):
         try:
             with open(path, encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}

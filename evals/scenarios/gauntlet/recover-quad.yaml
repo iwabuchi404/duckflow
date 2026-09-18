@@ -1,0 +1,37 @@
+id: recover-quad
+task: "このワークスペースで pytest を実行すると複数のエラーで失敗します。原因は1つではなく、orders.py / shipping.py / reports.py にあるコードの不具合と、不足している外部依存の組み合わせです。pytest を使って失敗を確認し、原因を1つずつ切り分けて修正してください。不足している依存は pip で導入してかまいません。テストファイル自体は修正せず、計画の提示だけで終了せず、修正の適用とテストの再実行による確認まで行ってください。完了したら報告してください。"
+fixture: fixtures/recover_quad_ws
+max_loops: 25
+timeout_seconds: 900
+verify_command: "{python} -m pytest -q"
+follow_up_inputs:
+  - "了解です。その計画で進めてください。"
+checks:
+  # NOTE: variants like `price * (1.0 - rate)` and `price - (price * rate)`
+  # are functionally correct (observed in live runs) — match the shared
+  # `price *` instead of one canonical spelling. The verify_command proves
+  # correctness; file_not_contains below rejects the original bug.
+  - type: file_contains
+    path: orders.py
+    text: "price *"
+  - type: file_not_contains
+    path: orders.py
+    text: "return price - rate"
+  - type: file_contains
+    path: shipping.py
+    text: "if weight <= 10:"
+  - type: file_not_contains
+    path: shipping.py
+    text: "if weight < 10:"
+  - type: file_contains
+    path: reports.py
+    text: "return dict(orders)"
+  - type: file_not_contains
+    path: reports.py
+    text: '"summary": dict(orders)'
+  - type: unmodified
+    path: test_orders.py
+  - type: unmodified
+    path: test_shipping.py
+  - type: unmodified
+    path: test_reports.py

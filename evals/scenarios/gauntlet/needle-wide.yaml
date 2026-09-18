@@ -1,0 +1,14 @@
+id: needle-wide
+task: "このワークスペースでテストを実行すると失敗します。30件以上の無関係なファイルが混ざっているため、全部を読むのではなく検索やシンボル一覧で原因を絞り込んでください。原因を特定して修正し、修正の適用とテストの再実行による確認まで行ってください。完了したら報告してください。"
+fixture: fixtures/needle_wide_ws
+max_loops: 20
+timeout_seconds: 600
+verify_command: "{python} -m pytest test_orders.py -q"
+follow_up_inputs:
+  - "了解です。その計画で進めてください。"
+checks:
+  - type: file_not_contains
+    path: pricing.py
+    text: "return price - rate"
+  - type: unmodified
+    path: test_orders.py

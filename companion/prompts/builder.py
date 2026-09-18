@@ -258,6 +258,11 @@ class PromptBuilder:
             '  A tool call had malformed JSON arguments.\n'
             '  Resend it with valid JSON, e.g. {"path": "a.py", "content": "..."}'
         ),
+        'fabricated_tool_result': (
+            '  Never write `[TOOL_RESULT]` or `::status` lines yourself.\n'
+            '  Results come only from the system after real execution.\n'
+            '  Emit the `::tool_name` action, then wait for its result.'
+        ),
     }
 
     # Native variants without Sym-Ops grammar (only keys that differ).
