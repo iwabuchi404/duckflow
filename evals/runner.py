@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -386,8 +387,12 @@ async def run_scenario(
     max_loops = int(scenario.get("max_loops", 15))
     timeout_seconds = float(scenario.get("timeout_seconds", 300))
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    run_dir = results_dir / scenario_id / f"{timestamp}-r{run_index}"
+    # Use microsecond + pid in the run name so parallel invocations (or
+    # async/concurrent callers) never share a workspace, even if they start
+    # in the same second with the same run_index.
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+    run_name = f"{timestamp}-r{run_index}-{os.getpid()}"
+    run_dir = results_dir / scenario_id / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Workspace lives outside the repo: get_project_tree hides gitignored
@@ -396,7 +401,7 @@ async def run_scenario(
     import tempfile
 
     workspace_base = Path(tempfile.gettempdir()) / "duckflow-evals"
-    workspace = workspace_base / scenario_id / f"{timestamp}-r{run_index}"
+    workspace = workspace_base / scenario_id / run_name
     workspace.mkdir(parents=True, exist_ok=True)
 
     fixture = Path(scenario["_path"]).parent / scenario.get("fixture", "")
@@ -429,7 +434,6 @@ async def run_scenario(
     repo_map_module.get_repo_map_generator(str(workspace))
 
     api_key: str | None = None
-    import os
 
     if provider == "openrouter":
         api_key = os.getenv("OPENROUTER_API_KEY")
