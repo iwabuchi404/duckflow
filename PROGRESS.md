@@ -1,3 +1,30 @@
+### 2026-09-19: Gauntlet v2 初回実行（Main 3×6課題×3回＝54試行）— 16/16/4
+- 条件: DS/GLM は symops（前回ベースラインと整合）、LFM は symops 非対応のため native。結果は `evals/results/gauntlet-v2/{ds_symops,glm_symops,lfm_native}/`。ベースラインスナップショット `evals/baselines/gauntlet-v2-main3.json` 保存（コミット・scenario fingerprint・median値を記録、以後 `--compare` で差分検出可能）。
+- 総合: **DS 16/18・GLM 16/18・LFM(native) 4/18**。課題別では全シナリオが床〜天井の勾配を持ち、ベースラインとして機能。
+- 新規3課題の実測:
+  - `ambiguous-gauntlet`: DS 3/3・GLM 3/3・LFM 0/3。DS/GLM は confirmed:3（質問→回答→正解JSON）を完遂。LFM は asked_question:3 ながら artifact 全滅（質問はするが正しく実装できない弱さを分離検出）。
+  - `no-change-hard`: 全モデル 3/3。LFM も通過（何もしない系は弱いモデルの得意領域）。GLM は1件 asked_question+duck_call で確認してから無変更判断。no_edit_applied タグで「無変更」自体が可視化される。
+  - `spec-build`: DS 3/3・GLM 3/3・LFM 0/3（全件 loops=15 打ち切り・output_echo:3）。生成+継続作業の複合が弱いモデルの天井を正しく示す。
+- 失敗機序:
+  - DS needle-wide r3: 「修正します」と応答だけして終了（no_edit_applied）。recover-quad r3 も同型。
+  - GLM rename-hard r1/r2: 本文なし edit_file 連発＋20 loops 消費で awaiting_user 終了（142k/93k tokens の高コスト失敗）。r3 は19 loops で通過する粘り型。
+  - GLM: fabricated_tool_result が needle:3・recover:2・rename:2・spec:1 で検出（504runと同型の残存課題）。
+  - LFM spec-build: output_echo:3＋repeated_command で15 loops 使い切り。実行はしているが収束不能。
+- コスト実測（median tokens/run）: DS は軽量（19k〜73k）、GLM は2〜3倍（21k〜164k）、LFM は spec-build で 100k+ 消費しつつ収束せず。recover-quad の GLM r1 は 164k tokens・95秒。
+- 検証: ライブ54試行完了、analysis.json 3件出力済み。
+
+### 2026-09-19: Gauntlet ベースライン完成 — 新規3課題＋baseline比較ツール＋workspace_unmodified採点
+- 背景: Gauntlet を実質ベースラインとするため、能力軸（生成・克制・協業）の欠落を最小コストの3課題で補完。既存3課題（rename-hard=リファクタ、recover-quad=多原因修正+環境、needle-wide=探索効率）と合わせて6課題構成。
+- 新規シナリオ（`evals/scenarios/gauntlet/`、すべて小fixture・短ループで低コスト設計）:
+  - `no-change-hard`（`nochange_hard_ws` 6ファイル）: 「合計が1-2円ずれる」という報告を調査させるが、per-unit rounding は README 明記の仕様。正解=無変更+報告。504run最大の失敗タグ false_success を直接測る。max_loops 10。
+  - `ambiguous-gauntlet`（`ambiguous_g_ws` 6ファイル）: restock.json 生成で stock threshold がタスク文に無い設計（config.py に MIN_STOCK=5/REORDER_POINT=10/SAFETY_STOCK=3 のデコイ）。`expects_question: true` + `user_script` で "stock < 10" を供給。fig=10 の境界値が `<=10` 推測も弾く。正解 {apple,cherry,durian:5}。max_loops 12。
+  - `spec-build`（`spec_build_ws` 6ファイル）: SPEC.md 記載の `allocate(stock, request)` を実装＋CHANGELOG.md の Unreleased に1行追記の複合課題（生成+継続作業軸）。エッジケース（部分割当・欠落SKU省略・非正数除外・非破壊）をテストがロック。max_loops 15。
+- `workspace_unmodified` check型（`evals/runner.py`）: fixture↔workspace の全ファイルをバイト比較（新規・変更・削除を検出）。`__pycache__`/`.pytest_cache`/`*.pyc` は無視。no-change系の採点に必須で、従来のパス単位 `unmodified` ではカバーできなかった「新規ファイル作成」も検出。
+- `evals/baseline.py` 新規（ベースライン比較ツール）: `--save <name> --dir <results>` で `evals/baselines/<name>.json`（git管理可・小サイズ）に集約保存。記録内容: HEADコミット・dirty状態+diff_sha・各run埋め込みコミット一覧・scenario fingerprint（yaml+fixtureのsha）・シナリオ×モデル×プロトコル別の pass数/median tokens・loops・秒。`--compare <name>` で新旧比較表（pass差・median差）＋比較可能性警告（baseline以降のコミット数・dirty差・シナリオ改訂・新規/欠落シナリオ）を出力。
+- テスト: `tests/test_eval_workspace_unmodified.py` 6件（一致・編集・新規・削除・生成物無視・fixture無しfail-safe）、`tests/test_eval_baseline.py` 6件（collect・集約・シナリオ変更/欠落/新規警告・整合時no-warning）、`test_gauntlet_scenarios.py` に新3課題を追加。
+- 検証（LLMなし・ローカル）: 3課題ともYAMLは重複キー拒否ローダで読込OK。no-change-hard 初期pytest 6/6 pass（正しく無変更が正解）、spec-build 初期3 failed/3 passed・参照実装で6/6 pass、ambiguous-gauntlet の verify は正解JSONで通過。全fixture compileall通過。`uv run python -X utf8 -m pytest tests/ -q` → **785 passed / 2 skipped**（773から12件追加）。
+- 未実施: 新3課題のライブ実行（Main 3×両方式）、rename-hard 硬化、needle-wide スリム化、探索規律メトリクス（第一手ツール種別タグ）。
+
 ### 2026-09-16: eval 試行条件共有バグ修正＋シナリオスナップショット保存
 - 背景: 504run比較の精度向上のための前置修正。`follow_up_inputs` が試行間で共有されており、2試行目以降はfollow-upが供給されない欠陥があった。
 - 修正（`evals/runner.py`）:

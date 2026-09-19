@@ -241,13 +241,62 @@ def _ensure_clean_env(fixture: Path | None) -> None:
             logger.warning(f"Failed to uninstall {pkg_name}: {result.stderr}")
 
 
+_WORKSPACE_DIFF_IGNORE = {"__pycache__", ".pytest_cache"}
+
+
+def _workspace_matches_fixture(workspace: Path, fixture: Path | None) -> bool:
+    """Compare an entire workspace tree against its fixture, byte for byte.
+
+    Used by ``workspace_unmodified`` checks for scenarios whose correct
+    outcome is "change nothing" (e.g. a reported bug that turns out to be
+    intended behavior). Any modified, new, or deleted file fails the check,
+    except generated noise (``__pycache__``, ``.pytest_cache``, ``*.pyc``)
+    that pytest/Python creates merely by running the verification command.
+
+    Args:
+        workspace: Run workspace root.
+        fixture: Fixture directory the workspace was copied from.
+
+    Returns:
+        True when the trees are identical apart from ignored entries.
+    """
+    import filecmp
+
+    if fixture is None or not fixture.is_dir():
+        return False
+
+    def _ignored(name: str) -> bool:
+        return name in _WORKSPACE_DIFF_IGNORE or name.endswith(".pyc")
+
+    def _walk(root: Path) -> dict[str, Path]:
+        files: dict[str, Path] = {}
+        for path in sorted(root.rglob("*")):
+            rel = path.relative_to(root)
+            if any(_ignored(part) for part in rel.parts):
+                continue
+            if path.is_file():
+                files[str(rel)] = path
+        return files
+
+    fixture_files = _walk(fixture)
+    workspace_files = _walk(workspace)
+    if set(fixture_files) != set(workspace_files):
+        return False
+    return all(
+        filecmp.cmp(str(fixture_files[rel]), str(workspace_files[rel]), shallow=False)
+        for rel in fixture_files
+    )
+
+
 def _run_checks(
     checks: list[dict[str, Any]], workspace: Path, fixture: Path | None = None
 ) -> list[dict[str, Any]]:
     """Evaluate mechanical checks against the run workspace.
 
     Supported check types: file_exists, file_not_exists, file_contains,
-    file_not_contains, unmodified (byte-identical to the fixture file).
+    file_not_contains, unmodified (byte-identical to the fixture file),
+    workspace_unmodified (whole tree byte-identical to the fixture, ignoring
+    __pycache__/.pytest_cache/*.pyc).
 
     Args:
         checks: Check dicts from the scenario YAML.
@@ -285,6 +334,8 @@ def _run_checks(
                 and hashlib.sha256(path.read_bytes()).hexdigest()
                 == hashlib.sha256(original.read_bytes()).hexdigest()
             )
+        elif kind == "workspace_unmodified":
+            passed = _workspace_matches_fixture(workspace, fixture)
         else:
             passed = False
 

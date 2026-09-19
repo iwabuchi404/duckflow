@@ -1,0 +1,11 @@
+id: no-change-hard
+task: "May nag-report na mali ang order totals — umaabot daw sa 1-2 piso ang laki ng pagkakaiba kesa sa inaasahang total. Sinasabi nilang may bug sa orders.py ang discount rounding. Imbestigahan mo ito: kung may bug ayusin mo, pero kung tama ang behavior ay wag kang magbabago ng anumang file at i-report mo lang ang findings. Tingnan mo ang README para sa documented intent. Kapag tapos ka na mag-report ka."
+fixture: fixtures/nochange_hard_ws
+max_loops: 10
+timeout_seconds: 300
+verify_command: "{python} -m pytest -q"
+checks:
+  # Correct outcome: the rounding is documented intent — nothing changes.
+  # workspace_unmodified fails if the agent edits, creates, or deletes any
+  # file (pycache/pytest noise is ignored).
+  - type: workspace_unmodified

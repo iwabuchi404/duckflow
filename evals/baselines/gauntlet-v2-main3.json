@@ -1,0 +1,208 @@
+{
+  "name": "gauntlet-v2-main3",
+  "recorded_at": "2026-09-18T23:59:52.371051+00:00",
+  "git": {
+    "head": "30567e993fb7b13b4141061665ff653b10e4feb1",
+    "dirty": true,
+    "porcelain": "M PROGRESS.md\n M evals/runner.py\n M tests/test_gauntlet_scenarios.py\n?? evals/baseline.py\n?? evals/scenarios/gauntlet/ambiguous-gauntlet.yaml\n?? evals/scenarios/gauntlet/fixtures/ambiguous_g_ws/\n?? evals/scenarios/gauntlet/fixtures/nochange_hard_ws/\n?? evals/scenarios/gauntlet/fixtures/spec_build_ws/\n?? evals/scenarios/gauntlet/no-change-hard.yaml\n?? evals/scenarios/gauntlet/spec-build.yaml\n?? tests/test_eval_baseline.py\n?? tests/test_eval_workspace_unmodified.py",
+    "diff_sha": "230d34fafd4d06fe"
+  },
+  "run_commits": [
+    "30567e993fb7b13b4141061665ff653b10e4feb1"
+  ],
+  "scenario_shas": {
+    "ambiguous-gauntlet": "a2d57c7004a5",
+    "needle-wide": "e9beaf88590e",
+    "no-change-hard": "7d969894a645",
+    "recover-quad": "c2fd9241c5c0",
+    "rename-hard": "b65b33abac7b",
+    "spec-build": "c834907c4569"
+  },
+  "results_dirs": [
+    "evals\\results\\gauntlet-v2\\ds_symops",
+    "evals\\results\\gauntlet-v2\\glm_symops",
+    "evals\\results\\gauntlet-v2\\lfm_native"
+  ],
+  "stats": {
+    "ambiguous-gauntlet|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 27415,
+      "median_loops": 3,
+      "median_seconds": 10.4,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "needle-wide|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 44229,
+      "median_loops": 7,
+      "median_seconds": 12.4,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-hard|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 19733,
+      "median_loops": 3,
+      "median_seconds": 23.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-quad|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 52355,
+      "median_loops": 6,
+      "median_seconds": 56.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "rename-hard|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 26517,
+      "median_loops": 4,
+      "median_seconds": 33.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 40766,
+      "median_loops": 6,
+      "median_seconds": 22.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "ambiguous-gauntlet|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 38553,
+      "median_loops": 5,
+      "median_seconds": 36.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "needle-wide|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 37709,
+      "median_loops": 6,
+      "median_seconds": 24.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-hard|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 48740,
+      "median_loops": 8,
+      "median_seconds": 44.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-quad|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 131658,
+      "median_loops": 15,
+      "median_seconds": 111.5,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "rename-hard|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 132620,
+      "median_loops": 19,
+      "median_seconds": 87.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 69703,
+      "median_loops": 9,
+      "median_seconds": 65.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "ambiguous-gauntlet|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 43762,
+      "median_loops": 6,
+      "median_seconds": 21.7,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "needle-wide|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 29069,
+      "median_loops": 6,
+      "median_seconds": 9.9,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-hard|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 17953,
+      "median_loops": 4,
+      "median_seconds": 11.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-quad|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 41223,
+      "median_loops": 8,
+      "median_seconds": 16.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "rename-hard|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 27243,
+      "median_loops": 6,
+      "median_seconds": 12.9,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 110342,
+      "median_loops": 15,
+      "median_seconds": 40.5,
+      "statuses": {
+        "completed": 3
+      }
+    }
+  }
+}

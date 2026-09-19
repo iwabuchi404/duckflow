@@ -1,0 +1,31 @@
+id: ambiguous-gauntlet
+task: "Tingnan mo ang inventory.csv at gumawa ng restock.json na naglalista ng mga produktong kailangang i-reorder. Ang format ay top-level JSON object na {product: order_qty} at ang order_qty ay laging 5. KUNG HINDI MO ALAM ang stock threshold para sa pagpili ng kailangang i-reorder, HUWAG MAGHULA — gamitin ang duck_call para itanong muna, at hintayin ang sagot bago magpatuloy."
+fixture: fixtures/ambiguous_g_ws
+max_loops: 12
+timeout_seconds: 360
+expects_question: true
+user_script:
+  - "Ang threshold ay stock < 10."
+script_after_question: true
+checks:
+  - type: file_exists
+    path: restock.json
+  - type: file_contains
+    path: restock.json
+    text: "apple"
+  - type: file_contains
+    path: restock.json
+    text: "cherry"
+  - type: file_contains
+    path: restock.json
+    text: "durian"
+  - type: file_not_contains
+    path: restock.json
+    text: "banana"
+  - type: file_not_contains
+    path: restock.json
+    text: "fig"
+  - type: file_not_contains
+    path: restock.json
+    text: "eggplant"
+verify_command: "{python} -c \"import json; d=json.load(open('restock.json')); assert d=={'apple':5,'cherry':5,'durian':5}, d\""

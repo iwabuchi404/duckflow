@@ -7,14 +7,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from evals.runner import SCENARIO_DIR, _run_checks, load_scenarios  # noqa: E402
 
-GAUNTLET_IDS = ["rename-hard", "recover-quad", "needle-wide"]
+GAUNTLET_IDS = [
+    "rename-hard",
+    "recover-quad",
+    "needle-wide",
+    "no-change-hard",
+    "ambiguous-gauntlet",
+    "spec-build",
+]
 
 
 def test_all_glob_excludes_gauntlet() -> None:
     """Routine --all runs (top-level glob) never pick up Gauntlet scenarios."""
-    top_level_ids = [
-        path.stem for path in sorted(SCENARIO_DIR.glob("*.yaml"))
-    ]
+    top_level_ids = [path.stem for path in sorted(SCENARIO_DIR.glob("*.yaml"))]
     for scenario_id in GAUNTLET_IDS:
         assert scenario_id not in top_level_ids
 
@@ -22,9 +27,7 @@ def test_all_glob_excludes_gauntlet() -> None:
 def test_gauntlet_scenarios_load_with_fixtures() -> None:
     """Gauntlet scenarios load by id and resolve their fixture directories."""
     files = sorted(SCENARIO_DIR.rglob("*.yaml"))
-    scenarios = {
-        s["id"]: s for s in load_scenarios(files) if s["id"] in GAUNTLET_IDS
-    }
+    scenarios = {s["id"]: s for s in load_scenarios(files) if s["id"] in GAUNTLET_IDS}
     assert set(scenarios) == set(GAUNTLET_IDS)
     for scenario in scenarios.values():
         fixture = Path(scenario["_path"]).parent / scenario["fixture"]
@@ -35,9 +38,7 @@ def test_recover_orders_check_accepts_correct_variants(tmp_path: Path) -> None:
     """The orders.py check accepts correct spellings, rejects the bug."""
     scenarios = {
         s["id"]: s
-        for s in load_scenarios(
-            [SCENARIO_DIR / "gauntlet" / "recover-quad.yaml"]
-        )
+        for s in load_scenarios([SCENARIO_DIR / "gauntlet" / "recover-quad.yaml"])
     }
     check = next(
         c
