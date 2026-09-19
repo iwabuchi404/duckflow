@@ -1,3 +1,10 @@
+### 2026-09-19: Holdout v1 初回フルラン（4課題×3モデル×3回=36試行）
+- 結果: **DS 12/12・GLM 8/12・LFM 4/12**。ベースライン `evals/baselines/holdout-v1-main3.json`。
+- **一般化判定**: DS は holdout でも全通過 — dev 18/18 は過適合でなく実力。GLM 67%（dev 78%）は妥当な低下幅、LFM 33%（dev 33%）は一致 — 改善が dev 専用パターンへの過適合でなかったことを確認。
+- GLM 詳細: `spec-build-stats` 3/3（dev spec-build の timeout 型が消えた）、`recover-trio` 2/3、`move-symbol` 2/3（r1 は1レスポンス814アクション出力の新記録・dedupで808除去）、**`no-change-cache` 1/3** — restraint 失敗が holdout でも再現（「リーク」を2回修正してしまった）。モデル固有の弱点として確定。
+- LFM 詳細: `spec-build-stats` 2/3、`move-symbol`/`no-change-cache` 各1/3、`recover-trio` 0/3（収束不能）。
+- **新発見のハーネス側ギャップ**: ①`replace_function` は `/workspace` 正規化対象外で File not found（正規化カバレッジの穴）、②`cd /workspace` が run_command のシェル側で解決不能（LFM が繰返し消費する最大コスト要因）、③LFM が find パラメータに `\n`/`\.` をリテラル記述する癖（正規表現エスケープ混同、モデル側起因）。
+
 ### 2026-09-19: 停滞ゲート実装（A型メタchurn＋C型空ターン、B型は既存timeoutで十分と結論）
 - **背景**: GLM v3 の残り4失敗が全て「エラーなし停滞」型だった — spec-build r2 は propose_plan 連発でtimeout、no-change-hard r2 は空応答でLOOP_EXHAUSTED。既存の停滞検知は propose_plan を「内容が毎回異なりうる」として明示除外し、空応答ターンは `consecutive_errors==0` のため no_progress_count をリセットしていた（根本原因特定）。
 - **A型（メタアクションchurn）**: `pacemaker.py` に `META_ACTIONS`（propose_plan/generate_tasks/mark_*/note）連続ストリークを追加。CONTROL（response/exit/duck_call）は中立（増やさずリセットもしない）。3回連続で `no_progress_stall` Correction Guide警告、4回以降は `check_stall_block` が実行前拒否し三択（実アクション/`::response`/`::duck_call`）を提示。ブロックはエラー記録されるため持続churnはERROR_CASCADEに自然接続。

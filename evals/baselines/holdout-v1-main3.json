@@ -1,0 +1,146 @@
+{
+  "name": "holdout-v1-main3",
+  "recorded_at": "2026-09-19T16:39:34.791690+00:00",
+  "git": {
+    "head": "64a018f0a00fb36f01622d71b674c5e1b628c21e",
+    "dirty": false,
+    "porcelain": "",
+    "diff_sha": ""
+  },
+  "run_commits": [
+    "64a018f0a00fb36f01622d71b674c5e1b628c21e"
+  ],
+  "scenario_shas": {
+    "move-symbol": "38eb7495b6b1",
+    "no-change-cache": "7e7cb24a6515",
+    "recover-trio": "3fe5ee062c1d",
+    "spec-build-stats": "1cca528d6e90"
+  },
+  "results_dirs": [
+    "evals\\results\\holdout-v1\\ds_symops",
+    "evals\\results\\holdout-v1\\glm_symops",
+    "evals\\results\\holdout-v1\\lfm_native"
+  ],
+  "stats": {
+    "move-symbol|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 26678,
+      "median_loops": 4,
+      "median_seconds": 29.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-cache|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 23652,
+      "median_loops": 4,
+      "median_seconds": 37.2,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-trio|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 56882,
+      "median_loops": 8,
+      "median_seconds": 68.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build-stats|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 40887,
+      "median_loops": 6,
+      "median_seconds": 49.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "move-symbol|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 86240,
+      "median_loops": 9,
+      "median_seconds": 64.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-cache|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 63715,
+      "median_loops": 10,
+      "median_seconds": 40.2,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-trio|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 75327,
+      "median_loops": 10,
+      "median_seconds": 64.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build-stats|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 38709,
+      "median_loops": 6,
+      "median_seconds": 35.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "move-symbol|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 149678,
+      "median_loops": 20,
+      "median_seconds": 71.7,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-cache|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 48654,
+      "median_loops": 10,
+      "median_seconds": 27.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-trio|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 176613,
+      "median_loops": 25,
+      "median_seconds": 119.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build-stats|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 88701,
+      "median_loops": 15,
+      "median_seconds": 34.7,
+      "statuses": {
+        "completed": 3
+      }
+    }
+  }
+}
