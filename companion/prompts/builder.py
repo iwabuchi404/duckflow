@@ -273,6 +273,13 @@ class PromptBuilder:
             "  If the work is already complete, report the RESULT\n"
             "  (past tense), not a plan of what you will do."
         ),
+        "repeated_failure": (
+            "  You sent the SAME failing call multiple times — it cannot\n"
+            "  succeed unchanged. Change the form, not the retry count:\n"
+            "  Step 1: `::read_file @path` — re-confirm current content\n"
+            "  Step 2: retry with a corrected call, or switch tools\n"
+            "          (e.g. ::write_file for a full rewrite)."
+        ),
     }
 
     # Native variants without Sym-Ops grammar (only keys that differ).
@@ -306,6 +313,13 @@ class PromptBuilder:
             "  or a final plain-text message."
         ),
         "unknown_tool": ("  Call only the tools listed in your available tools."),
+        "repeated_failure": (
+            "  You sent the SAME failing call multiple times — it cannot\n"
+            "  succeed unchanged. Change the form, not the retry count:\n"
+            "  Step 1: call `read_file` — re-confirm current content\n"
+            "  Step 2: retry with corrected arguments, or switch tools\n"
+            "          (e.g. write_file for a full rewrite)."
+        ),
         "premature_response": (
             "  You announced work but executed nothing. Call the tools\n"
             "  now (edit_file / write_file / run_command ...).\n"

@@ -1,3 +1,12 @@
+### 2026-09-19: 同一失敗のターン跨ぎ連発への段階エスカレーション（A+B実装）
+- 背景: GLM rename-hard で空body edit_file が6連発（142k/93k tokens消費）。Correction Guideはターン限りの助言で、連続エラーカウンタは成功を挟むとリセットされるため捉えられなかった。
+- 失敗シグネチャ追跡（`companion/modules/pacemaker.py`）: `_call_failures`（tool+正規化params）と `_kind_failures`（tool+error kind）を新設。`consecutive_errors` と違い成功を挟んでも持続し、成功はそのツールのカウンタのみリセット（read_file成功がedit_file失敗を帳消しにしない）。`_error_kind` は `Reason:` 行またはペイロード先頭から正規化抽出。
+- 3段階エスカレーション: (1) 3回目の同一失敗で `repeated_failure` SyntaxErrorInfo を追加し Correction Guide を「STOP: 同じ呼出しは成功しない、read_fileしてから別形式で」と強化、(2) 4回目以降の verbatim 繰返しは `check_repeat_block` が**実行前に拒否**（`[BLOCKED]` メッセージ＋read_file→別形式の回復手順）、(3) 同一シグネチャ失敗5回で ERROR_CASCADE を発火（成功交じりでも検出、従来の連続3回/10回中5回と併存）。
+- 安全性設計: ハードブロックは contract エラー（形式/パラメータ/権限の決定的失敗）のみ — `find_not_matched`・pytest exit code 等の状態依存エラーは workspace 変更で成功し得るため絶対ブロックしない。別引数の正当な試行錯誤はシグネチャが異なり誤判定しない。native protocol は `_record_native_event`/`sanitize_tool_references` 経由で中立。
+- 実装箇所: `core_action_executor.py`（実行前ブロック＋`_handle_error` 内エスカレーション）、`core_action_results.py`（`build_repeated_failure_syntax_error`）、`builder.py`（symops/native 両 Correction Guide に `repeated_failure` 例）。
+- テスト: 新規 `tests/test_repeated_failure_block.py` 12件 — シグネチャ集計・別引数非グループ化・成功交じり持続・同ツール成功リセット・ブロック発火/閾値未満・状態依存エラー非ブロック・エスカレーション3回目・成功交じりカスケード・多様失敗非カスケード・reset・contract分類。
+- 検証: `uv run python -X utf8 -m pytest tests/ -q` → **819 passed / 2 skipped**（807から+12）。
+
 ### 2026-09-19: Gauntlet v2 詳細分析からの3改善 — 採点の穴修正・premature応答ガード・パス正規化
 - 背景: 54試行の詳細分析で3つの製品/採点課題を特定。(1) LFM の no-change-hard 3/3 は偽陽性（パス迷走→不要質問→exit で「無変更」だけが成立）。(2) DS の全失敗は「修正します」と応答だけして編集未実行の premature return。(3) LFM の2課題全滅は `/workspace/...` や `/tmp/...` パスを「拒否だけ」されて回復不能になったのが直接原因。
 - no-change-hard 採点の穴修正（`evals/`）:

@@ -223,6 +223,40 @@ def build_action_exception_syntax_error(
     return None
 
 
+def build_repeated_failure_syntax_error(action: Action, count: int) -> SyntaxErrorInfo:
+    """
+    Build escalated feedback for a call that keeps failing identically.
+
+    The standard per-error hint is injected for one turn only; a model that
+    resends the same malformed call across turns (observed: GLM resent an
+    empty-body edit_file 6x, burning ~140k tokens) needs an explicit
+    stop-and-change-form message.
+
+    Args:
+        action: The repeatedly-failing action.
+        count: How many times this call/error kind has already failed.
+
+    Returns:
+        SyntaxErrorInfo with a hard-stop recovery instruction.
+    """
+    target = str(
+        action.parameters.get("path") or action.parameters.get("command") or ""
+    )
+    return SyntaxErrorInfo(
+        error_type="repeated_failure",
+        raw_snippet=f"{action.name}({target}) repeated x{count}",
+        correction_hint=(
+            f"STOP: '{action.name}' has already failed {count} times the "
+            "same way. Repeating it unchanged CANNOT succeed. Required "
+            f"recovery: (1) ::read_file @{target or 'path/to/file'} to "
+            "re-confirm the current state, (2) retry with a DIFFERENT form "
+            "— for edit_file the <<< >>> body must contain <<<<<<< SEARCH / "
+            "======= / >>>>>>> REPLACE markers; if you cannot produce that "
+            "format, use ::write_file to rewrite the file."
+        ),
+    )
+
+
 def build_dropped_params_syntax_error(
     action: Action, dropped_params: set[str], func: Callable[..., Any]
 ) -> SyntaxErrorInfo:

@@ -5,6 +5,7 @@ Duck Pacemaker - エージェントの健康状態と実行状況を監視し、
 from typing import List, Optional, Any, Dict
 import json
 import logging
+import re
 from companion.state.agent_state import (
     AgentState,
     Action,
@@ -15,6 +16,49 @@ from companion.config.config_loader import config
 from companion.config.tier_profile import TierProfile
 
 logger = logging.getLogger(__name__)
+
+# Repeated-failure escalation thresholds.
+# WARN: at the Nth identical failure the Correction Guide is escalated to a
+#       "stop, change form" message instead of the standard per-error hint.
+# BLOCK: a verbatim repeat of a call that already failed N times with a
+#        contract (format/permission) error is refused BEFORE execution —
+#        deterministic failures cannot succeed by resending.
+# CASCADE: N repeated failures of one signature feed ERROR_CASCADE even
+#          when successes interleave and reset consecutive_errors.
+REPEAT_WARN_THRESHOLD = 3
+REPEAT_BLOCK_THRESHOLD = 3
+REPEAT_CASCADE_THRESHOLD = 5
+
+# Error kinds that fail deterministically regardless of workspace state.
+# Only these are eligible for the pre-execution hard block. State-dependent
+# failures (SEARCH mismatch, command exit codes, file-not-found) must never
+# be blocked — rerunning after a fix is legitimate and may succeed.
+_CONTRACT_ERROR_MARKERS = (
+    "no find/replace details",
+    "missing required",
+    "unexpected param",
+    "unknown tool",
+    "invalid regex",
+    "does not accept parameter",
+    "outside workspace",
+    "access denied",
+)
+
+
+def _is_contract_error(error_kind: str) -> bool:
+    """Return whether an error kind is a deterministic contract failure.
+
+    Contract errors (malformed call, wrong params, denied path) cannot
+    succeed on a verbatim retry; state-dependent errors can.
+
+    Args:
+        error_kind: Normalized error-kind token from _error_kind.
+
+    Returns:
+        True when the error is inherent to the call form itself.
+    """
+    kind = error_kind.lower()
+    return any(marker in kind for marker in _CONTRACT_ERROR_MARKERS)
 
 
 class DuckPacemaker:
@@ -36,6 +80,13 @@ class DuckPacemaker:
             []
         )  # {action, result_summary, is_error}
         self.consecutive_errors = 0
+        # Repeated-failure signature tracking. Unlike consecutive_errors
+        # these survive interleaved successes — a success only clears the
+        # counters of the tool that succeeded.
+        #   _call_failures: "name|params" -> (count, last error kind)
+        #   _kind_failures: (name, error kind) -> count
+        self._call_failures: dict[str, tuple] = {}
+        self._kind_failures: dict[tuple, int] = {}
 
     def calculate_max_loops(self, tier_profile: Optional[TierProfile] = None) -> int:
         """
@@ -118,9 +169,157 @@ class DuckPacemaker:
 
         if is_error:
             self.consecutive_errors += 1
+            self._record_failure_signature(action, summary)
             logger.debug("Error recorded (consecutive=%d)", self.consecutive_errors)
         else:
             self.consecutive_errors = 0
+            self._clear_failure_signatures(action.name)
+
+    def _call_signature(self, action: Action) -> str:
+        """Signature identifying a verbatim-repeat call (tool + params).
+
+        Args:
+            action: The action being checked.
+
+        Returns:
+            "name|normalized-params" string; identical when the model
+            resends literally the same call.
+        """
+        params = {k: str(v).strip()[:200] for k, v in (action.parameters or {}).items()}
+        return f"{action.name}|{self._normalize_params(params)}"
+
+    @staticmethod
+    def _error_kind(result_summary: str) -> str:
+        """Extract a stable error-category token from a failure result.
+
+        Args:
+            result_summary: The recorded error message
+                ("Action 'x' failed: Reason: ...").
+
+        Returns:
+            Lowercased kind token — the "Reason:" line when present,
+            otherwise the normalized payload prefix.
+        """
+        match = re.search(r"Reason:\s*([^\n]+)", result_summary)
+        if match:
+            return " ".join(match.group(1).split()).lower()[:100]
+        text = result_summary.split("failed:", 1)[-1]
+        return " ".join(text.split()).lower()[:100]
+
+    def _record_failure_signature(self, action: Action, summary: str) -> None:
+        """Count this failure under its call and error-kind signatures.
+
+        Args:
+            action: The failed action.
+            summary: Recorded result summary containing the error text.
+        """
+        kind = self._error_kind(summary)
+        sig = self._call_signature(action)
+        count, _ = self._call_failures.get(sig, (0, ""))
+        self._call_failures[sig] = (count + 1, kind)
+        kind_key = (action.name, kind)
+        self._kind_failures[kind_key] = self._kind_failures.get(kind_key, 0) + 1
+
+    def _clear_failure_signatures(self, tool_name: str) -> None:
+        """Drop failure counters for a tool that just succeeded.
+
+        Per-tool clearing preserves other tools' counts — a successful
+        read_file between failed edits must not forgive the edit errors.
+
+        Args:
+            tool_name: Name of the tool whose counters are reset.
+        """
+        self._call_failures = {
+            sig: entry
+            for sig, entry in self._call_failures.items()
+            if not sig.startswith(f"{tool_name}|")
+        }
+        self._kind_failures = {
+            key: count
+            for key, count in self._kind_failures.items()
+            if key[0] != tool_name
+        }
+
+    def repeated_call_count(self, action: Action) -> int:
+        """Failures recorded for this exact call (tool + same params).
+
+        Args:
+            action: Action to check against recorded failures.
+
+        Returns:
+            Number of previous identical-call failures (0 if none).
+        """
+        return self._call_failures.get(self._call_signature(action), (0, ""))[0]
+
+    def repeated_kind_count(self, action: Action) -> int:
+        """Highest failure count among this tool's error kinds.
+
+        Args:
+            action: Action to check against recorded failures.
+
+        Returns:
+            Max count over (name, kind) entries for this tool — catches
+            "same error, different args" misuse patterns.
+        """
+        counts = [
+            count
+            for (name, _kind), count in self._kind_failures.items()
+            if name == action.name
+        ]
+        return max(counts, default=0)
+
+    def repeat_escalation_count(self, action: Action) -> int:
+        """Repeat count driving Correction Guide escalation, or 0.
+
+        Args:
+            action: Action that just failed.
+
+        Returns:
+            The larger of call-signature and kind-signature counts when
+            it reaches REPEAT_WARN_THRESHOLD, otherwise 0.
+        """
+        count = max(self.repeated_call_count(action), self.repeated_kind_count(action))
+        return count if count >= REPEAT_WARN_THRESHOLD else 0
+
+    def check_repeat_block(self, action: Action) -> str | None:
+        """Refuse a verbatim repeat of a deterministically-doomed call.
+
+        Only contract errors (format/params/permission) are blocked — an
+        identical call can never succeed. State-dependent failures
+        (SEARCH mismatch, command exit codes) are never blocked because
+        the workspace may have changed between attempts.
+
+        Args:
+            action: Action about to be executed.
+
+        Returns:
+            A refusal message when the call should be skipped, else None.
+        """
+        count, kind = self._call_failures.get(self._call_signature(action), (0, ""))
+        if count < REPEAT_BLOCK_THRESHOLD or not _is_contract_error(kind):
+            return None
+        target = str(
+            action.parameters.get("path") or action.parameters.get("command") or ""
+        )
+        return (
+            f"[BLOCKED] '{action.name}' was refused: the identical call "
+            f"already failed {count} times with the same error — resending "
+            f"it cannot succeed. Recovery: (1) ::read_file @{target or 'path'} "
+            "to re-confirm the current state, (2) emit a DIFFERENT call form "
+            "— for edit_file include a <<< >>> body with <<<<<<< SEARCH / "
+            "======= / >>>>>>> REPLACE markers, or use ::write_file to "
+            "rewrite the file."
+        )
+
+    def _max_repeated_failures(self) -> int:
+        """Largest repeated-failure count across both signature levels.
+
+        Returns:
+            Max of verbatim-call counts and tool+kind counts.
+        """
+        call_max = max((c for c, _ in self._call_failures.values()), default=0)
+        kind_max = max(self._kind_failures.values(), default=0)
+        return max(call_max, kind_max)
 
     def check_health(self) -> Optional[InterventionReason]:
         """健康状態を診断し、介入が必要ならその理由を返す。
@@ -221,6 +420,13 @@ class DuckPacemaker:
         """エラー連鎖検知"""
         # 連続3回エラー
         if self.consecutive_errors >= 3:
+            return True
+
+        # 同一シグネチャの連発 — 成功を挟んで consecutive_errors が
+        # リセットされても検出できる（Correction Guideが無視されている）。
+        # 閾値は warn/block より高く、ガイド付き回復に先に機会を与える。
+        if self._max_repeated_failures() >= REPEAT_CASCADE_THRESHOLD:
+            logger.warning("Error cascade: repeated identical failure signature")
             return True
 
         # 直近10回中5回以上エラー（50%以上のエラー率）
@@ -326,4 +532,6 @@ class DuckPacemaker:
         self.loop_count = 0
         self.consecutive_errors = 0
         self.execution_history = []
+        self._call_failures = {}
+        self._kind_failures = {}
         logger.debug("Pacemaker reset")

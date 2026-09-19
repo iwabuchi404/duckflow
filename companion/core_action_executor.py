@@ -24,6 +24,7 @@ from companion.core_action_results import (
     build_action_exception_syntax_error,
     build_denial_context,
     build_dropped_params_syntax_error,
+    build_repeated_failure_syntax_error,
     build_tool_result_message,
     get_approval_request,
 )
@@ -172,7 +173,7 @@ async def execute_actions(agent, action_list) -> list:
         ui.print_warning(
             f"アクション数が上限(6)を超えたため、末尾{dropped}件を切り捨てました。"
         )
-        for action in pre_limit_actions[len(pre_limit_actions) - dropped:]:
+        for action in pre_limit_actions[len(pre_limit_actions) - dropped :]:
             _record_native_event(
                 action,
                 "dropped",
@@ -196,14 +197,21 @@ async def execute_actions(agent, action_list) -> list:
         ui.print_result(str(error_content), is_error=True)
 
         _queue_user_message(
-            build_tool_result_message(
-                action, error_content, status=ToolStatus.ERROR
-            ),
+            build_tool_result_message(action, error_content, status=ToolStatus.ERROR),
         )
 
         results.append(error_msg)
 
         agent.pacemaker.update_vitals(action, error_msg, is_error=True)
+
+        # Escalate the Correction Guide when this call/error kind keeps
+        # failing across turns — the standard one-turn hint is being
+        # ignored (observed: GLM resent an empty-body edit_file 6x).
+        repeat_n = agent.pacemaker.repeat_escalation_count(action)
+        if repeat_n:
+            agent.state.last_syntax_errors.append(
+                build_repeated_failure_syntax_error(action, repeat_n)
+            )
 
         dur_ms = (t1 - t0) * 1000
         agent.timeline.record(
@@ -214,7 +222,9 @@ async def execute_actions(agent, action_list) -> list:
             result_summary=error_msg,
         )
         event_logger.log_action_end(
-            action.name, dur_ms, is_error=True,
+            action.name,
+            dur_ms,
+            is_error=True,
             result_len=len(error_msg),
         )
 
@@ -225,15 +235,9 @@ async def execute_actions(agent, action_list) -> list:
                 logger.warning(
                     f"Fail-fast: {consecutive_errors} consecutive errors, aborting {remaining} remaining actions"
                 )
-                ui.print_warning(
-                    build_fail_fast_warning(
-                        consecutive_errors, remaining
-                    )
-                )
+                ui.print_warning(build_fail_fast_warning(consecutive_errors, remaining))
                 _queue_user_message(
-                    build_fail_fast_history_message(
-                        consecutive_errors, remaining
-                    ),
+                    build_fail_fast_history_message(consecutive_errors, remaining),
                 )
             return True
         return False
@@ -247,13 +251,13 @@ async def execute_actions(agent, action_list) -> list:
             # response actions the model never explicitly chose. Executing them
             # would show unintended content to the user; the loop-level guard
             # (should_return_to_user) asks for an explicit action instead.
-            if action.name == "response" and getattr(
-                action, "auto_generated", False
-            ):
+            if action.name == "response" and getattr(action, "auto_generated", False):
                 logger.warning(
                     "Skipping auto-generated ::response (not model-explicit)."
                 )
-                results.append("[SKIPPED] auto-generated response (awaiting explicit action)")
+                results.append(
+                    "[SKIPPED] auto-generated response (awaiting explicit action)"
+                )
                 continue
 
             # --- Skip redundant mode-switch actions ---
@@ -262,7 +266,9 @@ async def execute_actions(agent, action_list) -> list:
             _current_mode = agent.state.get_context_mode()
             if action.name == "investigate" and _current_mode == "investigation":
                 logger.warning("Skipping investigate: already in investigation mode")
-                ui.print_warning("investigate: 既にInvestigation Modeです。::read_file等で観察してください")
+                ui.print_warning(
+                    "investigate: 既にInvestigation Modeです。::read_file等で観察してください"
+                )
                 _record_native_event(
                     action,
                     "skipped",
@@ -275,9 +281,7 @@ async def execute_actions(agent, action_list) -> list:
             # Investigation mode is read-only. File mutations are blocked and
             # reported as syntax feedback so the agent explicitly closes
             # investigation with ::finish_investigation before editing.
-            if should_block_investigation_edit(
-                action, agent.state.get_context_mode()
-            ):
+            if should_block_investigation_edit(action, agent.state.get_context_mode()):
                 logger.info(
                     f"Blocking {action.name}: file mutations are not allowed "
                     f"during Investigation Mode"
@@ -292,6 +296,33 @@ async def execute_actions(agent, action_list) -> list:
                 )
                 agent.pacemaker.update_vitals(action, block.message, is_error=True)
                 results.append(block.message)
+                continue
+
+            # --- Repeated identical-failure block ---
+            # A verbatim repeat of a call that already failed with a
+            # contract (format/permission) error is deterministically
+            # doomed — refuse it before execution so the model cannot
+            # burn turns resending the same malformed call. Recorded as
+            # an error so persistent repeats still feed the cascade.
+            repeat_refusal = agent.pacemaker.check_repeat_block(action)
+            if repeat_refusal is not None:
+                logger.warning(
+                    f"Blocked doomed repeat of '{action.name}' "
+                    f"({agent.pacemaker.repeated_call_count(action)} prior failures)"
+                )
+                _record_native_event(action, "blocked", False, repeat_refusal)
+                agent.state.last_syntax_errors.append(
+                    build_repeated_failure_syntax_error(
+                        action, agent.pacemaker.repeated_call_count(action)
+                    )
+                )
+                _queue_user_message(
+                    build_tool_result_message(
+                        action, repeat_refusal, status=ToolStatus.ERROR
+                    ),
+                )
+                agent.pacemaker.update_vitals(action, repeat_refusal, is_error=True)
+                results.append(repeat_refusal)
                 continue
 
             # --- Approval Check ---
@@ -367,7 +398,11 @@ async def execute_actions(agent, action_list) -> list:
 
                     if action.name not in ("response",):
                         # Multi-stage summarization pipeline (S3-1)
-                        result_str = result if isinstance(result, str) else serialize_to_text(result)
+                        result_str = (
+                            result
+                            if isinstance(result, str)
+                            else serialize_to_text(result)
+                        )
                         history_content, _cache_id = summarize_result(
                             action.name, result_str, agent
                         )
@@ -393,7 +428,12 @@ async def execute_actions(agent, action_list) -> list:
                     results.append(result)
 
                     # Invalidate repo map cache for file-modifying actions
-                    if action.name in ("write_file", "edit_file", "delete_file", "delete_lines"):
+                    if action.name in (
+                        "write_file",
+                        "edit_file",
+                        "delete_file",
+                        "delete_lines",
+                    ):
                         file_path = action.parameters.get("path", "")
                         if file_path:
                             try:
@@ -416,7 +456,9 @@ async def execute_actions(agent, action_list) -> list:
                         result_summary=_result_str,
                     )
                     event_logger.log_action_end(
-                        action.name, _dur_ms, is_error=False,
+                        action.name,
+                        _dur_ms,
+                        is_error=False,
                         result_len=len(_result_str),
                     )
 
