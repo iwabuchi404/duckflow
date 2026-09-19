@@ -71,6 +71,7 @@ from companion.core_loop_helpers import (
     check_and_prune_if_needed,
     record_parse_error_if_any,
     should_return_to_user,
+    turn_was_unproductive,
 )
 
 
@@ -124,6 +125,7 @@ class DuckAgent:
 
         # Initialize CoreActions (extracted action handlers)
         from companion.core_actions import CoreActions
+
         self._actions = CoreActions(self)
 
         register_default_tools(self)
@@ -330,7 +332,9 @@ class DuckAgent:
 
                         tool_protocol = resolve_protocol()
                         mode_value = self.state.current_mode.value
-                        prompt_builder = PromptBuilder(self.state, self.llm.tier_profile)
+                        prompt_builder = PromptBuilder(
+                            self.state, self.llm.tier_profile
+                        )
                         base_messages = prompt_builder.build_messages(
                             self.get_tool_descriptions(mode_value),
                             protocol=tool_protocol,
@@ -482,9 +486,16 @@ class DuckAgent:
                                 break
 
                             # --- No-progress counter ---
-                            # Only count as "no progress" when actions failed.
-                            # Successful reads/writes during investigation are progress.
-                            if self.pacemaker.consecutive_errors > 0:
+                            # Count iterations that produced nothing: tool
+                            # errors AND turns that ended only on skipped
+                            # responses (empty/auto/premature) with no real
+                            # action. Without the latter, empty-response
+                            # churn spins until LOOP_EXHAUSTED (GLM
+                            # no-change-hard r2).
+                            if (
+                                self.pacemaker.consecutive_errors > 0
+                                or turn_was_unproductive(action_list, self.state)
+                            ):
                                 no_progress_count += 1
                             else:
                                 no_progress_count = 0

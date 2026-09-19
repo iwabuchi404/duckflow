@@ -10,6 +10,7 @@ import math
 import re
 from typing import TYPE_CHECKING
 
+from companion.modules.pacemaker import CONTROL_ACTIONS, META_ACTIONS
 from companion.state.agent_state import ActionList, SyntaxErrorInfo
 
 if TYPE_CHECKING:
@@ -237,6 +238,36 @@ def _announces_pending_work(message: str) -> bool:
         True when the message reads like a plan/intent rather than a result.
     """
     return bool(_PREMATURE_RESPONSE_RE.search(message))
+
+
+# Responses that were detected and skipped by should_return_to_user —
+# the model produced a turn-ending action but it carried no usable result.
+_SKIPPED_RESPONSE_ERRORS = {"empty_response", "auto_response", "premature_response"}
+
+
+def turn_was_unproductive(action_list: ActionList, state) -> bool:
+    """Detect turns that produced neither work nor a handoff.
+
+    A turn whose only outputs are skipped responses (empty, auto-generated,
+    or premature announcements) made no progress. Turns containing real
+    actions are excluded — attempted work is already covered by
+    consecutive_errors. Feeding these into the no-progress counter stops
+    empty-response churn from spinning until loop exhaustion (observed:
+    GLM no-change-hard r2 emitted empty responses until LOOP_EXHAUSTED).
+
+    Args:
+        action_list: The ActionList that was just executed.
+        state: AgentState carrying this turn's syntax errors.
+
+    Returns:
+        True when the turn ended on skipped responses with no real action.
+    """
+    if not any(
+        e.error_type in _SKIPPED_RESPONSE_ERRORS for e in state.last_syntax_errors
+    ):
+        return False
+    unproductive = META_ACTIONS | CONTROL_ACTIONS
+    return not any(a.name not in unproductive for a in action_list.actions)
 
 
 def should_return_to_user(action_list: ActionList, state) -> bool:

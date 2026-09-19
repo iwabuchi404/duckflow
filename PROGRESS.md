@@ -1,3 +1,11 @@
+### 2026-09-19: 停滞ゲート実装（A型メタchurn＋C型空ターン、B型は既存timeoutで十分と結論）
+- **背景**: GLM v3 の残り4失敗が全て「エラーなし停滞」型だった — spec-build r2 は propose_plan 連発でtimeout、no-change-hard r2 は空応答でLOOP_EXHAUSTED。既存の停滞検知は propose_plan を「内容が毎回異なりうる」として明示除外し、空応答ターンは `consecutive_errors==0` のため no_progress_count をリセットしていた（根本原因特定）。
+- **A型（メタアクションchurn）**: `pacemaker.py` に `META_ACTIONS`（propose_plan/generate_tasks/mark_*/note）連続ストリークを追加。CONTROL（response/exit/duck_call）は中立（増やさずリセットもしない）。3回連続で `no_progress_stall` Correction Guide警告、4回以降は `check_stall_block` が実行前拒否し三択（実アクション/`::response`/`::duck_call`）を提示。ブロックはエラー記録されるため持続churnはERROR_CASCADEに自然接続。
+- **C型（空ターン）**: `core_loop_helpers.py` に `turn_was_unproductive()` を追加 — 「スキップされたresponse（empty/auto/premature）のみで実アクションなし」のターンを検出し、`core.py` の既存 no_progress→duck_call 漏斗（3回）に合流。新規カウンタ不要の最小実装。
+- **B型（応答が巨大/低速）**: 実装せず。「応答が長い」は故障ではなくモデル速度特性 — 既存の2層timeout（リクエスト`llm_timeout_seconds`＋ラン`timeout_seconds`、共に設定値）で十分。タイムアウトは `status="timeout"` として分類記録済み。ハング検出・ストリーム監視は複雑さに見合わず見送り。
+- 設計判断: 「止められるものは構造的に止め、治せないものは分類つきで早期に諦める」— A+Bの連発対策と同思想。propose_plan は正当なアクションなので一律ブロックせず、通知→行動空間制限の2段階。
+- テスト: `tests/test_stall_gate.py`（16件）— ストリーク増減・制御アクション中立・warn/block閾値・ブロック持続・turn_was_unproductive全分岐。全スイート **838 passed / 2 skipped**。
+
 ### 2026-09-19: ambiguous-spontaneous 再評価（0/9不変）＋ Holdout Gauntlet 4課題新設
 - **ambiguous-spontaneous 再評価**（Main3×3回、現行コード）: DS/GLM/LFM いずれも **0/3**。全モデルが「必要な商品」の曖昧さを認識せず全商品を推測出力（GLM r3 は "This is a CLEAR task. No ambiguity" と明確に誤判断）。prematureガード/パス正規化/連発対策は意味判断の欠陥に効かない — ambiguous-gauntlet（明示指示あり、全モデル高パス）と spontaneous（指示なし、全滅）が別物であることが実証され、H-1/Decision Engine 担当の意味判断層の空白を確認。結果 `evals/results/spontaneous-v3/`。
 - **Holdout Gauntlet 新設**（`evals/scenarios/holdout/`）: dev gauntlet への過適合を検出するため、同能力軸・別失敗パターンの4課題を凍結セットとして追加（`--all` には含まれず、明示 `--scenario` 指定のみ・マイルストーン時のみ実行）。

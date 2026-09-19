@@ -30,6 +30,32 @@ REPEAT_WARN_THRESHOLD = 3
 REPEAT_BLOCK_THRESHOLD = 3
 REPEAT_CASCADE_THRESHOLD = 5
 
+# No-progress stall gate thresholds for bookkeeping churn.
+# WARN: after N consecutive meta actions the Correction Guide warns that
+#       nothing has changed and names the three exits.
+# FUNNEL: further meta actions are refused BEFORE execution — the model
+#         must act, report (::response), or ask (::duck_call). Unlike
+#         repeat blocking this fires on the streak, not parameters, so
+#         legitimate re-planning after real work is unaffected.
+STALL_WARN_THRESHOLD = 3
+STALL_FUNNEL_THRESHOLD = 4
+
+# Actions that produce no observable change — planning, notes, and task
+# bookkeeping. Consecutive-only tracking: a plan followed by real work is
+# legitimate; a streak of plans is churn (observed: GLM spec-build r2
+# emitted propose_plan in a loop until timeout).
+META_ACTIONS = {
+    "propose_plan",
+    "generate_tasks",
+    "mark_step_complete",
+    "mark_task_complete",
+    "note",
+}
+
+# Turn-control actions neither advance nor reset the meta streak — an
+# interleaved ::response does not forgive surrounding plan churn.
+CONTROL_ACTIONS = {"response", "exit", "duck_call"}
+
 # Error kinds that fail deterministically regardless of workspace state.
 # Only these are eligible for the pre-execution hard block. State-dependent
 # failures (SEARCH mismatch, command exit codes, file-not-found) must never
@@ -111,6 +137,9 @@ class DuckPacemaker:
         #   _kind_failures: (name, error kind) -> count
         self._call_failures: dict[str, tuple] = {}
         self._kind_failures: dict[tuple, int] = {}
+        # Consecutive bookkeeping/meta actions with no real action between
+        # them. Control actions (response/exit/duck_call) are neutral.
+        self.meta_streak = 0
 
     def calculate_max_loops(self, tier_profile: Optional[TierProfile] = None) -> int:
         """
@@ -198,6 +227,11 @@ class DuckPacemaker:
         else:
             self.consecutive_errors = 0
             self._clear_failure_signatures(action.name)
+
+        if action.name in META_ACTIONS:
+            self.meta_streak += 1
+        elif action.name not in CONTROL_ACTIONS:
+            self.meta_streak = 0
 
     def _call_signature(self, action: Action) -> str:
         """Signature identifying a verbatim-repeat call (tool + params).
@@ -346,6 +380,49 @@ class DuckPacemaker:
             "— for edit_file include a <<< >>> body with <<<<<<< SEARCH / "
             "======= / >>>>>>> REPLACE markers, or use ::write_file to "
             "rewrite the file."
+        )
+
+    def stall_escalation_count(self, action: Action) -> int:
+        """Meta streak when this action is churn past the warn level.
+
+        Args:
+            action: Action that just executed.
+
+        Returns:
+            The current streak when the action is a meta action and the
+            streak reached STALL_WARN_THRESHOLD, otherwise 0 — mirrors
+            repeat_escalation_count for Correction Guide injection.
+        """
+        if action.name not in META_ACTIONS:
+            return 0
+        return self.meta_streak if self.meta_streak >= STALL_WARN_THRESHOLD else 0
+
+    def check_stall_block(self, action: Action) -> str | None:
+        """Refuse further meta actions once churn passes the funnel level.
+
+        Meta actions are individually valid, so this fires on the streak
+        rather than identical parameters. The refusal names the three
+        exits so a degraded model is funnelled toward acting, reporting,
+        or asking instead of planning again. Blocked attempts record an
+        error, so persistent churn still feeds ERROR_CASCADE.
+
+        Args:
+            action: Action about to be executed.
+
+        Returns:
+            A refusal message when the call should be skipped, else None.
+        """
+        if action.name not in META_ACTIONS:
+            return None
+        if self.meta_streak < STALL_FUNNEL_THRESHOLD:
+            return None
+        return (
+            f"[BLOCKED] '{action.name}' was refused: the last "
+            f"{self.meta_streak} actions were planning/bookkeeping only "
+            "and changed nothing. Choose exactly one next step: "
+            "(1) a concrete action (::read_file / ::edit_file / "
+            "::run_command), (2) ::response @<final report> if the work "
+            "is done, or (3) ::duck_call @<question> if you need the user."
         )
 
     def _dominant_kind_failure(self, tool_name: str) -> tuple[str, int] | None:
@@ -588,4 +665,5 @@ class DuckPacemaker:
         self.execution_history = []
         self._call_failures = {}
         self._kind_failures = {}
+        self.meta_streak = 0
         logger.debug("Pacemaker reset")

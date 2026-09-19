@@ -257,6 +257,36 @@ def build_repeated_failure_syntax_error(action: Action, count: int) -> SyntaxErr
     )
 
 
+def build_no_progress_syntax_error(action: Action, count: int) -> SyntaxErrorInfo:
+    """Build feedback for planning/bookkeeping churn without progress.
+
+    Meta actions (propose_plan, notes, task bookkeeping) are legitimate
+    individually, but consecutive repeats change nothing — the model must
+    be funnelled toward acting, reporting, or asking (observed: GLM
+    spec-build r2 churned propose_plan until timeout).
+
+    Args:
+        action: The meta action that was executed or refused.
+        count: Current consecutive meta-action streak.
+
+    Returns:
+        SyntaxErrorInfo instructing the model to pick a real next step.
+    """
+    return SyntaxErrorInfo(
+        error_type="no_progress_stall",
+        raw_snippet=f"{action.name} x{count} consecutive, no state change",
+        correction_hint=(
+            f"Your last {count} actions were planning/bookkeeping only — "
+            "nothing changed. Pick exactly one next step: "
+            "(1) take a concrete action (::read_file / ::edit_file / "
+            "::run_command), (2) if the work is done, report the result "
+            "via ::response, or (3) if you are stuck or unsure, ask the "
+            "user via ::duck_call. Further planning-only actions will be "
+            "refused."
+        ),
+    )
+
+
 def build_dropped_params_syntax_error(
     action: Action, dropped_params: set[str], func: Callable[..., Any]
 ) -> SyntaxErrorInfo:

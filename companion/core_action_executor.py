@@ -24,6 +24,7 @@ from companion.core_action_results import (
     build_action_exception_syntax_error,
     build_denial_context,
     build_dropped_params_syntax_error,
+    build_no_progress_syntax_error,
     build_repeated_failure_syntax_error,
     build_tool_result_message,
     get_approval_request,
@@ -325,6 +326,32 @@ async def execute_actions(agent, action_list) -> list:
                 results.append(repeat_refusal)
                 continue
 
+            # --- No-progress stall gate ---
+            # Planning/bookkeeping churn that produces no observable
+            # change is refused once the streak crosses the funnel
+            # threshold — the refusal names the three exits (concrete
+            # action, ::response report, ::duck_call question). Blocked
+            # attempts count as errors so persistent churn still feeds
+            # the cascade/no-progress machinery.
+            stall_refusal = agent.pacemaker.check_stall_block(action)
+            if stall_refusal is not None:
+                logger.warning(
+                    f"Blocked meta-action churn '{action.name}' "
+                    f"(streak={agent.pacemaker.meta_streak})"
+                )
+                _record_native_event(action, "blocked", False, stall_refusal)
+                agent.state.last_syntax_errors.append(
+                    build_no_progress_syntax_error(action, agent.pacemaker.meta_streak)
+                )
+                _queue_user_message(
+                    build_tool_result_message(
+                        action, stall_refusal, status=ToolStatus.ERROR
+                    ),
+                )
+                agent.pacemaker.update_vitals(action, stall_refusal, is_error=True)
+                results.append(stall_refusal)
+                continue
+
             # --- Approval Check ---
             was_approved = False
             approval_request = get_approval_request(action, file_ops.file_exists)
@@ -445,6 +472,15 @@ async def execute_actions(agent, action_list) -> list:
 
                     agent.pacemaker.update_vitals(action, result, is_error=False)
                     consecutive_errors = 0
+
+                    # Stall gate stage 1: warn via Correction Guide when
+                    # bookkeeping churn reaches the notify threshold —
+                    # one streak step later it is refused outright.
+                    stall_n = agent.pacemaker.stall_escalation_count(action)
+                    if stall_n:
+                        agent.state.last_syntax_errors.append(
+                            build_no_progress_syntax_error(action, stall_n)
+                        )
 
                     _dur_ms = (_t1 - _t0) * 1000
                     _result_str = str(result)

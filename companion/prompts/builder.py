@@ -280,6 +280,12 @@ class PromptBuilder:
             "  Step 2: retry with a corrected call, or switch tools\n"
             "          (e.g. ::write_file for a full rewrite)."
         ),
+        "no_progress_stall": (
+            "  Planning without execution changes nothing. Pick ONE:\n"
+            "    `::read_file @path` / `::edit_file @path` — do real work\n"
+            "    `::response @<result>` — if the work is already done\n"
+            "    `::duck_call @<question>` — if you need the user"
+        ),
     }
 
     # Native variants without Sym-Ops grammar (only keys that differ).
@@ -325,6 +331,12 @@ class PromptBuilder:
             "  now (edit_file / write_file / run_command ...).\n"
             "  If the work is already complete, report the result in\n"
             "  past tense, not a plan of what you will do."
+        ),
+        "no_progress_stall": (
+            "  Planning without execution changes nothing. Pick ONE:\n"
+            "    call read_file / edit_file — do real work\n"
+            "    send a final message — if the work is already done\n"
+            "    call duck_call — if you need the user"
         ),
     }
 
