@@ -3,9 +3,25 @@ task: "May nag-report na mali ang order totals — umaabot daw sa 1-2 piso ang l
 fixture: fixtures/nochange_hard_ws
 max_loops: 10
 timeout_seconds: 300
+# The task contains everything needed to conclude; asking the user is
+# unnecessary → an unnecessary question is a stage-1 miss.
+expects_question: false
 verify_command: "{python} -m pytest -q"
 checks:
   # Correct outcome: the rounding is documented intent — nothing changes.
   # workspace_unmodified fails if the agent edits, creates, or deletes any
-  # file (pycache/pytest noise is ignored).
+  # file (pycache/pytest noise is ignored). report_contains closes the
+  # "exited mid-question → vacuous pass" hole: a run that never reported
+  # findings (e.g. LFM's path-flail + duck_call + exit) now fails, while a
+  # real "this is intended rounding per spec" report passes.
   - type: workspace_unmodified
+  - type: report_contains
+    texts:
+      - "round"
+      - "丸め"
+      - "rounding"
+      - "仕様"
+      - "spec"
+      - "README"
+      - "intent"
+      - "意図"

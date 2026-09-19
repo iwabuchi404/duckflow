@@ -21,7 +21,7 @@ def test_should_return_to_user_on_response_with_message() -> None:
     """A response action carrying a message hands control back to the user."""
     action_list = ActionList(
         reasoning="test",
-        actions=[Action(name="response", parameters={"message": "done"})]
+        actions=[Action(name="response", parameters={"message": "done"})],
     )
 
     assert should_return_to_user(action_list, AgentState()) is True
@@ -45,7 +45,7 @@ def test_empty_response_continues_loop_and_records_error() -> None:
     state = AgentState()
     action_list = ActionList(
         reasoning="test",
-        actions=[Action(name="response", parameters={"message": "   "})]
+        actions=[Action(name="response", parameters={"message": "   "})],
     )
 
     assert should_return_to_user(action_list, state) is False
@@ -56,10 +56,79 @@ def test_no_terminal_action_continues_loop() -> None:
     """Non-terminal actions (e.g. read_file) keep the loop running."""
     action_list = ActionList(
         reasoning="test",
-        actions=[Action(name="read_file", parameters={"path": "a.py"})]
+        actions=[Action(name="read_file", parameters={"path": "a.py"})],
     )
 
     assert should_return_to_user(action_list, AgentState()) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "割引率を掛け算に修正します。",
+        "I will fix the bug now.",
+        "I'll update orders.py.",
+        "1. Installing tabulate\n2. Reading orders.py\n3. Fixing the bug",
+        "原因を特定したので修正を適用します",
+    ],
+)
+def test_premature_response_continues_loop_and_records_error(
+    message: str,
+) -> None:
+    """A ::response announcing pending work must not end the loop.
+
+    Reproduces the DS needle-wide/recover-quad failure: the model
+    diagnosed the bug, said "修正します", and returned control without
+    ever executing the fix.
+    """
+    state = AgentState()
+    action_list = ActionList(
+        reasoning="test",
+        actions=[Action(name="response", parameters={"message": message})],
+    )
+
+    assert should_return_to_user(action_list, state) is False
+    assert state.last_syntax_errors[-1].error_type == "premature_response"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "割引率を掛け算に修正しました。テストは全て通過しています。",
+        "Fixed the bug in pricing.py — all tests pass.",
+        "The 1-2 peso difference is intentional per-unit rounding "
+        "documented in README. No changes made.",
+        "調査の結果、バグではなく仕様でした。変更はありません。",
+    ],
+)
+def test_factual_report_response_terminates(message: str) -> None:
+    """Past-tense reports and findings must still end the loop normally."""
+    state = AgentState()
+    action_list = ActionList(
+        reasoning="test",
+        actions=[Action(name="response", parameters={"message": message})],
+    )
+
+    assert should_return_to_user(action_list, state) is True
+    assert not state.last_syntax_errors
+
+
+def test_premature_wording_allowed_when_work_was_delivered() -> None:
+    """Future-ish wording is fine when a delivering action ran same turn."""
+    state = AgentState()
+    action_list = ActionList(
+        reasoning="test",
+        actions=[
+            Action(name="edit_file", parameters={"path": "a.py"}),
+            Action(
+                name="response",
+                parameters={"message": "割引率を掛け算に修正します。"},
+            ),
+        ],
+    )
+
+    assert should_return_to_user(action_list, state) is True
+    assert not state.last_syntax_errors
 
 
 def test_build_intervention_prompt_contains_context() -> None:

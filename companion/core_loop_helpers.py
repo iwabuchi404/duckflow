@@ -7,6 +7,7 @@ without containing loop control flow.
 
 import logging
 import math
+import re
 from typing import TYPE_CHECKING
 
 from companion.state.agent_state import ActionList, SyntaxErrorInfo
@@ -180,9 +181,7 @@ async def check_and_prune_if_needed(agent: "DuckAgent") -> None:
         return
 
     agent.state.conversation_history, prune_stats = (
-        await agent.memory_manager.prune_history(
-            agent.state.conversation_history
-        )
+        await agent.memory_manager.prune_history(agent.state.conversation_history)
     )
     if prune_stats.get("emergency_mode"):
         removed = prune_stats.get("removed_count", 0)
@@ -192,6 +191,52 @@ async def check_and_prune_if_needed(agent: "DuckAgent") -> None:
             "直前までの文脈の一部が失われている可能性があります。"
             "タスクの前提や対象ファイルの状態を、必要に応じて read_file 等で再確認してから続行してください。",
         )
+
+
+# Actions whose execution during the same turn counts as delivered work —
+# a ::response after one of these is a report, not a premature announcement.
+# run_command is excluded: verification commands (pytest) are observation,
+# not delivery — "修正します" after only running tests is still premature.
+# propose_plan/generate_tasks produce a user-facing deliverable.
+_DELIVERING_ACTIONS = {
+    "write_file",
+    "edit_file",
+    "delete_lines",
+    "delete_file",
+    "append_file",
+    "replace_function",
+    "propose_plan",
+    "generate_tasks",
+}
+
+# Text that announces upcoming work rather than reporting done work.
+# JA: action-verb stem + ます/します ("修正します", "実装します").
+# EN: explicit future intent ("I will", "Let me", "going to") or a numbered
+# step list whose items start with an action verb ("2. Reading orders.py").
+_PREMATURE_RESPONSE_RE = re.compile(
+    r"(修正|実装|変更|作成|追加|削除|実行|適用|更新|直し|編集|書き換|書き込|"
+    r"導入|設定|移行|進み|進め|調べ|試し|確認し)(?:ます|します)"
+    r"|\b(?:I will|I'll|will now|Let me|going to|Next,? I'?ll|First,? I'?ll)\b"
+    r"|^\s*\d+[.)]\s*(?:install|read|fix|edit|update|create|add|remove|run|"
+    r"check|modify|implement|write|apply|replace|rename|verify|test)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _announces_pending_work(message: str) -> bool:
+    """Detect response text that announces upcoming work instead of results.
+
+    Weak models sometimes answer "修正します" ("I will fix it") and return
+    control without ever executing the fix — a premature return. Past-tense
+    reports ("修正しました") and genuine findings do not match.
+
+    Args:
+        message: The ::response message text.
+
+    Returns:
+        True when the message reads like a plan/intent rather than a result.
+    """
+    return bool(_PREMATURE_RESPONSE_RE.search(message))
 
 
 def should_return_to_user(action_list: ActionList, state) -> bool:
@@ -215,9 +260,7 @@ def should_return_to_user(action_list: ActionList, state) -> bool:
                 # Repair-generated response (bare <<<>>> block or thought-only
                 # output): the model did not explicitly choose to respond.
                 # Do not terminate; ask for an explicit action or response.
-                logger.warning(
-                    "Auto-generated ::response detected — continuing loop."
-                )
+                logger.warning("Auto-generated ::response detected — continuing loop.")
                 state.last_syntax_errors.append(
                     SyntaxErrorInfo(
                         error_type="auto_response",
@@ -233,11 +276,34 @@ def should_return_to_user(action_list: ActionList, state) -> bool:
                 continue
             msg = action.parameters.get("message", "").strip()
             if msg:
+                if _announces_pending_work(msg) and not any(
+                    a.name in _DELIVERING_ACTIONS for a in action_list.actions
+                ):
+                    # The model announced upcoming work ("修正します" / "I will
+                    # fix") but executed nothing — a premature return. Treat it
+                    # like an empty response: record guidance and continue the
+                    # loop so the announced actions actually run.
+                    logger.warning(
+                        "Premature ::response (announced pending work) — "
+                        "continuing loop."
+                    )
+                    state.last_syntax_errors.append(
+                        SyntaxErrorInfo(
+                            error_type="premature_response",
+                            raw_snippet=msg[:200],
+                            correction_hint=(
+                                "You announced upcoming work but returned "
+                                "control without executing it. Execute the "
+                                "announced actions now, or if the work is "
+                                "already done, report the actual result "
+                                "(past tense) instead of future plans."
+                            ),
+                        )
+                    )
+                    continue
                 return True
             else:
-                logger.warning(
-                    "Empty ::response detected — continuing loop."
-                )
+                logger.warning("Empty ::response detected — continuing loop.")
                 state.last_syntax_errors.append(
                     SyntaxErrorInfo(
                         error_type="empty_response",

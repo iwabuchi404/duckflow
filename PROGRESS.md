@@ -1,3 +1,14 @@
+### 2026-09-19: Gauntlet v2 詳細分析からの3改善 — 採点の穴修正・premature応答ガード・パス正規化
+- 背景: 54試行の詳細分析で3つの製品/採点課題を特定。(1) LFM の no-change-hard 3/3 は偽陽性（パス迷走→不要質問→exit で「無変更」だけが成立）。(2) DS の全失敗は「修正します」と応答だけして編集未実行の premature return。(3) LFM の2課題全滅は `/workspace/...` や `/tmp/...` パスを「拒否だけ」されて回復不能になったのが直接原因。
+- no-change-hard 採点の穴修正（`evals/`）:
+  - `no-change-hard.yaml` に `expects_question: false` を追加（タスクに結論の材料が全てあるため不要質問は stage-1 miss 化）。
+  - `report_contains` check型を `runner.py` に新設（`texts:` のいずれかが最終 assistant プローズに出現すれば pass）。`workspace_unmodified` だけでは「調査も報告もせず exit」が通ってしまう穴を塞ぐ — LFM型の「質問して終了」は最終メッセージが質問なので自動fail、DS/GLM型の「仕様である」報告は pass。
+- premature response ガード（`companion/core_loop_helpers.py`）: 「修正します/I will fix/番号付き実行計画」等の**将来実行を宣言する文言**を含む `::response` で、同ターンに成果物アクション（edit/write/delete系・propose_plan等）が無い場合はループ終了とみなさず `premature_response` として Correction Guide に記録して継続。過去形報告（修正しました/Fixed）は終了扱いのまま。`builder.py` の symops/native 両 Correction Guide に `premature_response` 例を追加。
+- パス正規化＋実行可能エラー（`companion/tools/file_ops.py`）: `_normalize_model_path()` を追加し、(a) `/workspace/x.py` 等の仮想ルート除去、(b) workspace内を指す真の絶対パスの相対化、(c) `/tmp/.../<ws_dir_name>/file` 形式（pwd出力のecho）から ws 名以降の尾部を相対パスとして復元。正規化後も `_is_safe_path` で検証するため安全性は不変（`../` トラバーサルは従来通り拒否）。拒否時メッセージに「RELATIVE パスを使え・具体例・ルート探索禁止」のガイダンスを追加。
+- テスト: `test_core_loop_control.py` に premature応答 10件（宣言文言5件・正当報告4件・実行済み1件）、`test_file_ops_path_safety.py` に 6件（/workspace正規化・絶対パス・POSIX echo復元・エラーガイダンス・トラバーサル拒否2件）、新規 `test_eval_report_contains.py` 7件（正当報告pass・質問終了fail・空履歴fail・マーカーのみfail・text単数形・最終プローズ抽出）。
+- 検証: `uv run python -X utf8 -m pytest tests/ -q` → **807 passed / 2 skipped**（785から+22）。
+- 残課題（#3 同一エラーターン跨ぎ連発）: GLM rename-hard の空body edit_file 6連発（142k tokens）に対応する連発検出/エスカレーションは設計案を別途提示、未実装。
+
 ### 2026-09-19: Gauntlet v2 初回実行（Main 3×6課題×3回＝54試行）— 16/16/4
 - 条件: DS/GLM は symops（前回ベースラインと整合）、LFM は symops 非対応のため native。結果は `evals/results/gauntlet-v2/{ds_symops,glm_symops,lfm_native}/`。ベースラインスナップショット `evals/baselines/gauntlet-v2-main3.json` 保存（コミット・scenario fingerprint・median値を記録、以後 `--compare` で差分検出可能）。
 - 総合: **DS 16/18・GLM 16/18・LFM(native) 4/18**。課題別では全シナリオが床〜天井の勾配を持ち、ベースラインとして機能。

@@ -139,12 +139,71 @@ class FileOps:
         except Exception:
             return False
 
+    def _normalize_model_path(self, path: str) -> str:
+        """Best-effort normalization of common model path hallucinations.
+
+        Weak models frequently emit paths that are not workspace-relative:
+        virtual roots ('/workspace/x.py'), or absolute paths echoed back
+        from shell output ('/tmp/.../<ws_name>/orders.py'). This maps the
+        common forms onto workspace-relative candidates.
+
+        Safety note: the result is still validated by _is_safe_path —
+        normalization can only narrow a path toward the workspace, never
+        grant access outside it.
+
+        Args:
+            path: Raw path string from the model.
+
+        Returns:
+            Normalized candidate path (relative when recoverable).
+        """
+        from pathlib import PurePosixPath, PureWindowsPath
+
+        cleaned = path.strip()
+
+        # Virtual-root conventions models invent ('/workspace/x', 'workspace/x').
+        lower = cleaned.lower()
+        for prefix in ("/workspace/", "workspace/", "/workspaces/", "workspaces/"):
+            if lower.startswith(prefix):
+                cleaned = cleaned[len(prefix) :]
+                break
+
+        # An absolute path that already resolves inside the workspace → relative.
+        try:
+            resolved = Path(cleaned)
+            if resolved.is_absolute() and resolved.is_relative_to(self.workspace_root):
+                return str(resolved.relative_to(self.workspace_root))
+        except (OSError, ValueError):
+            pass
+
+        # Absolute path (any platform style) containing the workspace dir name:
+        # '/tmp/duckflow-evals/<ws_name>/orders.py' → 'orders.py'.
+        try:
+            for pure in (PurePosixPath(cleaned), PureWindowsPath(cleaned)):
+                if not pure.is_absolute():
+                    continue
+                parts = pure.parts
+                if self.workspace_root.name in parts:
+                    idx = len(parts) - 1 - parts[::-1].index(self.workspace_root.name)
+                    tail = parts[idx + 1 :]
+                    if tail:
+                        return str(Path(*tail))
+        except (OSError, ValueError):
+            pass
+
+        return cleaned
+
     def _get_full_path(self, path: str) -> Path:
-        if not self._is_safe_path(path):
+        normalized = self._normalize_model_path(path)
+        if not self._is_safe_path(normalized):
             raise PermissionError(
-                f"Duck Keeper Alert: Access denied to {path} (Outside workspace)"
+                f"Duck Keeper Alert: Access denied to {path} (Outside workspace). "
+                f"Paths must be RELATIVE to the workspace root "
+                f"(e.g. 'orders.py' or 'src/utils.py'). Do not use absolute "
+                f"paths, '/workspace/' prefixes, or filesystem-root searches — "
+                f"only files inside this project are accessible."
             )
-        return (self.workspace_root / path).resolve()
+        return (self.workspace_root / normalized).resolve()
 
     def file_exists(self, path: str) -> bool:
         """Check if a file exists within the workspace."""
@@ -1003,7 +1062,9 @@ class FileOps:
                 return f"No files matching '{glob}' found under {path}"
             return "\n".join(matches)
 
-        from companion.tools.get_project_tree import get_project_tree as _get_project_tree
+        from companion.tools.get_project_tree import (
+            get_project_tree as _get_project_tree,
+        )
 
         return await _get_project_tree(
             path=path, depth=depth, workspace_root=str(self.workspace_root)
@@ -1286,7 +1347,9 @@ class FileOps:
         try:
             regex = _re.compile(pattern, flags)
         except _re.error as e:
-            return ToolResult.error("grep_files", path, f"Invalid regex pattern '{pattern}': {e}")
+            return ToolResult.error(
+                "grep_files", path, f"Invalid regex pattern '{pattern}': {e}"
+            )
 
         # Search directory
         start_dir = (self.workspace_root / path).resolve()
@@ -1377,7 +1440,6 @@ class FileOps:
 
         parts.append(f"{total_matches} match(es) found in {len(file_matches)} file(s).")
         return "\n".join(parts)
-
 
     async def delete_lines(
         self, path: str, find: str = "", occurrence: int = 1, content: str = ""
@@ -1503,10 +1565,7 @@ class FileOps:
             return ToolResult.error(
                 "delete_lines",
                 path,
-                (
-                    f"Reason: find_not_matched\n"
-                    f"Candidates:\n{cand_str}"
-                ),
+                (f"Reason: find_not_matched\n" f"Candidates:\n{cand_str}"),
             )
 
         start_idx, end_idx = match

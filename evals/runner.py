@@ -288,20 +288,51 @@ def _workspace_matches_fixture(workspace: Path, fixture: Path | None) -> bool:
     )
 
 
+def _last_report_text(history: list[dict[str, Any]] | None) -> str:
+    """Extract the last assistant prose message (the final report).
+
+    In transcripts the ::response message is stored as its own assistant
+    message separate from the action summary, so the report is the last
+    assistant message that is not a bare action marker. Runs that ended
+    via duck_call/exit have a question (or nothing) here, which lets
+    ``report_contains`` distinguish a real report from a vacuous exit.
+
+    Args:
+        history: Agent conversation history (may be None).
+
+    Returns:
+        The last prose assistant message, or "" when none exists.
+    """
+    for m in reversed(history or []):
+        if m.get("role") != "assistant":
+            continue
+        content = str(m.get("content", "")).strip()
+        if not content or content.startswith("::"):
+            continue
+        return content
+    return ""
+
+
 def _run_checks(
-    checks: list[dict[str, Any]], workspace: Path, fixture: Path | None = None
+    checks: list[dict[str, Any]],
+    workspace: Path,
+    fixture: Path | None = None,
+    history: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate mechanical checks against the run workspace.
 
     Supported check types: file_exists, file_not_exists, file_contains,
     file_not_contains, unmodified (byte-identical to the fixture file),
     workspace_unmodified (whole tree byte-identical to the fixture, ignoring
-    __pycache__/.pytest_cache/*.pyc).
+    __pycache__/.pytest_cache/*.pyc), report_contains (any of the given
+    `texts` appears in the final assistant report — fails when the run
+    ended without a report, e.g. mid-question exit).
 
     Args:
         checks: Check dicts from the scenario YAML.
         workspace: Run workspace root.
         fixture: Fixture directory (required for unmodified checks).
+        history: Conversation history (required for report_contains).
 
     Returns:
         List of {check, passed} results.
@@ -336,6 +367,10 @@ def _run_checks(
             )
         elif kind == "workspace_unmodified":
             passed = _workspace_matches_fixture(workspace, fixture)
+        elif kind == "report_contains":
+            report = _last_report_text(history)
+            texts = check.get("texts") or [check.get("text", "")]
+            passed = bool(report) and any(t in report for t in texts if t)
         else:
             passed = False
 
@@ -639,6 +674,7 @@ async def run_scenario(
         scenario.get("checks"),
         workspace,
         fixture=fixture_dir if fixture_dir.is_dir() else None,
+        history=agent.state.conversation_history,
     )
     verify_command = scenario.get("verify_command")
     if verify_command:

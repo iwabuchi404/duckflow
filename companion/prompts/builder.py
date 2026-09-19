@@ -87,7 +87,7 @@ class PromptBuilder:
                 few_shots = [msg.copy() for msg in few_shots]
                 few_shots[-1]["cache_control"] = {"type": "ephemeral"}
                 messages.extend(few_shots)
-        
+
         # 4. 動的なコンテキスト（ここから毎ターン確実に変動する）
         # 4a. Repo Map (先回りコンテキスト: ast-based symbol map)
         repo_map_budget = (
@@ -101,8 +101,7 @@ class PromptBuilder:
 
         # 4b. 動的コンテキスト組み立て
         dynamic_parts = [
-            "## Current State & Context\n" +
-            self.state.to_prompt_context(),
+            "## Current State & Context\n" + self.state.to_prompt_context(),
         ]
         if repo_map_text:
             dynamic_parts.append(repo_map_text)
@@ -111,10 +110,10 @@ class PromptBuilder:
             dynamic_parts.append(error_feedback)
 
         dynamic_context = "\n\n".join(dynamic_parts).strip()
-        
+
         if dynamic_context:
             messages.append({"role": "system", "content": dynamic_context})
-            
+
         return messages
 
     def _native_template(self) -> str:
@@ -185,118 +184,133 @@ class PromptBuilder:
         mode = self.state.get_context_mode()
         if protocol == "native":
             mode_instructions = NATIVE_MODE_MAP.get(mode, "")
-            return self._native_template().format(
-                tool_descriptions=tool_descriptions,
-                mode_specific_instructions=mode_instructions,
-                state_context="",
-            ).strip()
+            return (
+                self._native_template()
+                .format(
+                    tool_descriptions=tool_descriptions,
+                    mode_specific_instructions=mode_instructions,
+                    state_context="",
+                )
+                .strip()
+            )
         mode_instructions = MODE_MAP.get(mode, "")
 
         return SYSTEM_PROMPT_TEMPLATE.format(
             tool_descriptions=tool_descriptions,
             mode_specific_instructions=mode_instructions,
-            state_context=""
+            state_context="",
         ).strip()
 
     # エラータイプ別の「正しい例」マップ
     _CORRECTION_EXAMPLES: dict = {
-        'unknown_tool': (
-            '  Good: `::note @Done. Moving to next step.`\n'
-            '  Good: `::response @Here is the result.`'
+        "unknown_tool": (
+            "  Good: `::note @Done. Moving to next step.`\n"
+            "  Good: `::response @Here is the result.`"
         ),
-        'edit_find_mismatch': (
-            '  Step 1: `::read_file @path/to/file.py` — confirm the current file content\n'
-            '  Step 2: retry `::edit_file` with the SEARCH block copied EXACTLY from the file\n'
-            '          (no line-number prefixes, matching whitespace and punctuation)\n'
-            '  Step 3: do NOT resend the failed SEARCH text unchanged — re-copy it from Step 1'
+        "edit_find_mismatch": (
+            "  Step 1: `::read_file @path/to/file.py` — confirm the current file content\n"
+            "  Step 2: retry `::edit_file` with the SEARCH block copied EXACTLY from the file\n"
+            "          (no line-number prefixes, matching whitespace and punctuation)\n"
+            "  Step 3: do NOT resend the failed SEARCH text unchanged — re-copy it from Step 1"
         ),
-        'missing_param': (
-            '  For edit_file, use SEARCH/REPLACE markers in the content block:\n'
-            '  ::edit_file @path/to/file.py\n'
-            '  <<<\n'
-            '  <<<<<<< SEARCH\n'
-            '  old code (exact match, no line numbers)\n'
-            '  =======\n'
-            '  new code\n'
-            '  >>>>>>> REPLACE\n'
-            '  >>>\n'
-            '  Check the tool description for required parameters.'
+        "missing_param": (
+            "  For edit_file, use SEARCH/REPLACE markers in the content block:\n"
+            "  ::edit_file @path/to/file.py\n"
+            "  <<<\n"
+            "  <<<<<<< SEARCH\n"
+            "  old code (exact match, no line numbers)\n"
+            "  =======\n"
+            "  new code\n"
+            "  >>>>>>> REPLACE\n"
+            "  >>>\n"
+            "  Check the tool description for required parameters."
         ),
-        'empty_response': (
-            '  If investigation is in progress:\n'
-            '    `::read_file @path/to/file.py`  — observe first\n'
-            '  If ready to deliver result:\n'
-            '    `::response @Your analysis here.`  — inline\n'
-            '    or use <<< >>> block for long output'
+        "empty_response": (
+            "  If investigation is in progress:\n"
+            "    `::read_file @path/to/file.py`  — observe first\n"
+            "  If ready to deliver result:\n"
+            "    `::response @Your analysis here.`  — inline\n"
+            "    or use <<< >>> block for long output"
         ),
-        'investigation_edit_blocked': (
-            '  You are in Investigation Mode — file edits are blocked.\n'
-            '  Step 1: `::finish_investigation @<root cause conclusion>`\n'
-            '  Step 2: After switching to Planning/Task mode, apply edits.'
+        "investigation_edit_blocked": (
+            "  You are in Investigation Mode — file edits are blocked.\n"
+            "  Step 1: `::finish_investigation @<root cause conclusion>`\n"
+            "  Step 2: After switching to Planning/Task mode, apply edits."
         ),
-        'unexpected_params': (
-            '  Remove the unsupported parameter(s) and only pass the ones\n'
-            '  listed for this tool. Extra parameters are silently dropped,\n'
-            '  not applied — repeating them will not change the outcome.'
+        "unexpected_params": (
+            "  Remove the unsupported parameter(s) and only pass the ones\n"
+            "  listed for this tool. Extra parameters are silently dropped,\n"
+            "  not applied — repeating them will not change the outcome."
         ),
-        'parse_failed': (
-            '  Your last output could not be parsed as Sym-Ops.\n'
-            '  Use `::action_name @target key=value` for actions and\n'
-            '  `<<< ... >>>` blocks only for large content (code, file text).\n'
-            '  Do not wrap actions in markdown code fences.'
+        "parse_failed": (
+            "  Your last output could not be parsed as Sym-Ops.\n"
+            "  Use `::action_name @target key=value` for actions and\n"
+            "  `<<< ... >>>` blocks only for large content (code, file text).\n"
+            "  Do not wrap actions in markdown code fences."
         ),
-        'empty_actions': (
-            '  Your last output produced no action and no response.\n'
-            '  Every turn must end with either another `::tool_name` action\n'
-            '  or `::response @...` to hand control back to the user.'
+        "empty_actions": (
+            "  Your last output produced no action and no response.\n"
+            "  Every turn must end with either another `::tool_name` action\n"
+            "  or `::response @...` to hand control back to the user."
         ),
-        'api_error': (
-            '  The API call itself failed (not your output format).\n'
-            '  Retry the same actions unchanged.'
+        "api_error": (
+            "  The API call itself failed (not your output format).\n"
+            "  Retry the same actions unchanged."
         ),
-        'tool_call_parse_error': (
-            '  A tool call had malformed JSON arguments.\n'
+        "tool_call_parse_error": (
+            "  A tool call had malformed JSON arguments.\n"
             '  Resend it with valid JSON, e.g. {"path": "a.py", "content": "..."}'
         ),
-        'fabricated_tool_result': (
-            '  Never write `[TOOL_RESULT]` or `::status` lines yourself.\n'
-            '  Results come only from the system after real execution.\n'
-            '  Emit the `::tool_name` action, then wait for its result.'
+        "fabricated_tool_result": (
+            "  Never write `[TOOL_RESULT]` or `::status` lines yourself.\n"
+            "  Results come only from the system after real execution.\n"
+            "  Emit the `::tool_name` action, then wait for its result."
+        ),
+        "premature_response": (
+            "  You announced work but executed nothing. Do it now:\n"
+            "    `::edit_file @path/to/file.py` / `::write_file @path` / "
+            "`::run_command @cmd`\n"
+            "  If the work is already complete, report the RESULT\n"
+            "  (past tense), not a plan of what you will do."
         ),
     }
 
     # Native variants without Sym-Ops grammar (only keys that differ).
     _NATIVE_CORRECTION_EXAMPLES: dict = {
-        'edit_find_mismatch': (
-            '  Step 1: call `read_file` on the path — confirm current content\n'
-            '  Step 2: retry `edit_file` with the SEARCH argument copied EXACTLY\n'
-            '  Step 3: do NOT resend the failed SEARCH text unchanged'
+        "edit_find_mismatch": (
+            "  Step 1: call `read_file` on the path — confirm current content\n"
+            "  Step 2: retry `edit_file` with the SEARCH argument copied EXACTLY\n"
+            "  Step 3: do NOT resend the failed SEARCH text unchanged"
         ),
-        'missing_param': (
-            '  Pass all required arguments as JSON, e.g.\n'
+        "missing_param": (
+            "  Pass all required arguments as JSON, e.g.\n"
             '  {"path": "a.py", "content": "file text here"}\n'
-            '  Check the tool schema for required parameters.'
+            "  Check the tool schema for required parameters."
         ),
-        'empty_response': (
-            '  If investigation is in progress: call `read_file` — observe first\n'
-            '  If ready to deliver: write the final message as plain text'
+        "empty_response": (
+            "  If investigation is in progress: call `read_file` — observe first\n"
+            "  If ready to deliver: write the final message as plain text"
         ),
-        'investigation_edit_blocked': (
-            '  You are in Investigation Mode — file edits are blocked.\n'
-            '  Step 1: call `finish_investigation` with the conclusion\n'
-            '  Step 2: After switching modes, apply edits.'
+        "investigation_edit_blocked": (
+            "  You are in Investigation Mode — file edits are blocked.\n"
+            "  Step 1: call `finish_investigation` with the conclusion\n"
+            "  Step 2: After switching modes, apply edits."
         ),
-        'parse_failed': (
-            '  Your last output was not usable.\n'
-            '  Call tools with valid JSON arguments.'
+        "parse_failed": (
+            "  Your last output was not usable.\n"
+            "  Call tools with valid JSON arguments."
         ),
-        'empty_actions': (
-            '  Your last output produced no tool call and no message.\n'
-            '  Every turn must end with either another tool call\n'
-            '  or a final plain-text message.'
+        "empty_actions": (
+            "  Your last output produced no tool call and no message.\n"
+            "  Every turn must end with either another tool call\n"
+            "  or a final plain-text message."
         ),
-        'unknown_tool': (
-            '  Call only the tools listed in your available tools.'
+        "unknown_tool": ("  Call only the tools listed in your available tools."),
+        "premature_response": (
+            "  You announced work but executed nothing. Call the tools\n"
+            "  now (edit_file / write_file / run_command ...).\n"
+            "  If the work is already complete, report the result in\n"
+            "  past tense, not a plan of what you will do."
         ),
     }
 
@@ -310,7 +324,7 @@ class PromptBuilder:
         """
         errors = self.state.last_syntax_errors
         if not errors:
-            return ''
+            return ""
 
         # Correction hints live on shared SyntaxErrorInfo objects written
         # for the Sym-Ops surface; native mode rewrites "::name @target"
@@ -323,20 +337,20 @@ class PromptBuilder:
             if protocol == "native"
             else self._CORRECTION_EXAMPLES
         )
-        lines = ['## Correction Guide (from previous turn)']
+        lines = ["## Correction Guide (from previous turn)"]
         for err in errors:
             hint = err.correction_hint
             if protocol == "native":
                 hint = sanitize_tool_references(hint)
-            lines.append(f'- **{err.error_type}**: {hint}')
+            lines.append(f"- **{err.error_type}**: {hint}")
             if err.raw_snippet:
-                lines.append(f'  Your output: `{err.raw_snippet[:300]}`')
+                lines.append(f"  Your output: `{err.raw_snippet[:300]}`")
             example = examples.get(err.error_type)
             if example is None and protocol == "native":
                 example = self._CORRECTION_EXAMPLES.get(err.error_type)
                 if example:
                     example = sanitize_tool_references(example)
             if example:
-                lines.append(f'  Example fix:\n{example}')
-        lines.append('Apply these corrections in your next output.')
-        return '\n'.join(lines)
+                lines.append(f"  Example fix:\n{example}")
+        lines.append("Apply these corrections in your next output.")
+        return "\n".join(lines)
