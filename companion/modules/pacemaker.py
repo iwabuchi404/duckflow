@@ -20,9 +20,10 @@ logger = logging.getLogger(__name__)
 # Repeated-failure escalation thresholds.
 # WARN: at the Nth identical failure the Correction Guide is escalated to a
 #       "stop, change form" message instead of the standard per-error hint.
-# BLOCK: a verbatim repeat of a call that already failed N times with a
-#        contract (format/permission) error is refused BEFORE execution —
-#        deterministic failures cannot succeed by resending.
+# BLOCK: a verbatim repeat — or a call carrying the same inspectable form
+#        defect — of a call that already failed N times with a contract
+#        (format/permission) error is refused BEFORE execution; resending
+#        deterministic failures cannot succeed.
 # CASCADE: N repeated failures of one signature feed ERROR_CASCADE even
 #          when successes interleave and reset consecutive_errors.
 REPEAT_WARN_THRESHOLD = 3
@@ -59,6 +60,29 @@ def _is_contract_error(error_kind: str) -> bool:
     """
     kind = error_kind.lower()
     return any(marker in kind for marker in _CONTRACT_ERROR_MARKERS)
+
+
+def _call_has_same_defect(action: Action, error_kind: str) -> bool:
+    """Return whether a pending call repeats the defect behind an error.
+
+    Only defects inspectable from the call itself qualify — currently the
+    edit_file empty-body pattern ("no find/replace details"), where the
+    emitted call carries no edit body at all. Rotating the target file
+    defeats verbatim-signature blocking, so the defect itself must match.
+
+    Args:
+        action: Action about to be executed.
+        error_kind: Dominant prior error kind for this tool.
+
+    Returns:
+        True when the call carries the same deterministic defect.
+    """
+    if "no find/replace details" in error_kind:
+        if action.parameters.get("find"):
+            return False
+        content = str(action.parameters.get("content") or "")
+        return "SEARCH" not in content and "find:" not in content
+    return False
 
 
 class DuckPacemaker:
@@ -297,7 +321,20 @@ class DuckPacemaker:
         """
         count, kind = self._call_failures.get(self._call_signature(action), (0, ""))
         if count < REPEAT_BLOCK_THRESHOLD or not _is_contract_error(kind):
-            return None
+            # The verbatim signature is below threshold — but a call that
+            # still carries the same *form defect* as this tool's dominant
+            # repeated contract failure is just as doomed. Rotating target
+            # filenames defeats verbatim matching (observed: GLM sent the
+            # same empty-body edit_file to different files).
+            dominant = self._dominant_kind_failure(action.name)
+            if (
+                dominant is None
+                or dominant[1] < REPEAT_BLOCK_THRESHOLD
+                or not _is_contract_error(dominant[0])
+                or not _call_has_same_defect(action, dominant[0])
+            ):
+                return None
+            count, kind = dominant[1], dominant[0]
         target = str(
             action.parameters.get("path") or action.parameters.get("command") or ""
         )
@@ -310,6 +347,23 @@ class DuckPacemaker:
             "======= / >>>>>>> REPLACE markers, or use ::write_file to "
             "rewrite the file."
         )
+
+    def _dominant_kind_failure(self, tool_name: str) -> tuple[str, int] | None:
+        """Return the most-failed error kind recorded for a tool.
+
+        Args:
+            tool_name: Tool whose kind counters to scan.
+
+        Returns:
+            (kind, count) of the highest-count entry, or None when the
+            tool has no recorded failures.
+        """
+        entries = [
+            (kind, count)
+            for (name, kind), count in self._kind_failures.items()
+            if name == tool_name
+        ]
+        return max(entries, key=lambda kv: kv[1]) if entries else None
 
     def _max_repeated_failures(self) -> int:
         """Largest repeated-failure count across both signature levels.

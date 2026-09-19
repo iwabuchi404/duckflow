@@ -218,3 +218,64 @@ def test_contract_error_classification() -> None:
     assert _is_contract_error("outside workspace")
     assert not _is_contract_error("find_not_matched")
     assert not _is_contract_error("exit code 1")
+
+
+def test_defect_block_catches_rotating_target() -> None:
+    """Empty-body edits to *different* files still get blocked.
+
+    Reproduces GLM rename-hard r1: store.py/api.py succeeded, then the
+    model resent the same malformed empty body to cli.py, worker.py,
+    reports.py — rotating targets defeats verbatim signatures, so the
+    shared form defect (no edit body) is what must be matched.
+    """
+    pacemaker = _pacemaker()
+    for path in ("cli.py", "worker.py", "reports.py"):
+        _fail(pacemaker, _edit(path), EMPTY_EDIT_ERROR)
+
+    # A 4th empty-body edit to yet another filename is doomed — refuse it.
+    refusal = pacemaker.check_repeat_block(_edit("new_target.py"))
+
+    assert refusal is not None
+    assert "BLOCKED" in refusal
+
+
+def test_defect_block_allows_call_with_real_body() -> None:
+    """A properly-formed edit is the intended escape hatch — never blocked."""
+    pacemaker = _pacemaker()
+    for path in ("cli.py", "worker.py", "reports.py"):
+        _fail(pacemaker, _edit(path), EMPTY_EDIT_ERROR)
+
+    marker_edit = Action(
+        name="edit_file",
+        parameters={
+            "path": "new_target.py",
+            "content": "<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE",
+        },
+    )
+    legacy_edit = Action(
+        name="edit_file",
+        parameters={"path": "new_target.py", "find": "old", "replace": "new"},
+    )
+
+    assert pacemaker.check_repeat_block(marker_edit) is None
+    assert pacemaker.check_repeat_block(legacy_edit) is None
+
+
+def test_defect_block_scoped_to_inspectable_defects() -> None:
+    """Contract kinds without a call-visible defect stay verbatim-only.
+
+    'outside workspace' can be fixed by changing the path param — a new
+    call with a different path is legitimate and must not be refused.
+    """
+    pacemaker = _pacemaker()
+    path_error = "Action 'read_file' failed: Reason: path outside workspace"
+    for _ in range(REPEAT_BLOCK_THRESHOLD):
+        _fail(
+            pacemaker,
+            Action(name="read_file", parameters={"path": "/etc/x"}),
+            path_error,
+        )
+
+    # A read of a different path is not the same defect — allowed.
+    new_call = Action(name="read_file", parameters={"path": "ok.py"})
+    assert pacemaker.check_repeat_block(new_call) is None

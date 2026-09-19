@@ -1,0 +1,210 @@
+{
+  "name": "gauntlet-v3-main3",
+  "recorded_at": "2026-09-19T06:04:24.126768+00:00",
+  "git": {
+    "head": "500531a17a5980a7c20345d70b243dd9308286ca",
+    "dirty": true,
+    "porcelain": "M companion/modules/pacemaker.py\n M tests/test_repeated_failure_block.py\n?? evals/baselines/gauntlet-v3-main3.json",
+    "diff_sha": "32d4b4b4efb4b151"
+  },
+  "run_commits": [
+    "500531a17a5980a7c20345d70b243dd9308286ca"
+  ],
+  "scenario_shas": {
+    "ambiguous-gauntlet": "a2d57c7004a5",
+    "needle-wide": "e9beaf88590e",
+    "no-change-hard": "9c51d8f36796",
+    "recover-quad": "c2fd9241c5c0",
+    "rename-hard": "b65b33abac7b",
+    "spec-build": "c834907c4569"
+  },
+  "results_dirs": [
+    "evals\\results\\gauntlet-v3\\ds_symops",
+    "evals\\results\\gauntlet-v3\\glm_symops",
+    "evals\\results\\gauntlet-v3\\lfm_native"
+  ],
+  "stats": {
+    "ambiguous-gauntlet|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 33884,
+      "median_loops": 3,
+      "median_seconds": 33.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "needle-wide|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 36738,
+      "median_loops": 6,
+      "median_seconds": 24.7,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-hard|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 46739,
+      "median_loops": 8,
+      "median_seconds": 17.2,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-quad|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 65006,
+      "median_loops": 8,
+      "median_seconds": 42.6,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "rename-hard|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 33537,
+      "median_loops": 5,
+      "median_seconds": 32.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 42234,
+      "median_loops": 6,
+      "median_seconds": 22.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "ambiguous-gauntlet|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 27194,
+      "median_loops": 3,
+      "median_seconds": 32.5,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "needle-wide|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 44761,
+      "median_loops": 7,
+      "median_seconds": 31.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-hard|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 51219,
+      "median_loops": 8,
+      "median_seconds": 44.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-quad|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 78996,
+      "median_loops": 6,
+      "median_seconds": 802.4,
+      "statuses": {
+        "timeout": 1,
+        "completed": 2
+      }
+    },
+    "rename-hard|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 95601,
+      "median_loops": 14,
+      "median_seconds": 101.9,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 51227,
+      "median_loops": 8,
+      "median_seconds": 146.1,
+      "statuses": {
+        "completed": 2,
+        "timeout": 1
+      }
+    },
+    "ambiguous-gauntlet|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 20056,
+      "median_loops": 3,
+      "median_seconds": 11.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "needle-wide|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 122618,
+      "median_loops": 20,
+      "median_seconds": 46.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "no-change-hard|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 68366,
+      "median_loops": 10,
+      "median_seconds": 32.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "recover-quad|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 123643,
+      "median_loops": 16,
+      "median_seconds": 40.2,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "rename-hard|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 145652,
+      "median_loops": 19,
+      "median_seconds": 83.9,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "spec-build|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 105500,
+      "median_loops": 15,
+      "median_seconds": 81.0,
+      "statuses": {
+        "completed": 3
+      }
+    }
+  }
+}

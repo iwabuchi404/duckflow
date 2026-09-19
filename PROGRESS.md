@@ -1,3 +1,12 @@
+### 2026-09-19: Gauntlet v3 実行（A+B検証、Main3×6課題×3回）＋ defect-level ブロック拡張
+- 結果（v2→v3）: **DS 16/18→18/18・GLM 16/18→14/18・LFM 4/18→6/18**（v2の4件は真空パス3+実質1、v3の6件は全て正当パス）。ベースライン `evals/baselines/gauntlet-v3-main3.json` 保存（無効モデルIDの即失敗36件は除外）。
+- premature応答ガードの効果: DS の唯一の失敗型（宣言だけして応答）が消滅し全通過。
+- パス正規化の効果: LFM の `/workspace/...`・`/tmp/...` パスが全て正常に workspace 内へ解決し、ambiguous 0/3→2/3・recover 1/3→2/3・spec-build 0/3→1/3。`report_contains` は GLM の無報告ランを正しくfail判定。
+- GLM の分析（rename-hard r1）: store/api は edit 成功後に degraded し、cli→worker→reports×3 の**ファイル名を回転させた空body連発**に。エスカレーションガイドは発火（kind=3で強化注入）したが無視され、verbatimブロックは reports.py が3回止まり（4回目必要）で未発火、カスケードは kind=5 に最終ループで到達するも check_health 前に終了。**回転ターゲットは verbatim シグネチャを回避する**ギャップを特定。
+- 対応 — defect-level ブロック追加（`pacemaker.py`）: `check_repeat_block` を拡張し、verbatim 未満でも「ツールの dominant contract error kind ≥3 かつ新規呼出しが同じ形の欠陥を持つ」場合は実行前拒否。`_call_has_same_defect` は呼出し自体から検査可能な欠陥のみ判定（現状は edit_file 空body — find パラメータや SEARCH/find: を含む正規形は脱出経路として通す）。「outside workspace」等パラメータ修正で治る kind は対象外（誤ブロック防止）。失敗シナリオのトークンは v2→v3 で25-40%削減（recover 131k→79k, rename 132k→95k）。
+- GLM 残課題: v3 の失敗は repeat 機構の適用外の別機序 — recover r1/spec r2 は LLM 応答自体が巨大・低速なタイムアウト、no-change r2 は無報告でのループ枯渇。
+- テスト: `test_repeated_failure_block.py` に defect-block 3件追加（回転ターゲット捕捉・正規body/find形式の非ブロック・検査不能kindの非ブロック）。**822 passed / 2 skipped**。
+
 ### 2026-09-19: 同一失敗のターン跨ぎ連発への段階エスカレーション（A+B実装）
 - 背景: GLM rename-hard で空body edit_file が6連発（142k/93k tokens消費）。Correction Guideはターン限りの助言で、連続エラーカウンタは成功を挟むとリセットされるため捉えられなかった。
 - 失敗シグネチャ追跡（`companion/modules/pacemaker.py`）: `_call_failures`（tool+正規化params）と `_kind_failures`（tool+error kind）を新設。`consecutive_errors` と違い成功を挟んでも持続し、成功はそのツールのカウンタのみリセット（read_file成功がedit_file失敗を帳消しにしない）。`_error_kind` は `Reason:` 行またはペイロード先頭から正規化抽出。
