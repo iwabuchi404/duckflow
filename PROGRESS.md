@@ -1,3 +1,14 @@
+### 2026-09-19: ambiguous-spontaneous 再評価（0/9不変）＋ Holdout Gauntlet 4課題新設
+- **ambiguous-spontaneous 再評価**（Main3×3回、現行コード）: DS/GLM/LFM いずれも **0/3**。全モデルが「必要な商品」の曖昧さを認識せず全商品を推測出力（GLM r3 は "This is a CLEAR task. No ambiguity" と明確に誤判断）。prematureガード/パス正規化/連発対策は意味判断の欠陥に効かない — ambiguous-gauntlet（明示指示あり、全モデル高パス）と spontaneous（指示なし、全滅）が別物であることが実証され、H-1/Decision Engine 担当の意味判断層の空白を確認。結果 `evals/results/spontaneous-v3/`。
+- **Holdout Gauntlet 新設**（`evals/scenarios/holdout/`）: dev gauntlet への過適合を検出するため、同能力軸・別失敗パターンの4課題を凍結セットとして追加（`--all` には含まれず、明示 `--scenario` 指定のみ・マイルストーン時のみ実行）。
+  - `move-symbol`（rename-hard軸）: 関数を新モジュールへ移動＋import更新＋新規ファイル作成。罠: calc.py の compute_total が内部で compute_tax を参照（移動後に NameError となる潜在バグ、自発検出を試す）
+  - `recover-trio`（recover-quad軸）: 異なるバグクラス — ミュータブルデフォルト引数・`%`/`//` 誤演算子・欠落依存 termcolor（requirements.txt 機構で毎run自動アンインストール）
+  - `no-change-cache`（no-change-hard軸）: 「メモリリーク」報告だがTTL無しは文書化された仕様。workspace_unmodified + report_contains
+  - `spec-build-stats`（spec-build軸）: summarize() 実装＋USAGE.md 例追記（複数成果物）
+- 未カバー軸: 探索効率（needle）— fixture コストが高いため将来課題
+- ローカル検証: 全YAMLロード・初期状態でfix/build系は失敗・no-changeは全通過・参照解でverify通過。move-symbol を DS で1回スモーク → 6ループでPASS（移動後に潜在NameErrorを自発検出して修正 — 罠が設計通り機能）
+- 採注設計: checks の file_not_contains は**バグ行全体**（シグネチャ/return文）を対象化し、正当な修正形（`items=None`・`math.ceil`・`"\n".join` 等）との衝突を回避。recover-quad の `price *` チューニング教訓を反映。
+
 ### 2026-09-19: Gauntlet v3 実行（A+B検証、Main3×6課題×3回）＋ defect-level ブロック拡張
 - 結果（v2→v3）: **DS 16/18→18/18・GLM 16/18→14/18・LFM 4/18→6/18**（v2の4件は真空パス3+実質1、v3の6件は全て正当パス）。ベースライン `evals/baselines/gauntlet-v3-main3.json` 保存（無効モデルIDの即失敗36件は除外）。
 - premature応答ガードの効果: DS の唯一の失敗型（宣言だけして応答）が消滅し全通過。

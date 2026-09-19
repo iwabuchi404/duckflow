@@ -1,0 +1,36 @@
+# HOLDOUT — milestone-only scenario. Same axis as gauntlet/recover-quad
+# (multi-cause bug fixing + missing dependency + recovery) but different
+# bug classes: mutable default arg, off-by-one division, and a different
+# missing package (termcolor). Frozen — do not tune against this set.
+id: recover-trio
+task: "このワークスペースで pytest を実行すると複数のエラーで失敗します。原因は1つではなく、inventory.py / batch.py / export.py にあるコードの不具合と、不足している外部依存の組み合わせです。pytest を使って失敗を確認し、原因を1つずつ切り分けて修正してください。不足している依存は pip で導入してかまいません。テストファイル自体は修正せず、計画の提示だけで終了せず、修正の適用とテストの再実行による確認まで行ってください。完了したら報告してください。"
+fixture: fixtures/recover_trio_ws
+max_loops: 25
+timeout_seconds: 900
+verify_command: "{python} -m pytest -q"
+follow_up_inputs:
+  - "了解です。その計画で進めてください。"
+checks:
+  # NOTE: valid fixes vary — `items=None`, `items: list | None = None`,
+  # math.ceil, `(total + per_page - 1) // per_page`, explicit newline
+  # writes. file_not_contains targets the exact buggy lines (signature /
+  # return statement) so partial-credit variants can't collide; the
+  # verify_command proves correctness.
+  - type: file_not_contains
+    path: inventory.py
+    text: "def add_item(item: str, items: list = [])"
+  - type: file_not_contains
+    path: batch.py
+    text: "return total % per_page"
+  - type: file_not_contains
+    path: export.py
+    text: 'return "".join'
+  - type: file_contains
+    path: export.py
+    text: "termcolor"
+  - type: unmodified
+    path: test_inventory.py
+  - type: unmodified
+    path: test_batch.py
+  - type: unmodified
+    path: test_export.py

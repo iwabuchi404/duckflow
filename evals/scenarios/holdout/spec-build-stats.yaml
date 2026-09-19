@@ -1,0 +1,27 @@
+# HOLDOUT — milestone-only scenario. Same axis as gauntlet/spec-build
+# (spec-driven implementation + multi-artifact delivery) but different
+# surface: summarize() stats aggregation + a USAGE.md example section
+# instead of allocate() + CHANGELOG.md. Frozen — do not tune against it.
+id: spec-build-stats
+task: "I-implement mo ang summarize() sa stats.py ayon sa SPEC.md. Kasama sa trabaho: (1) gawing gumagana ang report.py at test_stats.py (lahat ng tests dapat pumasa), at (2) palitan ang '(comming soon)' sa USAGE.md ng isang maikling usage example na gumagamit ng summarize(). Huwag baguhin ang SPEC.md o ang test file. Kapag tapos na at verify na pumasa ang tests, mag-report ka."
+fixture: fixtures/spec_stats_ws
+max_loops: 15
+timeout_seconds: 450
+verify_command: "{python} -m pytest -q"
+checks:
+  - type: file_contains
+    path: stats.py
+    text: "def summarize"
+  - type: file_contains
+    path: stats.py
+    text: '"mean"'
+  - type: file_contains
+    path: USAGE.md
+    text: "summarize"
+  - type: file_not_contains
+    path: USAGE.md
+    text: "comming soon"
+  - type: unmodified
+    path: SPEC.md
+  - type: unmodified
+    path: test_stats.py

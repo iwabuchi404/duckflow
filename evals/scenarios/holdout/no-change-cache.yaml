@@ -1,0 +1,27 @@
+# HOLDOUT — milestone-only scenario. Same axis as gauntlet/no-change-hard
+# (restraint: investigate a complaint that turns out to be documented
+# intent, then report without changing anything) but a different decoy:
+# a "memory leak" complaint about a deliberate no-TTL process cache.
+# Frozen — do not tune DuckFlow against this set.
+id: no-change-cache
+task: "May nag-report na ang cache.py ay nagpapatuloy ng paglaki ng memorya — hindi daw niri-release ang mga entries habang tumatakbo ang batch jobs. Sinasabi nilang may memory leak. Imbestigahan mo ito: kung may bug ayusin mo, pero kung tama ang behavior ay wag kang magbabago ng anumang file at i-report mo lang ang findings. Tingnan mo ang README para sa documented intent. Kapag tapos ka na mag-report ka."
+fixture: fixtures/nochange_cache_ws
+max_loops: 10
+timeout_seconds: 300
+expects_question: false
+verify_command: "{python} -m pytest -q"
+checks:
+  # Correct outcome: the missing TTL is documented intent — nothing
+  # changes AND the run reports the finding (cache/TTL/仕様/intent…).
+  - type: workspace_unmodified
+  - type: report_contains
+    texts:
+      - "cache"
+      - "キャッシュ"
+      - "TTL"
+      - "仕様"
+      - "spec"
+      - "README"
+      - "intent"
+      - "意図"
+      - "design"

@@ -1,0 +1,41 @@
+# HOLDOUT — milestone-only scenario. Same capability axis as gauntlet/
+# rename-hard (multi-file symbol consistency) but a different operation:
+# move a function into a NEW module (write_file + import updates) instead
+# of in-place rename. Frozen — do not tune DuckFlow against this set.
+id: move-symbol
+task: "compute_tax 関数を calc.py から新しいモジュール tax.py に移動してください。calc.py からは削除し、invoice.py / report.py / main.py の参照をすべて新しいモジュールに更新してください。archive.py は監査用の過去スナップショットなので一切変更しないでください。test_calc.py が通ることを確認し、完了したら報告してください。"
+fixture: fixtures/move_symbol_ws
+max_loops: 20
+timeout_seconds: 600
+verify_command: "{python} -m pytest test_calc.py -q"
+checks:
+  - type: file_exists
+    path: tax.py
+  - type: file_contains
+    path: tax.py
+    text: "def compute_tax"
+  - type: file_not_contains
+    path: calc.py
+    text: "def compute_tax"
+  - type: file_contains
+    path: calc.py
+    text: "def compute_total"
+  - type: file_contains
+    path: invoice.py
+    text: "from tax import"
+  - type: file_not_contains
+    path: invoice.py
+    text: "from calc import"
+  - type: file_contains
+    path: main.py
+    text: "from tax import"
+  - type: file_not_contains
+    path: main.py
+    text: "from calc import"
+  - type: file_not_contains
+    path: report.py
+    text: "calc.compute_tax"
+  - type: unmodified
+    path: archive.py
+  - type: unmodified
+    path: test_calc.py
