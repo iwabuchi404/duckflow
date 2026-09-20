@@ -717,3 +717,21 @@
 - `evals/runner.py`: `_ensure_clean_env()` を追加。fixture の `requirements.txt` に宣言されたパッケージを各 run 前に `pip show` / `pip uninstall -y` で除去。recover-quad の `tabulate` が前 run でインストールされた状態を残し、r2/r3 が依存不足条件を bypass するのを防ぐ。
 - `evals/scenarios/gauntlet/needle-wide.yaml`: `timeout_seconds` を 600 → 900 に引上げ。DS needle r2 が 600 秒 wall timeout で打ち切られていたため、探索迷走時の余裕を確保。
 - 検証: `uv run python -X utf8 -m pytest tests/test_gauntlet_scenarios.py tests/test_eval_analysis.py tests/test_eval_follow_up.py tests/test_eval_stages.py -q` → 29 passed / 1 warning。
+
+### 2026-09-19: Frontier Gauntlet新設＋初回ベースライン＋Interpretation Gate回路A/B
+- **Frontier 5課題**（`evals/scenarios/frontier/`、凍結・マイルストーン時のみ実行・合否基準ではなく能力上限の計測用）:
+  - `frontier-ambiguous-semantic`: members.csv重複除去。dedup基準（email/name）が未定義で結果が分岐。scripted answerは**非自明側（name基準）**を指定し、推測での偶然パスを防止。
+  - `frontier-replan`: report.pyが不存在CLI `chartgen` を呼ぶ。pip導入も動作も不可能 → Python再実装への方針転換を測る。
+  - `frontier-cross-impact`: 日付fmtをDD/MM/YYYY化。共有定数DATE_FMTを直すだけでは importer.py のinlineリテラル `%Y-%m-%d` が残り失敗 → 影響範囲理解を測る。
+  - `frontier-contradiction`: 「score降順ソート」×README「出力順序は絶対不変」の矛盾。workspace_unmodified＋矛盾指摘reportが正解。
+  - `frontier-partial-evidence`: error.logが示す `active[0]` のガードだけでは test が通らない設計（上流の `"actve"` typo が真因）。断片的証拠への過剰収斂を測る。
+- **初回結果（修正版基準・各3回）**: DS **12/15**・GLM **11/15**・LFM **8/15**。ベースライン `evals/baselines/frontier-v1-main3.json`。
+  - ambiguous-semantic **全モデル 0/9** — 誰も質問せず全員 email 基準を推測して失敗（DS含む）。ambiguous-spontaneous 0/9 と同じ層の欠陥がDSでも再現。
+  - contradiction 9/9 — 全モデルが duck_call で確認→矛盾を指摘する正しい restraint。
+  - 初版シナリオの欠陥を検出・修正: scripted answer が推測と一致する設計だと真空パスになる（初版はDS/LFMが email 基準を推測して偶然合格）。旧結果は `results/frontier-v1-superseded/` に退避。
+- **Interpretation Gate 回路（実験）**: `DUCKFLOW_INTERPRETATION_GATE=1` で静的ブロック直後に判断手続きプロンプトを注入（`companion/prompts/templates.py` `INTERPRETATION_GATE_PROMPT`、注入は `builder.py` §3.5、metaに `interpretation_gate` 記録）。
+- **A/B結果（27試行、注入は llm_calls で実確認）**:
+  - ambiguous-spontaneous: A=全モデル0/3、**B=全モデル0/3** — 手続きを毎回注入しても誰も実行しない。
+  - complete-no-question 対照: A=DS 3/3・GLM 2/3・LFM 3/3、B=DS 3/3・GLM 3/3・LFM 3/3 — 過剰質問の副作用もゼロ。
+  - **結論: 静的プロンプト回路は曖昧性判断に効果ゼロ**。H-1（Decision Engine）には能動的判断機構が必要という設計根拠を取得。
+- 検証: `uv run pytest tests/ -q` → **841 passed / 2 skipped**（test_interpretation_gate.py 3件追加）。

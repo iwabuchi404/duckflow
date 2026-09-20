@@ -453,8 +453,12 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
         meta["git_commit"] = "unknown"
         meta["git_dirty"] = "unknown"
     from companion.prompts.few_shot import get_effective_framing
+    from companion.prompts.builder import interpretation_gate_enabled
 
     meta["few_shot_framing"] = get_effective_framing()
+    # Experiment circuit: records whether the Interpretation Gate block
+    # was injected so A/B comparisons stay honest.
+    meta["interpretation_gate"] = interpretation_gate_enabled()
     try:
         from companion.config.config_loader import config as _cfg
 

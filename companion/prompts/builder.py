@@ -16,6 +16,24 @@ from companion.modules.repo_map import generate_repo_map_text
 from companion.config.tier_profile import TierProfile
 
 
+def interpretation_gate_enabled() -> bool:
+    """Return whether the Interpretation Gate prompt circuit is active.
+
+    Experiment switch shared by prompt building and eval metadata.
+    Reads DUCKFLOW_INTERPRETATION_GATE ("1"/"true"/"on" enable it).
+
+    Returns:
+        True when the gate block should be injected into the prompt.
+    """
+    import os
+
+    return os.getenv("DUCKFLOW_INTERPRETATION_GATE", "").lower() in (
+        "1",
+        "true",
+        "on",
+    )
+
+
 class PromptBuilder:
     """
     AgentState からシステムプロンプトを組み立てるビルダー。
@@ -87,6 +105,16 @@ class PromptBuilder:
                 few_shots = [msg.copy() for msg in few_shots]
                 few_shots[-1]["cache_control"] = {"type": "ephemeral"}
                 messages.extend(few_shots)
+
+        # 3.5 Interpretation Gate（実験回路: DUCKFLOW_INTERPRETATION_GATE=1）
+        # 静的ブロックの直後・動的コンテキストの直前に挿入し、静的部分の
+        # キャッシュを条件間で共有できるようにする。
+        if interpretation_gate_enabled():
+            from companion.prompts.templates import INTERPRETATION_GATE_PROMPT
+
+            messages.append(
+                {"role": "system", "content": INTERPRETATION_GATE_PROMPT}
+            )
 
         # 4. 動的なコンテキスト（ここから毎ターン確実に変動する）
         # 4a. Repo Map (先回りコンテキスト: ast-based symbol map)

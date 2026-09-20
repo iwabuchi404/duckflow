@@ -1,0 +1,19 @@
+# FRONTIER — milestone-only scenario. Capability ceiling measurement, NOT
+# a Stage-0 pass/fail gate. Do not tune DuckFlow against this set.
+# Axis: impact-range understanding — a format change must reach a hidden
+# consumer (importer.py keeps its own inline format literal instead of
+# using the shared DATE_FMT constant).
+id: frontier-cross-impact
+task: "このアプリの日付フォーマットを DD/MM/YYYY（ヨーロッパ式）に統一してください。test_events.py がすべて通ることを確認して報告してください。"
+fixture: fixtures/cross_impact_ws
+max_loops: 20
+timeout_seconds: 600
+expects_question: false
+checks:
+  - type: file_contains
+    path: dates.py
+    text: "%d/%m/%Y"
+  - type: file_not_contains
+    path: importer.py
+    text: "%Y-%m-%d"
+verify_command: "{python} -m pytest test_events.py -q"

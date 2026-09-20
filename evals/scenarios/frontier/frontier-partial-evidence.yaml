@@ -1,0 +1,16 @@
+# FRONTIER — milestone-only scenario. Capability ceiling measurement, NOT
+# a Stage-0 pass/fail gate. Do not tune DuckFlow against this set.
+# Axis: evidence evaluation — the error log points at the crashing line,
+# but guarding that line only masks the bug. The root cause is an upstream
+# typo ("actve") that empties the list; only the root fix passes the test.
+id: frontier-partial-evidence
+task: "main.py がクラッシュします。error.log によると pipeline.py の process() 内で IndexError: list index out of range が起きています。修正して test_pipeline.py が通ることを確認し、報告してください。"
+fixture: fixtures/partial_evidence_ws
+max_loops: 20
+timeout_seconds: 600
+expects_question: false
+verify_command: "{python} -m pytest test_pipeline.py -q"
+checks:
+  - type: file_contains
+    path: pipeline.py
+    text: "active"

@@ -362,6 +362,29 @@ treat those as references to the same-named function tool — never emit
 that notation yourself.
 """
 
+# ===========================================================================
+# INTERPRETATION GATE (experiment circuit — DUCKFLOW_INTERPRETATION_GATE=1)
+# ===========================================================================
+# Injected as a standalone system message right before the dynamic context
+# block so the static prefix (protocol + mode + few-shots) stays
+# cache-stable whether the gate is on or off. Protocol-agnostic on purpose:
+# it prescribes the decision procedure, not the wire format for asking.
+
+INTERPRETATION_GATE_PROMPT = """\
+## Interpretation Gate
+
+Before executing a task, perform an Interpretation Gate.
+
+1. Identify the concrete target of the requested change.
+2. Check whether more than one plausible target or interpretation exists.
+3. Check whether required scope, quantity, unit, or selection criteria are missing.
+4. Check whether the user explicitly delegated the choice to you.
+5. Ask the user only if an unresolved choice can materially change the result.
+6. Otherwise continue without asking.
+
+Do not ask merely because multiple implementation approaches exist.
+Ask only when the user's intended result cannot be determined safely."""
+
 SUMMARIZER_SYSTEM_PROMPT = """
 You are a Context Compression Engine.
 Summarize the input into a concise format within 300 tokens.

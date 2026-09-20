@@ -1,0 +1,180 @@
+{
+  "name": "frontier-v1-main3",
+  "recorded_at": "2026-09-20T03:15:44.561119+00:00",
+  "git": {
+    "head": "589d9f02446f01c3a4f559fc0a027d4baa283e21",
+    "dirty": true,
+    "porcelain": "M companion/prompts/builder.py\n M companion/prompts/templates.py\n M evals/runner.py\n?? evals/_circuit_report.py\n?? evals/_frontier_report.py\n?? evals/_verify_frontier.py\n?? evals/scenarios/frontier/\n?? tests/test_interpretation_gate.py",
+    "diff_sha": "6590f4ff3693fc7e"
+  },
+  "run_commits": [
+    "589d9f02446f01c3a4f559fc0a027d4baa283e21"
+  ],
+  "scenario_shas": {
+    "frontier-ambiguous-semantic": "5f7b077c357b",
+    "frontier-contradiction": "bed565c26c77",
+    "frontier-cross-impact": "d5a73b021b8d",
+    "frontier-partial-evidence": "3ca9dd71c8f4",
+    "frontier-replan": "7fcd2b4d9491"
+  },
+  "results_dirs": [
+    "evals\\results\\frontier-v1\\ds_symops",
+    "evals\\results\\frontier-v1\\ds_symops_v2",
+    "evals\\results\\frontier-v1\\glm_symops",
+    "evals\\results\\frontier-v1\\glm_symops_v2",
+    "evals\\results\\frontier-v1\\lfm_native",
+    "evals\\results\\frontier-v1\\lfm_native_v2"
+  ],
+  "stats": {
+    "frontier-contradiction|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 30354,
+      "median_loops": 3,
+      "median_seconds": 58.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-cross-impact|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 31843,
+      "median_loops": 5,
+      "median_seconds": 40.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-partial-evidence|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 23109,
+      "median_loops": 4,
+      "median_seconds": 13.5,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-replan|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 41782,
+      "median_loops": 7,
+      "median_seconds": 58.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-ambiguous-semantic|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 25855,
+      "median_loops": 5,
+      "median_seconds": 32.8,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-contradiction|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 21686,
+      "median_loops": 3,
+      "median_seconds": 22.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-cross-impact|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 59790,
+      "median_loops": 9,
+      "median_seconds": 55.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-partial-evidence|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 33604,
+      "median_loops": 6,
+      "median_seconds": 35.7,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-replan|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 87061,
+      "median_loops": 14,
+      "median_seconds": 64.2,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-ambiguous-semantic|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 18445,
+      "median_loops": 3,
+      "median_seconds": 31.9,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-contradiction|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 18832,
+      "median_loops": 3,
+      "median_seconds": 14.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-cross-impact|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 66156,
+      "median_loops": 12,
+      "median_seconds": 38.6,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-partial-evidence|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 108116,
+      "median_loops": 20,
+      "median_seconds": 51.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-replan|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 1,
+      "median_tokens": 167615,
+      "median_loops": 25,
+      "median_seconds": 68.5,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-ambiguous-semantic|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 14611,
+      "median_loops": 4,
+      "median_seconds": 18.2,
+      "statuses": {
+        "completed": 3
+      }
+    }
+  }
+}

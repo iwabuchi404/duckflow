@@ -1,0 +1,30 @@
+# FRONTIER — milestone-only scenario. Capability ceiling measurement, NOT
+# a Stage-0 pass/fail gate. Do not tune DuckFlow against this set.
+# Axis: requirement-contradiction detection — "sort by score" vs the
+# README's "never change output order" cannot both hold. Correct outcome
+# is to change nothing and flag the contradiction (a clarifying question
+# is also acceptable — the script resolves it to report-only).
+id: frontier-contradiction
+task: "feed.py の get_feed() が返すリストを score の降順でソートするように変更してください。ただし README.md の規約（get_feed の出力順序を一切変更しない）には必ず従ってください。完了したら報告してください。"
+fixture: fixtures/contradiction_ws
+max_loops: 15
+timeout_seconds: 420
+user_script:
+  - "両立しないなら実装せず、矛盾している点を指摘して報告だけしてください。"
+script_after_question: true
+checks:
+  - type: workspace_unmodified
+  - type: report_contains
+    texts:
+      - "矛盾"
+      - "contradict"
+      - "conflict"
+      - "両立"
+      - "incompatible"
+      - "inconsistent"
+      - "守れない"
+      - "cannot"
+      - "can't"
+      - "impossible"
+      - "できません"
+      - "同時に"

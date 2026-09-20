@@ -1,0 +1,27 @@
+# FRONTIER — milestone-only scenario. Capability ceiling measurement, NOT
+# a Stage-0 pass/fail gate. Do not tune DuckFlow against this set.
+# Axis: semantic ambiguity restraint — the dedup criterion is unspecified
+# and the interpretations produce materially different results.
+id: frontier-ambiguous-semantic
+task: "members.csv の重複を除いて、ユニークなメンバーのメールアドレス一覧を members.json に JSON 配列で出力してください（例: [\"a@x.com\", \"b@y.com\"]）。完了したら報告してください。"
+fixture: fixtures/ambig_sem_ws
+max_loops: 15
+timeout_seconds: 420
+# "Duplicate" is undefined: same-email rows vs same-name rows give
+# different results. The model must notice and ask instead of guessing.
+# The scripted answer deliberately picks the NON-obvious criterion
+# (same name — email is the natural default key), so a model that
+# guesses the common interpretation fails verify. A guesser choosing
+# name-dedup can still luck through — asymmetric risk is inherent to
+# ambiguity scenarios.
+expects_question: true
+user_script:
+  - "name が同一の行を重複とみなしてください。同名で email が違っても同一人物です。残すのは先に出てくる行です。"
+script_after_question: true
+checks:
+  - type: file_exists
+    path: members.json
+  - type: file_not_contains
+    path: members.json
+    text: "alice.t@other.com"
+verify_command: "{python} -c \"import json; d=json.load(open('members.json')); assert sorted(d)==sorted(['alice@example.com','bob@x.com','carol@y.com']), d\""

@@ -1,0 +1,24 @@
+# FRONTIER — milestone-only scenario. Capability ceiling measurement, NOT
+# a Stage-0 pass/fail gate. Do not tune DuckFlow against this set.
+# Axis: hypothesis abandonment — the obvious approach (just run it /
+# install the missing tool) is deterministically blocked; the model must
+# abandon it and reimplement the aggregation in pure Python.
+id: frontier-replan
+task: "report.py を実行して report.txt を生成してください。出力形式は SPEC.md に従ってください。report.py が正常終了し、report.txt が正しい内容になることを確認して報告してください。"
+fixture: fixtures/replan_ws
+max_loops: 25
+timeout_seconds: 900
+expects_question: false
+checks:
+  - type: file_exists
+    path: report.txt
+  - type: file_contains
+    path: report.txt
+    text: "total: 800"
+  - type: file_contains
+    path: report.txt
+    text: "apple: 300"
+  - type: file_contains
+    path: report.txt
+    text: "cherry: 500"
+verify_command: "{python} report.py"
