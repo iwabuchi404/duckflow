@@ -425,6 +425,19 @@ class DuckPacemaker:
             "is done, or (3) ::duck_call @<question> if you need the user."
         )
 
+    def pending_decisions_for_task_start(self) -> List[str]:
+        """Return decision points to evaluate when a new user task arrives.
+
+        Pacemaker owns the firing points for the Decision Engine (H-1);
+        v1 fires needs_clarification once per incoming user task, before
+        the autonomous loop starts. Event-driven points (PLAN_CREATED,
+        TEST_FAILED, ...) are future work.
+
+        Returns:
+            List of decision request types to check.
+        """
+        return ["needs_clarification"]
+
     def _dominant_kind_failure(self, tool_name: str) -> tuple[str, int] | None:
         """Return the most-failed error kind recorded for a tool.
 

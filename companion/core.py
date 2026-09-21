@@ -51,6 +51,9 @@ from companion.core_action_results import (
     get_approval_request,
 )
 from companion.core_action_invocation import invoke_tool
+from companion.decision import DecisionEngine, decision_engine_enabled
+from companion.decision.engine import build_clarification_note
+from companion.decision.models import ACTION_ASK_USER
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +125,10 @@ class DuckAgent:
 
         # Initialize Memory Manager
         self.memory_manager = MemoryManager(llm_client=self.llm, max_tokens=8000)
+
+        # Decision Engine (H-1 experiment) — lazily created on first use so
+        # the SameModel provider shares the agent's LLM client.
+        self._decision_engine: "DecisionEngine | None" = None
 
         # Initialize CoreActions (extracted action handlers)
         from companion.core_actions import CoreActions
@@ -207,6 +214,54 @@ class DuckAgent:
             Formatted tool descriptions in Sym-Ops style.
         """
         return get_tool_descriptions(self.tools, mode)
+
+    def _get_decision_engine(self) -> "DecisionEngine | None":
+        """Return the Decision Engine when the experiment flag is on.
+
+        Lazily created so the SameModel provider shares the agent's LLM
+        client (same model, same usage accounting).
+
+        Returns:
+            The DecisionEngine instance, or None when disabled.
+        """
+        if not decision_engine_enabled():
+            return None
+        if self._decision_engine is None:
+            self._decision_engine = DecisionEngine(self.llm)
+        return self._decision_engine
+
+    @property
+    def decision_log(self) -> List[Dict[str, Any]]:
+        """Decision Engine の判定ログ（評価記録用。無効時は空）。"""
+        if self._decision_engine is None:
+            return []
+        return self._decision_engine.log
+
+    async def _run_decision_gate(self, user_input: str) -> None:
+        """Fire Pacemaker task-start decision points for a new user task.
+
+        Runs the needs_clarification check before the autonomous loop
+        starts. An ask_user result is injected as a system note so the
+        agent asks via duck_call instead of guessing; provider failures
+        fall back to continue and never block normal operation.
+
+        Args:
+            user_input: The raw user task text.
+        """
+        engine = self._get_decision_engine()
+        if engine is None:
+            return
+        for request_type in self.pacemaker.pending_decisions_for_task_start():
+            result = await engine.check(request_type, task=user_input, state=self.state)
+            if result.action == ACTION_ASK_USER:
+                note = build_clarification_note(result)
+                self.state.conversation_history.append(
+                    {"role": "system", "content": note}
+                )
+                ui.print_info(
+                    f"Decision Engine: ask_user"
+                    + (f" — {result.focus}" if result.focus else "")
+                )
 
     async def run(self):
         """Main execution loop."""
@@ -296,6 +351,9 @@ class DuckAgent:
                 )
                 self.pacemaker.loop_count = 0
                 self.llm.reset_native_log()
+
+                # --- Decision Engine entry gate (H-1 experiment) ---
+                await self._run_decision_gate(user_input)
 
                 ui.print_vitals(
                     self.state.vitals,

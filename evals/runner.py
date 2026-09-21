@@ -454,11 +454,15 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
         meta["git_dirty"] = "unknown"
     from companion.prompts.few_shot import get_effective_framing
     from companion.prompts.builder import interpretation_gate_enabled
+    from companion.decision import decision_engine_enabled
 
     meta["few_shot_framing"] = get_effective_framing()
     # Experiment circuit: records whether the Interpretation Gate block
     # was injected so A/B comparisons stay honest.
     meta["interpretation_gate"] = interpretation_gate_enabled()
+    # H-1 experiment: records whether the Decision Engine entry gate was
+    # active (Pacemaker → Context Compiler → SameModel binary decision).
+    meta["decision_engine"] = decision_engine_enabled()
     try:
         from companion.config.config_loader import config as _cfg
 
@@ -729,6 +733,7 @@ async def run_scenario(
         ],
         "raw_responses": raw_responses,
         "llm_calls": llm_calls,
+        "decisions": list(getattr(agent, "decision_log", []) or []),
         "vitals": (
             agent.state.vitals.model_dump()
             if hasattr(agent.state.vitals, "model_dump")

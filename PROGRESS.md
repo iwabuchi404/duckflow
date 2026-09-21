@@ -735,3 +735,14 @@
   - complete-no-question 対照: A=DS 3/3・GLM 2/3・LFM 3/3、B=DS 3/3・GLM 3/3・LFM 3/3 — 過剰質問の副作用もゼロ。
   - **結論: 静的プロンプト回路は曖昧性判断に効果ゼロ**。H-1（Decision Engine）には能動的判断機構が必要という設計根拠を取得。
 - 検証: `uv run pytest tests/ -q` → **841 passed / 2 skipped**（test_interpretation_gate.py 3件追加）。
+
+### 2026-09-19: H-1 Decision Engine 初回実装（SameModel binary）
+- **目的**: Interpretation Gate A/B で確認された「静的プロンプトでは曖昧性判断が発火しない」欠陥に対し、能動的な判断層を実装。初回実験はユーザー指定により OpenJev/logit ではなく **Pacemaker → Context Compiler → SameModel binary decision** の構成。
+- **新設 `companion/decision/`**:
+  - `models.py`: `DecisionRequest` / `DecisionContext` / `DecisionResult`。判定値は v1 では `continue` / `ask_user` のみ。
+  - `compiler.py`: `ContextCompiler` — AgentState から user_request・mode・直近アクション名のみを機械抽出（Agent の自作要約は信用しない設計）。
+  - `provider.py`: `DecisionProvider` プロトコル＋`SameModelDecisionProvider`（エージェントと同一 LLM に binary 判定させる。`raw=True` で Sym-Ops パースを回避、max_tokens=150）。`parse_binary_decision` は判別不能出力を安全側 continue に倒す。
+  - `engine.py`: `DecisionEngine.check()` — Provider 失敗時は continue フォールバック＋error 記録（判断層の故障で通常動作を止めない）。`build_clarification_note()` が ask_user 判定を注入ノートに変換。
+- **発火点（Pacemaker所有）**: `pending_decisions_for_task_start()` が `["needs_clarification"]` を返す。`core.py` のユーザー入力受領直後・自律ループ開始前に `_run_decision_gate()` を実行。ask_user 時は `[DECISION ENGINE]` ノートを system message として履歴に注入し、duck_call による質問を誘導。
+- **実験スイッチ**: `DUCKFLOW_DECISION_ENGINE=1`。eval meta に `decision_engine` 記録、transcript に `decisions` ログ（type/action/focus/latency/raw）を保存。
+- 検証: `uv run pytest tests/ -q` → **858 passed / 2 skipped**（test_decision_engine.py 17件追加）。H-1評価ランは別途実施。
