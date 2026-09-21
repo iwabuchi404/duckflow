@@ -746,3 +746,12 @@
 - **発火点（Pacemaker所有）**: `pending_decisions_for_task_start()` が `["needs_clarification"]` を返す。`core.py` のユーザー入力受領直後・自律ループ開始前に `_run_decision_gate()` を実行。ask_user 時は `[DECISION ENGINE]` ノートを system message として履歴に注入し、duck_call による質問を誘導。
 - **実験スイッチ**: `DUCKFLOW_DECISION_ENGINE=1`。eval meta に `decision_engine` 記録、transcript に `decisions` ログ（type/action/focus/latency/raw）を保存。
 - 検証: `uv run pytest tests/ -q` → **858 passed / 2 skipped**（test_decision_engine.py 17件追加）。H-1評価ランは別途実施。
+
+### 2026-09-21: H-1 SameModel binary 初回評価（27試行）
+- **条件**: `DUCKFLOW_DECISION_ENGINE=1`、ambiguous-spontaneous・frontier-ambiguous-semantic・complete-no-question × DS/GLM/LFM × 3回。ベースライン `evals/baselines/h1-samemodel-v1-main3.json`。
+- **結果**: DS 3/9・GLM 4/9・LFM 3/9（合格分は全て complete-no-question）。
+- **機構は設計通り動作**: GLM ambiguous-spontaneous r1 で judge が `ask_user`（focus: 「必要な商品」の選定基準）を発火 → `[DECISION ENGINE]` ノート注入 → duck_call で的確な質問 → scripted answer → **パス**。ambiguous 系シナリオで史上初の合格。回答受領後の第2判定は正しく continue に遷移。
+- **しかし検出率がボトルネック**: ambiguous 2課題18判定中 ASK 発火は1回のみ（5.6%）。DS・LFM の judge は ambiguous を全て continue と判定 — **曖昧さを自発認識できないモデルは、binary 判定役に回しても同じ盲点を持つ**。frontier-ambiguous-semantic の dedup 基準の曖昧さは全モデルの judge が見逃した。
+- **負の対照は維持**: complete-no-question での不要質問ゼロ（9/9 continue、全パス）。過剰質問副作用なし。
+- **コスト**: 判定呼び出しは 0.9〜12秒/回（DS judge が最遅、reasoning モデルのため）。トークンは usage_stats に含まれる。
+- **結論**: パイプライン（発火→Compiler→Provider→注入→duck_call→合格）は機能実証済み。次の改善軸は judge の検出率 — Provider 差し替え（別モデル判定/強い judge プロンプト/OpenJev logit 方式）の比較実験が次段。
