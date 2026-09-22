@@ -56,6 +56,20 @@ META_ACTIONS = {
 # interleaved ::response does not forgive surrounding plan churn.
 CONTROL_ACTIONS = {"response", "exit", "duck_call"}
 
+# Actions that commit an interpretation to real work — plan creation or
+# workspace mutation. The post-exploration needs_clarification check
+# (H-1 v2 firing point B) fires once per task when the first such action
+# appears: by then the agent has usually read the relevant files, so
+# ambiguity that only becomes visible in file contents can be judged.
+_COMMIT_ACTIONS = {
+    "propose_plan",
+    "write_file",
+    "edit_file",
+    "delete_lines",
+    "delete_file",
+    "run_command",
+}
+
 # Error kinds that fail deterministically regardless of workspace state.
 # Only these are eligible for the pre-execution hard block. State-dependent
 # failures (SEARCH mismatch, command exit codes, file-not-found) must never
@@ -140,6 +154,10 @@ class DuckPacemaker:
         # Consecutive bookkeeping/meta actions with no real action between
         # them. Control actions (response/exit/duck_call) are neutral.
         self.meta_streak = 0
+        # Decision Engine (H-1) firing-point state: whether the
+        # post-exploration needs_clarification check already ran for the
+        # current task. Reset at each new user task.
+        self._post_exploration_fired = False
 
     def calculate_max_loops(self, tier_profile: Optional[TierProfile] = None) -> int:
         """
@@ -429,14 +447,40 @@ class DuckPacemaker:
         """Return decision points to evaluate when a new user task arrives.
 
         Pacemaker owns the firing points for the Decision Engine (H-1);
-        v1 fires needs_clarification once per incoming user task, before
-        the autonomous loop starts. Event-driven points (PLAN_CREATED,
-        TEST_FAILED, ...) are future work.
+        fires needs_clarification once per incoming user task, before
+        the autonomous loop starts. A second firing happens later via
+        pending_decisions_for_actions when the first committing action
+        appears.
 
         Returns:
             List of decision request types to check.
         """
+        # Task boundary: reset the post-exploration firing point so it can
+        # fire once for this task.
+        self._post_exploration_fired = False
         return ["needs_clarification"]
+
+    def pending_decisions_for_actions(self, action_names: List[str]) -> List[str]:
+        """Return decision points triggered by this turn's action names.
+
+        Fires needs_clarification once per task when the first committing
+        action (plan creation or workspace mutation) appears. Read-only
+        exploration never triggers it; by the time a commit action shows
+        up the agent has usually read the relevant files, so ambiguity
+        that only becomes visible in file contents can be judged.
+
+        Args:
+            action_names: Names of the actions in the current ActionList.
+
+        Returns:
+            List of decision request types to check (empty when none).
+        """
+        if self._post_exploration_fired:
+            return []
+        if any(name in _COMMIT_ACTIONS for name in action_names):
+            self._post_exploration_fired = True
+            return ["needs_clarification"]
+        return []
 
     def _dominant_kind_failure(self, tool_name: str) -> tuple[str, int] | None:
         """Return the most-failed error kind recorded for a tool.
@@ -679,4 +723,5 @@ class DuckPacemaker:
         self._call_failures = {}
         self._kind_failures = {}
         self.meta_streak = 0
+        self._post_exploration_fired = False
         logger.debug("Pacemaker reset")

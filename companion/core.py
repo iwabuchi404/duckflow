@@ -263,6 +263,41 @@ class DuckAgent:
                     + (f" — {result.focus}" if result.focus else "")
                 )
 
+    async def _run_decision_gate_for_actions(
+        self, user_input: str, action_list: ActionList
+    ) -> None:
+        """Fire the post-exploration decision point for this turn's actions.
+
+        Runs once per task when the first committing action (plan creation
+        or workspace mutation) appears. At that point the Context Compiler
+        can include workspace files and read_file excerpts, so ambiguity
+        that only becomes visible in file contents can be judged.
+
+        Args:
+            user_input: The current task text.
+            action_list: The ActionList about to be executed.
+        """
+        engine = self._get_decision_engine()
+        if engine is None:
+            return
+        action_names = [a.name for a in action_list.actions]
+        for request_type in self.pacemaker.pending_decisions_for_actions(action_names):
+            result = await engine.check(
+                request_type,
+                task=user_input,
+                state=self.state,
+                workspace_root=str(file_ops.workspace_root),
+            )
+            if result.action == ACTION_ASK_USER:
+                note = build_clarification_note(result)
+                self.state.conversation_history.append(
+                    {"role": "system", "content": note}
+                )
+                ui.print_info(
+                    f"Decision Engine: ask_user (post-exploration)"
+                    + (f" — {result.focus}" if result.focus else "")
+                )
+
     async def run(self):
         """Main execution loop."""
         self.running = True
@@ -470,6 +505,10 @@ class DuckAgent:
                         # 3. Execute Actions
                         self.state.phase = AgentPhase.EXECUTING
                         if action_list.actions:
+                            # Decision Engine: post-exploration gate (H-1 v2)
+                            await self._run_decision_gate_for_actions(
+                                user_input, action_list
+                            )
                             await self.execute_actions(action_list)
 
                             if should_return_to_user(action_list, self.state):

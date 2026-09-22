@@ -47,7 +47,12 @@ class DecisionEngine:
         self.log: list[dict[str, Any]] = []
 
     async def check(
-        self, request_type: str, *, task: str, state: Any
+        self,
+        request_type: str,
+        *,
+        task: str,
+        state: Any,
+        workspace_root: str | None = None,
     ) -> DecisionResult:
         """1つの判断要求を評価する。
 
@@ -58,12 +63,14 @@ class DecisionEngine:
             request_type: 判断の種別（"needs_clarification" 等）。
             task: 発火点となったユーザー要求本文。
             state: 現在の AgentState。
+            workspace_root: workspace ルートパス（探索後発火で
+                ファイル一覧を context に含めるために使用）。
 
         Returns:
             DecisionResult。
         """
         request = DecisionRequest(type=request_type, task=task)
-        context = self.compiler.build(state, task)
+        context = self.compiler.build(state, task, workspace_root=workspace_root)
         start = time.monotonic()
         error = ""
         try:

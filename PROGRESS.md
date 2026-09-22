@@ -755,3 +755,10 @@
 - **負の対照は維持**: complete-no-question での不要質問ゼロ（9/9 continue、全パス）。過剰質問副作用なし。
 - **コスト**: 判定呼び出しは 0.9〜12秒/回（DS judge が最遅、reasoning モデルのため）。トークンは usage_stats に含まれる。
 - **結論**: パイプライン（発火→Compiler→Provider→注入→duck_call→合格）は機能実証済み。次の改善軸は judge の検出率 — Provider 差し替え（別モデル判定/強い judge プロンプト/OpenJev logit 方式）の比較実験が次段。
+
+### 2026-09-21: H-1 v2 実装（発火点B＋Context Compiler拡張）
+- **背景**: v1 の評価で判明した When/What 層の欠陥を修正 — frontier-ambiguous-semantic の曖昧さ（dedup基準）はCSVを見て初めて生じるため、entry発火＋タスク本文のみでは原理上検出不能だった。
+- **発火点B（Pacemaker所有）**: `pending_decisions_for_actions()` — 初回の commit 系アクション（propose_plan / write_file / edit_file / delete_lines / delete_file / run_command）が現れた時点で needs_clarification をタスク毎1回発火。entry発火（発火点A）は残す（タスク本文内の曖昧さ用、v1で唯一の成功を生んだ経路）。
+- **Context Compiler拡張**: `DecisionContext` に `workspace_files`（直下一覧）・`file_excerpts`（直近read_fileの機械抽出、3ファイル×40行）・`current_plan`（goal+step要約）を追加。`engine.check()` が workspace_root を受けて compiler に渡す。
+- **実験上分離**: judge プロンプトは v1 と同一のまま（When/What だけを変更して変数を分離）。
+- 検証: `uv run pytest tests/ -q` → **868 passed / 2 skipped**（test_decision_engine.py 27件）。

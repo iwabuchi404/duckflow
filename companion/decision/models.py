@@ -40,6 +40,9 @@ class DecisionContext:
         recent_actions: 直近に実行されたアクション名の列。
         known_facts: 既知の事実（将来拡張）。
         assumptions: 未解決の仮定（将来拡張）。
+        workspace_files: workspace 直下のファイル一覧（探索後発火用）。
+        file_excerpts: 直近に read_file で読んだファイルの抜粋。
+        current_plan: 現在の plan の要約（goal + step 名）。
     """
 
     user_request: str
@@ -47,6 +50,10 @@ class DecisionContext:
     recent_actions: list[str] = field(default_factory=list)
     known_facts: list[str] = field(default_factory=list)
     assumptions: list[str] = field(default_factory=list)
+    # v2 (post-exploration gate): material gathered during exploration.
+    workspace_files: list[str] = field(default_factory=list)
+    file_excerpts: list[str] = field(default_factory=list)
+    current_plan: str = ""
 
 
 @dataclass

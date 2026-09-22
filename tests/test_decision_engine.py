@@ -265,3 +265,166 @@ def test_clarification_note_includes_focus_and_reason() -> None:
     assert "target file" in note
     assert "two candidates" in note
     assert "ask the user" in note
+
+
+# ---------------------------------------------------------------------------
+# v2: post-exploration firing point + enriched context
+# ---------------------------------------------------------------------------
+
+
+def test_post_exploration_fires_once_on_commit_action() -> None:
+    """Fires when a committing action appears; not on read-only turns."""
+    pacemaker = DuckPacemaker(AgentState())
+    assert pacemaker.pending_decisions_for_actions(["read_file"]) == []
+    assert pacemaker.pending_decisions_for_actions(["write_file"]) == [
+        DECISION_NEEDS_CLARIFICATION
+    ]
+    # Once per task — a second commit action does not re-fire.
+    assert pacemaker.pending_decisions_for_actions(["write_file"]) == []
+
+
+def test_post_exploration_fires_on_plan_creation() -> None:
+    """propose_plan (PLAN_CREATED) is also a committing action."""
+    pacemaker = DuckPacemaker(AgentState())
+    assert pacemaker.pending_decisions_for_actions(["propose_plan"]) == [
+        DECISION_NEEDS_CLARIFICATION
+    ]
+
+
+def test_post_exploration_resets_per_task() -> None:
+    """A new user task re-arms the post-exploration firing point."""
+    pacemaker = DuckPacemaker(AgentState())
+    pacemaker.pending_decisions_for_actions(["write_file"])
+    pacemaker.pending_decisions_for_task_start()  # task boundary
+    assert pacemaker.pending_decisions_for_actions(["write_file"]) == [
+        DECISION_NEEDS_CLARIFICATION
+    ]
+
+
+def test_compiler_collects_workspace_files(tmp_path) -> None:
+    """Workspace listing includes files and dirs, skips dotfiles."""
+    (tmp_path / "sales.csv").write_text("item,amount\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / ".hidden").write_text("x", encoding="utf-8")
+    context = ContextCompiler().build(
+        AgentState(), "task", workspace_root=str(tmp_path)
+    )
+    assert "sales.csv" in context.workspace_files
+    assert "sub/" in context.workspace_files
+    assert ".hidden" not in context.workspace_files
+
+
+def test_compiler_extracts_file_excerpts() -> None:
+    """read_file tool results are mechanically extracted as excerpts."""
+    state = AgentState()
+    state.conversation_history.append(
+        {
+            "role": "user",
+            "content": (
+                "[TOOL_RESULT]\n::status ok\n::read_file @members.csv\n<<<\n"
+                "path: members.csv\ncontent: 1|name,email\n"
+                "2|Alice,a@x.com\n>>>\n[/TOOL_RESULT]"
+            ),
+        }
+    )
+    context = ContextCompiler().build(state, "task")
+    assert len(context.file_excerpts) == 1
+    assert "members.csv" in context.file_excerpts[0]
+    assert "Alice,a@x.com" in context.file_excerpts[0]
+
+
+def test_compiler_includes_plan_summary() -> None:
+    """Current plan is summarized as goal + step titles."""
+    from companion.state.agent_state import Plan
+
+    state = AgentState()
+    plan = Plan(goal="dedup members", title="t", description="")
+    plan.add_step("read csv")
+    plan.add_step("write json")
+    state.current_plan = plan
+    context = ContextCompiler().build(state, "task")
+    assert "dedup members" in context.current_plan
+    assert "read csv" in context.current_plan
+
+
+def test_render_messages_includes_excerpts_and_plan() -> None:
+    """Enriched context fields appear in the judge prompt user message."""
+    state = AgentState()
+    state.conversation_history.append(
+        {
+            "role": "user",
+            "content": (
+                "[TOOL_RESULT]\n::status ok\n::read_file @members.csv\n<<<\n"
+                "path: members.csv\ncontent: 1|name,email\n>>>\n[/TOOL_RESULT]"
+            ),
+        }
+    )
+    context = ContextCompiler().build(state, "dedup task")
+    context.workspace_files = ["members.csv"]
+    messages = render_decision_messages(
+        context, DecisionRequest(type=DECISION_NEEDS_CLARIFICATION)
+    )
+    body = messages[1]["content"]
+    assert "Workspace files:" in body
+    assert "members.csv" in body
+    assert "Files already read:" in body
+    assert "name,email" in body
+
+
+@pytest.mark.asyncio
+async def test_actions_gate_fires_on_commit_and_injects_note(
+    monkeypatch,
+) -> None:
+    """Post-exploration gate injects a note when judge says ASK."""
+    from companion.core import DuckAgent
+    from companion.state.agent_state import Action, ActionList
+
+    monkeypatch.setenv("DUCKFLOW_DECISION_ENGINE", "1")
+    agent = DuckAgent(llm_client=_GateLLM("DECISION: ASK\nFOCUS: dedup criterion"))
+    action_list = ActionList(
+        reasoning="r",
+        actions=[Action(name="write_file", parameters={"path": "a.json"})],
+    )
+    await agent._run_decision_gate_for_actions("task", action_list)
+    notes = [
+        m
+        for m in agent.state.conversation_history
+        if "[DECISION ENGINE]" in m.get("content", "")
+    ]
+    assert len(notes) == 1
+    assert "dedup criterion" in notes[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_actions_gate_skips_read_only_turns(monkeypatch) -> None:
+    """Read-only action lists never trigger the post-exploration check."""
+    from companion.core import DuckAgent
+    from companion.state.agent_state import Action, ActionList
+
+    monkeypatch.setenv("DUCKFLOW_DECISION_ENGINE", "1")
+    llm = _GateLLM("DECISION: ASK")
+    agent = DuckAgent(llm_client=llm)
+    action_list = ActionList(
+        reasoning="r",
+        actions=[Action(name="read_file", parameters={"path": "a.csv"})],
+    )
+    await agent._run_decision_gate_for_actions("task", action_list)
+    assert llm.calls == []
+    assert agent.decision_log == []
+
+
+@pytest.mark.asyncio
+async def test_actions_gate_fires_once_per_task(monkeypatch) -> None:
+    """The post-exploration check does not re-fire on later commits."""
+    from companion.core import DuckAgent
+    from companion.state.agent_state import Action, ActionList
+
+    monkeypatch.setenv("DUCKFLOW_DECISION_ENGINE", "1")
+    agent = DuckAgent(llm_client=_GateLLM("DECISION: CONTINUE"))
+    al = ActionList(
+        reasoning="r",
+        actions=[Action(name="write_file", parameters={"path": "a.json"})],
+    )
+    await agent._run_decision_gate_for_actions("task", al)
+    await agent._run_decision_gate_for_actions("task", al)
+    assert len(agent.decision_log) == 1

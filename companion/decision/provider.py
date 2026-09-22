@@ -62,6 +62,13 @@ def render_decision_messages(
     parts = [f"Request type: {request.type}", "", "User task:", context.user_request]
     if context.recent_actions:
         parts += ["", "Recent actions: " + ", ".join(context.recent_actions)]
+    if context.workspace_files:
+        parts += ["", "Workspace files:"] + [f"- {f}" for f in context.workspace_files]
+    if context.file_excerpts:
+        parts += ["", "Files already read:"]
+        parts += context.file_excerpts
+    if context.current_plan:
+        parts += ["", "Current plan:", context.current_plan]
     if context.known_facts:
         parts += ["", "Known facts:"] + [f"- {f}" for f in context.known_facts]
     if context.assumptions:
