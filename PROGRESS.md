@@ -784,3 +784,17 @@
 - **実装**: `CLARIFICATION_JUDGE_PROMPT_V2` — binary 即答ではなく 5 ステップの構造化推論を強制（期待結果の再述 → 未指定要素の列挙 → 証拠から複数解釈が生じるか → 委譲の有無 → verdict）。`ANALYSIS:` 行を出力してから `DECISION:` を下す。
 - **選択機構**: `DUCKFLOW_DECISION_PROMPT=v2`（既定 v1 で既往ベースラインと互換）。eval meta に `decision_judge_prompt` を記録。
 - 検証: `uv run pytest tests/ -q` → **873 passed / 2 skipped**（decision 系 32 件）。
+
+### 2026-09-22: H-1 v3 評価結果（構造化推論 judge）— 陰性＋特異度低下
+- **評価結果（27試行、DUCKFLOW_DECISION_ENGINE=1 + DUCKFLOW_DECISION_PROMPT=v2、baseline `h1v3-structured-judge-main3.json`）**:
+
+  | シナリオ | DS | GLM | LFM |
+  |---|---|---|---|
+  | ambiguous-spontaneous | 0/3 | 0/3 | 0/3 |
+  | frontier-ambiguous-semantic | 0/3 | 0/3 | 0/3 |
+  | complete-no-question | 3/3 | **2/3** | 3/3 |
+
+- **検出率は改善せず**: ambiguous 18判定中 ASK は1回のみ（GLM spontaneous r3、第2ゲートで発火したがパスには至らず）。frontier-ambiguous-semantic は構造化推論でも全9ラン continue — 「dedup基準」の複数解釈を ANALYSIS ステップでも列挙できなかった。
+- **特異度が低下（回帰）**: GLM の対照課題で ASK が3回発火（v1/v2 では0回）—「sales.csv の列名は？」という**ファイルを読めば自分で分かる質問**。構造化プロンプトの「未指定要素を列挙せよ」が、エージェントが探索で発見可能な未知を「未解決の選択」と混同させた。r1 は質問で停止して失敗。
+- **結論**: SameModel binary judge の How 層はプロンプト強化でも限界 — 感度を上げると特異度が落ちる。次段は CrossModel judge（上限参照値）か OpenJev logit。
+- 副次観測: GLM frontier r3 で list_files/read_file に幻覚した content をパラメータとして混入（executor が drop して実行）— ツール呼び出し内の幻覚パターンとして記録。

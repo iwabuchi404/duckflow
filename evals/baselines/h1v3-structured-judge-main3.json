@@ -1,0 +1,115 @@
+{
+  "name": "h1v3-structured-judge-main3",
+  "recorded_at": "2026-09-22T08:29:45.494753+00:00",
+  "git": {
+    "head": "f6db8a0c3ae5b14d4cf225f8227f1e050a6f46d6",
+    "dirty": false,
+    "porcelain": "",
+    "diff_sha": ""
+  },
+  "run_commits": [
+    "f6db8a0c3ae5b14d4cf225f8227f1e050a6f46d6"
+  ],
+  "scenario_shas": {
+    "ambiguous-spontaneous": "5b964417ebb1",
+    "complete-no-question": "9fad4d9ac4d1",
+    "frontier-ambiguous-semantic": "5f7b077c357b"
+  },
+  "results_dirs": [
+    "evals\\results\\h1v3-ds",
+    "evals\\results\\h1v3-glm",
+    "evals\\results\\h1v3-lfm"
+  ],
+  "stats": {
+    "ambiguous-spontaneous|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 22494,
+      "median_loops": 4,
+      "median_seconds": 41.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "complete-no-question|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 27220,
+      "median_loops": 5,
+      "median_seconds": 35.4,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-ambiguous-semantic|deepseek/deepseek-v4-flash-0731|symops": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 23068,
+      "median_loops": 4,
+      "median_seconds": 85.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "ambiguous-spontaneous|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 22193,
+      "median_loops": 4,
+      "median_seconds": 38.3,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "complete-no-question|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 2,
+      "median_tokens": 23411,
+      "median_loops": 4,
+      "median_seconds": 60.7,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-ambiguous-semantic|z-ai/glm-4.5-air|symops": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 45391,
+      "median_loops": 8,
+      "median_seconds": 79.2,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "ambiguous-spontaneous|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 19033,
+      "median_loops": 5,
+      "median_seconds": 19.1,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "complete-no-question|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 3,
+      "median_tokens": 15204,
+      "median_loops": 4,
+      "median_seconds": 11.0,
+      "statuses": {
+        "completed": 3
+      }
+    },
+    "frontier-ambiguous-semantic|liquid/lfm-2.5-2.6b:free|native": {
+      "runs": 3,
+      "passed": 0,
+      "median_tokens": 15759,
+      "median_loops": 4,
+      "median_seconds": 15.6,
+      "statuses": {
+        "completed": 3
+      }
+    }
+  }
+}
