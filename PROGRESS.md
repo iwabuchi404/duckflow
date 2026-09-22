@@ -762,3 +762,19 @@
 - **Context Compiler拡張**: `DecisionContext` に `workspace_files`（直下一覧）・`file_excerpts`（直近read_fileの機械抽出、3ファイル×40行）・`current_plan`（goal+step要約）を追加。`engine.check()` が workspace_root を受けて compiler に渡す。
 - **実験上分離**: judge プロンプトは v1 と同一のまま（When/What だけを変更して変数を分離）。
 - 検証: `uv run pytest tests/ -q` → **868 passed / 2 skipped**（test_decision_engine.py 27件）。
+
+### 2026-09-22: H-1 v2 評価結果 + compiler バグ修正
+- **評価結果（27試行、DUCKFLOW_DECISION_ENGINE=1）**:
+
+  | シナリオ | DS | GLM | LFM |
+  |---|---|---|---|
+  | ambiguous-spontaneous | 1/3 | 1/3 | 0/3 |
+  | frontier-ambiguous-semantic | 0/3 | 0/3 | 0/3 |
+  | complete-no-question | 3/3 | 3/3 | 3/3 |
+
+- **発火点Bは設計通り動作**: 全ランで task-start + first-commit の2判定が記録。frontier-ambiguous-semantic では第2判定のコンテキストに members.csv 抜粋（Alice Tanaka が2つのemailで登場する曖昧さの物証）が実際に含まれたことを llm_calls で確認。
+- **しかし判定器は依然 continue**: When/What を修正しても SameModel binary は dedup基準の曖昧さを検出できず（0/9）。これで「材料があっても見抜けない」ことが確定 — ボトルネックは How 層（provider）と断定可能になった。
+- **ambiguous-spontaneous は +1**: DS r2 で初パス（ASK判定→duck_call→scripted answer→正解）。ASK 発火は18判定中2回（v1の1回から微増、両方ともタスク本文内の曖昧さ）。
+- **対照は完全維持**: complete-no-question で不要質問ゼロ。
+- **バグ修正**: `ContextCompiler._recent_action_names` が `:: read_file`（`::`+空白形式、実履歴の正規形）をパースできず recent_actions が空文字列化していた（v1から存在）。`line[2:].strip().split()` に修正し回帰テスト追加。v2評価時点では action 名は judge に渡っていなかった（file_excerpts は正常）。
+- 検証: `uv run pytest tests/test_decision_engine.py -q` → **28 passed**。

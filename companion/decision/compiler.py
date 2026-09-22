@@ -61,7 +61,10 @@ class ContextCompiler:
             for line in msg.get("content", "").splitlines():
                 line = line.strip()
                 if line.startswith("::"):
-                    names.append(line.split()[0].lstrip(":").split("@")[0])
+                    # Formats seen in history: "::read_file @p" and ":: read_file @p"
+                    token = line[2:].strip().split()
+                    if token:
+                        names.append(token[0].split("@")[0])
                 elif line.startswith("- Action:") or line.startswith("Action:"):
                     names.append(line.split(":", 1)[1].strip())
             if names:

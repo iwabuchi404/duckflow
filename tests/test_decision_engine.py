@@ -66,6 +66,16 @@ def test_compiler_extracts_recent_actions() -> None:
     assert context.recent_actions == ["read_file", "note"]
 
 
+def test_compiler_extracts_recent_actions_spaced_prefix() -> None:
+    """Assistant history also uses the ':: action' spaced form (real transcripts)."""
+    state = AgentState()
+    state.conversation_history.append(
+        {"role": "assistant", "content": ":: read_file @a.py\n:: note x"}
+    )
+    context = ContextCompiler().build(state, task="task")
+    assert context.recent_actions == ["read_file", "note"]
+
+
 def test_render_messages_contains_task_and_request_type() -> None:
     """Rendered messages carry the judge prompt and the task text."""
     state = AgentState()
