@@ -778,3 +778,9 @@
 - **対照は完全維持**: complete-no-question で不要質問ゼロ。
 - **バグ修正**: `ContextCompiler._recent_action_names` が `:: read_file`（`::`+空白形式、実履歴の正規形）をパースできず recent_actions が空文字列化していた（v1から存在）。`line[2:].strip().split()` に修正し回帰テスト追加。v2評価時点では action 名は judge に渡っていなかった（file_excerpts は正常）。
 - 検証: `uv run pytest tests/test_decision_engine.py -q` → **28 passed**。
+
+### 2026-09-22: H-1 v3 — 構造化推論 judge プロンプト実装
+- **背景**: v2 で「材料があっても SameModel judge が曖昧さを見抜けない」ことが確定 → How 層の最安実験として判定プロンプト強化。
+- **実装**: `CLARIFICATION_JUDGE_PROMPT_V2` — binary 即答ではなく 5 ステップの構造化推論を強制（期待結果の再述 → 未指定要素の列挙 → 証拠から複数解釈が生じるか → 委譲の有無 → verdict）。`ANALYSIS:` 行を出力してから `DECISION:` を下す。
+- **選択機構**: `DUCKFLOW_DECISION_PROMPT=v2`（既定 v1 で既往ベースラインと互換）。eval meta に `decision_judge_prompt` を記録。
+- 検証: `uv run pytest tests/ -q` → **873 passed / 2 skipped**（decision 系 32 件）。

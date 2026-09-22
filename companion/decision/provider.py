@@ -6,6 +6,7 @@ SameModelDecisionProvider を提供する。Provider は差し替え可能
 """
 
 import logging
+import os
 from typing import Any, Protocol
 
 from companion.decision.models import (
@@ -35,6 +36,46 @@ or
 DECISION: ASK
 FOCUS: <the single most important unresolved choice, one line>
 """
+
+# v2: 構造化推論版。binary 即答ではなく、先に「結果を決める要素の列挙」と
+# 「証拠（読んだファイル・計画）から複数解釈が生じるか」の検討を強制する。
+# frontier-ambiguous-semantic のように、ファイル内容を見て初めて生じる
+# 曖昧さ（dedup 基準等）を SameModel judge が見落とした v1/v2 の失敗への対策。
+CLARIFICATION_JUDGE_PROMPT_V2 = """You are a decision module inside a coding agent. Your ONLY job is to judge whether the agent must ask the user a clarifying question BEFORE doing any work.
+
+Think step by step, briefly:
+1. RESTATE what concrete result the user expects (target, scope, selection criteria).
+2. LIST every element of that result that is not explicitly specified in the task.
+3. CHECK the provided evidence (workspace files, file excerpts, current plan): does the data itself allow multiple plausible readings of an unspecified element? Examples: several valid dedup keys, filters, units, orderings, or "which items count" rules.
+4. CHECK whether the user delegated that choice to the agent ("your choice", "appropriate", "as needed" — or silence).
+5. VERDICT: an unspecified element requires ASK only when at least two plausible readings would produce materially different results AND the user did not delegate the choice.
+
+Do NOT answer ASK merely because multiple implementation approaches exist. Do NOT try to solve the task.
+
+Reply in EXACTLY this format:
+ANALYSIS: <2-4 short lines covering steps 1-4>
+DECISION: CONTINUE
+or
+DECISION: ASK
+FOCUS: <the single most important unresolved choice, one line>
+"""
+
+# 判定プロンプトのバリアント。既定は v1（既往ベースラインとの互換性維持）。
+# DUCKFLOW_DECISION_PROMPT=v2 で構造化推論版に切替（実験用、eval meta に記録）。
+_JUDGE_PROMPTS = {
+    "v1": CLARIFICATION_JUDGE_PROMPT,
+    "v2": CLARIFICATION_JUDGE_PROMPT_V2,
+}
+
+
+def judge_prompt_variant() -> str:
+    """有効な判定プロンプトのバリアント名を返す。
+
+    Returns:
+        "v1" または "v2"。未知の指定値は v1 にフォールバック。
+    """
+    variant = os.environ.get("DUCKFLOW_DECISION_PROMPT", "v1").strip().lower()
+    return variant if variant in _JUDGE_PROMPTS else "v1"
 
 
 class DecisionProvider(Protocol):
@@ -76,7 +117,7 @@ def render_decision_messages(
             f"- {a}" for a in context.assumptions
         ]
     return [
-        {"role": "system", "content": CLARIFICATION_JUDGE_PROMPT},
+        {"role": "system", "content": _JUDGE_PROMPTS[judge_prompt_variant()]},
         {"role": "user", "content": "\n".join(parts)},
     ]
 
@@ -135,5 +176,7 @@ class SameModelDecisionProvider:
             continue フォールバックする）。
         """
         messages = render_decision_messages(context, request)
-        raw = await self.llm.chat(messages, raw=True, max_tokens=150)
+        # v2 prompt は ANALYSIS 行を先に出力するため余裕を持たせる
+        max_tokens = 400 if judge_prompt_variant() == "v2" else 150
+        raw = await self.llm.chat(messages, raw=True, max_tokens=max_tokens)
         return parse_binary_decision(raw if isinstance(raw, str) else str(raw))

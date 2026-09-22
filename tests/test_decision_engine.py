@@ -438,3 +438,60 @@ async def test_actions_gate_fires_once_per_task(monkeypatch) -> None:
     await agent._run_decision_gate_for_actions("task", al)
     await agent._run_decision_gate_for_actions("task", al)
     assert len(agent.decision_log) == 1
+
+
+# ---------------------------------------------------------------------------
+# Judge prompt variants (How layer experiment)
+# ---------------------------------------------------------------------------
+
+
+def test_judge_prompt_defaults_to_v1(monkeypatch) -> None:
+    """Default keeps the v1 binary prompt for baseline comparability."""
+    from companion.decision.provider import (
+        CLARIFICATION_JUDGE_PROMPT,
+        judge_prompt_variant,
+    )
+
+    monkeypatch.delenv("DUCKFLOW_DECISION_PROMPT", raising=False)
+    assert judge_prompt_variant() == "v1"
+    context = ContextCompiler().build(AgentState(), task="t")
+    request = DecisionRequest(type=DECISION_NEEDS_CLARIFICATION, task="t")
+    messages = render_decision_messages(context, request)
+    assert messages[0]["content"] == CLARIFICATION_JUDGE_PROMPT
+
+
+def test_judge_prompt_v2_selected_by_env(monkeypatch) -> None:
+    """DUCKFLOW_DECISION_PROMPT=v2 injects the structured-reasoning prompt."""
+    from companion.decision.provider import (
+        CLARIFICATION_JUDGE_PROMPT_V2,
+        judge_prompt_variant,
+    )
+
+    monkeypatch.setenv("DUCKFLOW_DECISION_PROMPT", "v2")
+    assert judge_prompt_variant() == "v2"
+    context = ContextCompiler().build(AgentState(), task="t")
+    request = DecisionRequest(type=DECISION_NEEDS_CLARIFICATION, task="t")
+    messages = render_decision_messages(context, request)
+    assert messages[0]["content"] == CLARIFICATION_JUDGE_PROMPT_V2
+    assert "ANALYSIS" in messages[0]["content"]
+
+
+def test_judge_prompt_unknown_variant_falls_back_to_v1(monkeypatch) -> None:
+    """Unknown variant names fall back to v1."""
+    from companion.decision.provider import judge_prompt_variant
+
+    monkeypatch.setenv("DUCKFLOW_DECISION_PROMPT", "v99")
+    assert judge_prompt_variant() == "v1"
+
+
+def test_parse_binary_decision_with_analysis_lines() -> None:
+    """v2 output with ANALYSIS lines still parses the verdict."""
+    raw = (
+        "ANALYSIS: target=dedup emails; dedup key unspecified; "
+        "csv shows two plausible keys\n"
+        "DECISION: ASK\n"
+        "FOCUS: dedup key (name vs email)"
+    )
+    result = parse_binary_decision(raw)
+    assert result.action == ACTION_ASK_USER
+    assert result.focus == "dedup key (name vs email)"

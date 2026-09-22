@@ -452,9 +452,9 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         meta["git_commit"] = "unknown"
         meta["git_dirty"] = "unknown"
-    from companion.prompts.few_shot import get_effective_framing
-    from companion.prompts.builder import interpretation_gate_enabled
     from companion.decision import decision_engine_enabled
+    from companion.prompts.builder import interpretation_gate_enabled
+    from companion.prompts.few_shot import get_effective_framing
 
     meta["few_shot_framing"] = get_effective_framing()
     # Experiment circuit: records whether the Interpretation Gate block
@@ -463,6 +463,10 @@ def _collect_experiment_meta(scenario: dict[str, Any]) -> dict[str, Any]:
     # H-1 experiment: records whether the Decision Engine entry gate was
     # active (Pacemaker → Context Compiler → SameModel binary decision).
     meta["decision_engine"] = decision_engine_enabled()
+    if meta["decision_engine"]:
+        from companion.decision.provider import judge_prompt_variant
+
+        meta["decision_judge_prompt"] = judge_prompt_variant()
     try:
         from companion.config.config_loader import config as _cfg
 
