@@ -13,7 +13,10 @@ from companion.decision import (
     decision_engine_enabled,
 )
 from companion.decision.compiler import ContextCompiler
-from companion.decision.engine import build_clarification_note
+from companion.decision.engine import (
+    build_clarification_message,
+    build_clarification_note,
+)
 from companion.decision.models import (
     ACTION_ASK_USER,
     ACTION_CONTINUE,
@@ -26,7 +29,7 @@ from companion.decision.provider import (
     render_decision_messages,
 )
 from companion.modules.pacemaker import DuckPacemaker
-from companion.state.agent_state import AgentState
+from companion.state.agent_state import AgentPhase, AgentState
 
 # ---------------------------------------------------------------------------
 # Pacemaker firing point
@@ -201,6 +204,26 @@ class _GateLLM:
         return self.response
 
 
+class _RecordingGateLLM(_GateLLM):
+    """Gate LLM stub that records native tool outcomes."""
+
+    def __init__(self, response: str) -> None:
+        super().__init__(response)
+        self.events: list[dict] = []
+
+    def record_native_event(self, call_id, name, status, executed, body):
+        """Record one native tool event."""
+        self.events.append(
+            {
+                "call_id": call_id,
+                "name": name,
+                "status": status,
+                "executed": executed,
+                "body": body,
+            }
+        )
+
+
 def _make_agent(monkeypatch, enabled: bool, response: str = "DECISION: CONTINUE"):
     """Build a DuckAgent with the env flag toggled."""
     from companion.core import DuckAgent
@@ -213,7 +236,8 @@ def _make_agent(monkeypatch, enabled: bool, response: str = "DECISION: CONTINUE"
 async def test_gate_skipped_when_flag_off(monkeypatch) -> None:
     """No decision call is made when the experiment flag is off."""
     agent = _make_agent(monkeypatch, enabled=False)
-    await agent._run_decision_gate("some task")
+    paused = await agent._run_decision_gate("some task")
+    assert paused is False
     assert agent._decision_engine is None
     assert agent.decision_log == []
 
@@ -223,7 +247,8 @@ async def test_gate_continue_leaves_history_unchanged(monkeypatch) -> None:
     """CONTINUE injects nothing into the conversation."""
     agent = _make_agent(monkeypatch, enabled=True)
     before = len(agent.state.conversation_history)
-    await agent._run_decision_gate("a clear task")
+    paused = await agent._run_decision_gate("a clear task")
+    assert paused is False
     assert len(agent.state.conversation_history) == before
     assert agent.decision_log[0]["action"] == ACTION_CONTINUE
 
@@ -234,15 +259,21 @@ async def test_gate_ask_injects_clarification_note(monkeypatch) -> None:
     agent = _make_agent(
         monkeypatch, enabled=True, response="DECISION: ASK\nFOCUS: which target"
     )
-    await agent._run_decision_gate("ambiguous task")
+    paused = await agent._run_decision_gate("ambiguous task")
     notes = [
         m
         for m in agent.state.conversation_history
         if m.get("role") == "system" and "[DECISION ENGINE]" in m.get("content", "")
     ]
+    assert paused is True
     assert len(notes) == 1
     assert "which target" in notes[0]["content"]
-    assert "duck_call" in notes[0]["content"]
+    assert agent.state.phase == AgentPhase.AWAITING_USER
+    assert any(
+        "which target" in message.get("content", "")
+        and "Paused for user input" in message.get("content", "")
+        for message in agent.state.conversation_history
+    )
     assert agent.decision_log[0]["action"] == ACTION_ASK_USER
 
 
@@ -251,7 +282,8 @@ async def test_gate_provider_error_does_not_raise(monkeypatch) -> None:
     """Provider failure inside the gate is swallowed into continue."""
     agent = _make_agent(monkeypatch, enabled=True)
     agent._decision_engine = DecisionEngine(_FailingLLM())
-    await agent._run_decision_gate("task")
+    paused = await agent._run_decision_gate("task")
+    assert paused is False
     assert agent.decision_log[0]["action"] == ACTION_CONTINUE
     assert "error" in agent.decision_log[0]
 
@@ -275,6 +307,14 @@ def test_clarification_note_includes_focus_and_reason() -> None:
     assert "target file" in note
     assert "two candidates" in note
     assert "ask the user" in note
+
+
+def test_clarification_message_is_direct_question() -> None:
+    """The forced duck_call carries a direct question with the decision focus."""
+    result = DecisionResult(action=ACTION_ASK_USER, focus="target file")
+    message = build_clarification_message(result)
+    assert "target file" in message
+    assert message.endswith("？")
 
 
 # ---------------------------------------------------------------------------
@@ -395,14 +435,52 @@ async def test_actions_gate_fires_on_commit_and_injects_note(
         reasoning="r",
         actions=[Action(name="write_file", parameters={"path": "a.json"})],
     )
-    await agent._run_decision_gate_for_actions("task", action_list)
+    paused = await agent._run_decision_gate_for_actions("task", action_list)
     notes = [
         m
         for m in agent.state.conversation_history
         if "[DECISION ENGINE]" in m.get("content", "")
     ]
+    assert paused is True
+    assert action_list.actions == []
+    assert agent.state.phase == AgentPhase.AWAITING_USER
     assert len(notes) == 1
     assert "dedup criterion" in notes[0]["content"]
+    assert any(
+        "dedup criterion" in message.get("content", "")
+        and "Paused for user input" in message.get("content", "")
+        for message in agent.state.conversation_history
+    )
+
+
+@pytest.mark.asyncio
+async def test_actions_gate_records_discarded_native_call(monkeypatch) -> None:
+    """A discarded native commit call must be journaled as blocked."""
+    from companion.core import DuckAgent
+    from companion.state.agent_state import Action, ActionList
+
+    monkeypatch.setenv("DUCKFLOW_DECISION_ENGINE", "1")
+    llm = _RecordingGateLLM("DECISION: ASK\nFOCUS: dedup criterion")
+    agent = DuckAgent(llm_client=llm)
+    action_list = ActionList(
+        reasoning="r",
+        actions=[
+            Action(
+                name="write_file",
+                parameters={"path": "a.json"},
+                tool_call_id="call-1",
+                native_turn="turn-1",
+            )
+        ],
+    )
+
+    paused = await agent._run_decision_gate_for_actions("task", action_list)
+
+    assert paused is True
+    assert action_list.actions == []
+    assert llm.events[0]["call_id"] == "call-1"
+    assert llm.events[0]["status"] == "blocked"
+    assert llm.events[0]["executed"] is False
 
 
 @pytest.mark.asyncio
@@ -418,7 +496,9 @@ async def test_actions_gate_skips_read_only_turns(monkeypatch) -> None:
         reasoning="r",
         actions=[Action(name="read_file", parameters={"path": "a.csv"})],
     )
-    await agent._run_decision_gate_for_actions("task", action_list)
+    paused = await agent._run_decision_gate_for_actions("task", action_list)
+    assert paused is False
+    assert len(action_list.actions) == 1
     assert llm.calls == []
     assert agent.decision_log == []
 

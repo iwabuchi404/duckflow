@@ -1,12 +1,28 @@
 import subprocess
 from pathlib import Path
-from typing import List, Set
 
-DEFAULT_EXCLUDES = frozenset({
-    'node_modules', 'venv', '__pycache__', '.venv', 'vendor', 'site-packages',
-    '.git', '.svn', 'dist', 'build', 'out', 'target', 'bin', 'obj', '.next',
-    '.env', '.idea', '.vscode'
-})
+DEFAULT_EXCLUDES = frozenset(
+    {
+        "node_modules",
+        "venv",
+        "__pycache__",
+        ".venv",
+        "vendor",
+        "site-packages",
+        ".git",
+        ".svn",
+        "dist",
+        "build",
+        "out",
+        "target",
+        "bin",
+        "obj",
+        ".next",
+        ".env",
+        ".idea",
+        ".vscode",
+    }
+)
 
 
 def _is_excluded_name(name: str) -> bool:
@@ -18,10 +34,12 @@ def _is_excluded_name(name: str) -> bool:
     Returns:
         True when the name is a known generated, dependency, or local metadata path.
     """
-    return name in DEFAULT_EXCLUDES or name.endswith('.egg-info')
+    return name in DEFAULT_EXCLUDES or name.endswith(".egg-info")
 
 
-def _resolve_within_workspace(path: str, workspace_root: str = ".") -> tuple[Path, Path]:
+def _resolve_within_workspace(
+    path: str, workspace_root: str = "."
+) -> tuple[Path, Path]:
     """Resolve a requested tree path and enforce workspace containment.
 
     Args:
@@ -36,15 +54,19 @@ def _resolve_within_workspace(path: str, workspace_root: str = ".") -> tuple[Pat
     """
     root = Path(workspace_root).resolve()
     requested = Path(path)
-    target = requested.resolve() if requested.is_absolute() else (root / requested).resolve()
+    target = (
+        requested.resolve() if requested.is_absolute() else (root / requested).resolve()
+    )
 
     if target != root and root not in target.parents:
-        raise PermissionError(f"Duck Keeper Alert: Access denied to {path} (Outside workspace)")
+        raise PermissionError(
+            f"Duck Keeper Alert: Access denied to {path} (Outside workspace)"
+        )
 
     return root, target
 
 
-def _load_ignored_files(root: Path, respect_gitignore: bool) -> Set[str]:
+def _load_ignored_files(root: Path, respect_gitignore: bool) -> set[str]:
     """Load gitignored paths relative to the workspace root.
 
     Args:
@@ -59,13 +81,17 @@ def _load_ignored_files(root: Path, respect_gitignore: bool) -> Set[str]:
 
     try:
         result = subprocess.run(
-            ['git', 'ls-files', '--others', '--ignored', '--exclude-standard'],
+            ["git", "ls-files", "--others", "--ignored", "--exclude-standard"],
             cwd=root,
             capture_output=True,
             text=True,
-            check=False
+            check=False,
         )
-        return {line.strip().replace('\\', '/') for line in result.stdout.splitlines() if line.strip()}
+        return {
+            line.strip().replace("\\", "/")
+            for line in result.stdout.splitlines()
+            if line.strip()
+        }
     except (subprocess.CalledProcessError, FileNotFoundError):
         return set()
 
@@ -85,8 +111,8 @@ def _coerce_bool(value: bool | str) -> bool:
 
 
 async def get_project_tree(  # ← async追加
-    path: str = '.', 
-    depth: int = 3, 
+    path: str = ".",
+    depth: int = 3,
     respect_gitignore: bool = True,
     workspace_root: str = ".",
 ) -> str:
@@ -119,42 +145,50 @@ async def get_project_tree(  # ← async追加
     ignored_files = _load_ignored_files(root_path, respect_gitignore)
 
     # ツリー構築
-    def build_tree(current: Path, current_depth: int) -> List[str]:
+    def build_tree(current: Path, current_depth: int) -> list[str]:
         """Build a visible tree below current while staying inside the workspace."""
         if current_depth > depth:
             return []
-        
+
         items = []
         try:
-            entries = sorted(current.iterdir(), key=lambda item: (not item.is_dir(), item.name.lower()))
+            entries = sorted(
+                current.iterdir(),
+                key=lambda item: (not item.is_dir(), item.name.lower()),
+            )
             for entry in entries:
                 try:
                     resolved_entry = entry.resolve()
                 except OSError:
                     continue
 
-                if resolved_entry != root_path and root_path not in resolved_entry.parents:
+                if (
+                    resolved_entry != root_path
+                    and root_path not in resolved_entry.parents
+                ):
                     continue
 
                 rel_path = resolved_entry.relative_to(root_path).as_posix()
                 parts = resolved_entry.relative_to(root_path).parts
 
                 if (
-                    _is_excluded_name(entry.name) or
-                    any(_is_excluded_name(part) for part in parts) or
-                    rel_path in ignored_files
+                    _is_excluded_name(entry.name)
+                    or any(_is_excluded_name(part) for part in parts)
+                    or rel_path in ignored_files
                 ):
                     continue
 
                 if entry.is_dir():
                     children = build_tree(resolved_entry, current_depth + 1)
                     items.append(f"{entry.name}/")
-                    items.extend([f"{'  ' * current_depth}{child}" for child in children])
+                    items.extend(
+                        [f"{'  ' * current_depth}{child}" for child in children]
+                    )
                 elif current_depth <= depth:
                     items.append(entry.name)
         except PermissionError:
             pass
-        
+
         return items
 
     tree = build_tree(start_path, 1)

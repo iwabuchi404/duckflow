@@ -8,12 +8,66 @@ line range for pin-point access.
 
 import logging
 import re
-from typing import Optional
+from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
 
-def make_retrieve_result_tool(agent):
+class _ResultCacheEntry(Protocol):
+    """Subset of a cached result entry used by the retrieval tool."""
+
+    full_result: str
+
+
+class _ResultCache(Protocol):
+    """Result cache operations required by the retrieval tool."""
+
+    def get(self, cache_id: str) -> _ResultCacheEntry | None:
+        """Return a cache entry when it still exists.
+
+        Args:
+            cache_id: Identifier assigned by ResultCache.put.
+
+        Returns:
+            Cached entry, or None when the identifier is unavailable.
+        """
+        ...
+
+    def get_range(self, cache_id: str, start: int, end: int) -> str | None:
+        """Return a one-indexed inclusive line range when available.
+
+        Args:
+            cache_id: Identifier assigned by ResultCache.put.
+            start: First line to return.
+            end: Last line to return.
+
+        Returns:
+            Selected text, or None when the cache entry is unavailable.
+        """
+        ...
+
+    def expired_message(self, cache_id: str) -> str:
+        """Return a message describing an unavailable cache entry.
+
+        Args:
+            cache_id: Missing cache identifier.
+
+        Returns:
+            User-facing expiration message.
+        """
+        ...
+
+
+class _AgentWithResultCache(Protocol):
+    """Agent surface required to bind the result retrieval tool."""
+
+    result_cache: _ResultCache
+
+
+def make_retrieve_result_tool(
+    agent: _AgentWithResultCache,
+) -> Callable[..., Awaitable[str]]:
     """
     Create a retrieve_result tool function bound to the agent's ResultCache.
 
@@ -23,7 +77,7 @@ def make_retrieve_result_tool(agent):
 
     async def retrieve_result(
         cache_id: str,
-        lines: Optional[str] = None,
+        lines: str | None = None,
     ) -> str:
         """
         Retrieve the full (unsummarized) result of a previously executed tool.

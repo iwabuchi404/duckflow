@@ -7,16 +7,17 @@ retrieve them via `retrieve_result` or `/result` after summarization.
 
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
 class ResultCacheEntry:
     """A single cached tool result."""
+
     cache_id: str
     tool_name: str
-    params: Dict[str, Any]
+    params: dict[str, Any]
     full_result: str
     timestamp: float
     size_chars: int
@@ -39,7 +40,7 @@ class ResultCache:
     def put(
         self,
         tool_name: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         full_result: str,
     ) -> str:
         """Store a result and return its cache ID."""
@@ -61,7 +62,7 @@ class ResultCache:
 
         return cache_id
 
-    def get(self, cache_id: str) -> Optional[ResultCacheEntry]:
+    def get(self, cache_id: str) -> ResultCacheEntry | None:
         """Retrieve an entry by ID. Returns None if not found (expired)."""
         entry = self._entries.get(cache_id)
         if entry is None:
@@ -69,9 +70,7 @@ class ResultCache:
         self._entries.move_to_end(cache_id)
         return entry
 
-    def get_range(
-        self, cache_id: str, start: int, end: int
-    ) -> Optional[str]:
+    def get_range(self, cache_id: str, start: int, end: int) -> str | None:
         """Retrieve a line range from a cached entry.
 
         Args:
@@ -100,7 +99,7 @@ class ResultCache:
         return len(self._entries)
 
     @property
-    def entries(self) -> Dict[str, ResultCacheEntry]:
+    def entries(self) -> dict[str, ResultCacheEntry]:
         return dict(self._entries)
 
     def clear(self) -> None:

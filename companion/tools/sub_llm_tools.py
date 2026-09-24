@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
-import re
 import logging
-from typing import Optional, List, Dict, Any
+import re
+from typing import cast
+
 from companion.modules.sub_llm_manager import SubLLMManager
 from companion.tools.file_ops import file_ops
 from companion.tools.results import ToolResult
@@ -11,11 +11,12 @@ from companion.ui import ui
 
 logger = logging.getLogger(__name__)
 
+
 class SubLLMTools:
     """
     Sub-LLM powered tools for context compression, analysis, and code generation.
     """
-    
+
     def __init__(self, manager: SubLLMManager):
         self.manager = manager
 
@@ -53,7 +54,7 @@ class SubLLMTools:
                     "analyze_structure", path, f"Error reading file: {res['error']}"
                 )
 
-            code = res["content"]
+            code = cast(str, res["content"])
             return await self.manager.analyze_structure(code)
         except Exception as e:
             return ToolResult.error(
@@ -100,8 +101,12 @@ class SubLLMTools:
         instruction = ""
         context = ""
 
-        inst_match = re.search(r'\[Instruction\](.*?)(?=\[Context\]|$)', content, re.DOTALL | re.IGNORECASE)
-        ctx_match = re.search(r'\[Context\](.*?)(?=\[Instruction\]|$)', content, re.DOTALL | re.IGNORECASE)
+        inst_match = re.search(
+            r"\[Instruction\](.*?)(?=\[Context\]|$)", content, re.DOTALL | re.IGNORECASE
+        )
+        ctx_match = re.search(
+            r"\[Context\](.*?)(?=\[Instruction\]|$)", content, re.DOTALL | re.IGNORECASE
+        )
 
         if inst_match:
             instruction = inst_match.group(1).strip()
@@ -122,15 +127,21 @@ class SubLLMTools:
             if not context:
                 # Contextセクションがない場合
                 context_text = ""
-            elif '\n' in context and self._is_file_references(context):
+            elif "\n" in context and self._is_file_references(context):
                 # Contextにファイル参照（filename:start-end または filename）が含まれている場合
-                context_refs = [line.strip() for line in context.split('\n') if line.strip()]
+                context_refs = [
+                    line.strip() for line in context.split("\n") if line.strip()
+                ]
                 context_text = await self._fetch_all_context(context_refs)
-                logger.info(f"Context fetched from files (length: {len(context_text)} chars)")
+                logger.info(
+                    f"Context fetched from files (length: {len(context_text)} chars)"
+                )
             else:
                 # Contextに直接コードが含まれている場合
                 context_text = context
-                logger.info(f"Direct code context provided (length: {len(context_text)} chars)")
+                logger.info(
+                    f"Direct code context provided (length: {len(context_text)} chars)"
+                )
 
             # 3. Call Sub-LLM worker
             logger.info("Calling Sub-LLM worker for code generation...")
@@ -140,7 +151,9 @@ class SubLLMTools:
                 logger.error(f"Sub-LLM returned error: {generated_code}")
                 return ToolResult.error("generate_code", path, generated_code)
 
-            logger.info(f"Code generated successfully (length: {len(generated_code)} chars)")
+            logger.info(
+                f"Code generated successfully (length: {len(generated_code)} chars)"
+            )
 
             # 4. Preview and Confirm
             ui.print_info(f"🛠️ Code generation for {path}")
@@ -177,36 +190,38 @@ class SubLLMTools:
 
         except Exception as e:
             logger.error(f"Error in generate_code: {e}", exc_info=True)
-            return ToolResult.error(
-                "generate_code", path, f"Internal Error: {str(e)}"
-            )
+            return ToolResult.error("generate_code", path, f"Internal Error: {str(e)}")
 
-    async def _fetch_all_context(self, refs: List[str]) -> str:
+    async def _fetch_all_context(self, refs: list[str]) -> str:
         """Resolve and read all context files/ranges."""
         parts = []
         for ref in refs:
             try:
-                if ':' in ref:
+                if ":" in ref:
                     # e.g. "path/file.py:10-50"
-                    f_path, line_range = ref.rsplit(':', 1)
-                    if '-' in line_range:
-                        start, end = line_range.split('-', 1)
+                    f_path, line_range = ref.rsplit(":", 1)
+                    if "-" in line_range:
+                        start, end = line_range.split("-", 1)
                         start_line = int(start)
                         max_lines = max(1, int(end) - start_line + 1)
                     else:
                         start_line = int(line_range)
                         max_lines = 1
-                    res = await file_ops.read_file(f_path, start=start_line, end=max_lines)
+                    res = await file_ops.read_file(
+                        f_path, start=start_line, end=max_lines
+                    )
                 else:
                     res = await file_ops.read_file(ref)
-                
+
                 if "error" in res:
                     parts.append(f"--- {ref} ---\nError: {res['error']}")
                 else:
-                    parts.append(f"--- {res['path']} (lines {res['showing_lines']}) ---\n{res['content']}")
+                    parts.append(
+                        f"--- {res['path']} (lines {res['showing_lines']}) ---\n{res['content']}"
+                    )
             except Exception as e:
                 parts.append(f"--- {ref} ---\nError loading context: {str(e)}")
-        
+
         return "\n\n".join(parts)
 
     def _is_file_references(self, text: str) -> bool:
@@ -221,13 +236,43 @@ class SubLLMTools:
             True if text appears to contain file references, False otherwise.
         """
         # Common code file extensions
-        code_extensions = {'.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.go', '.rs',
-                        '.rb', '.php', '.c', '.cpp', '.h', '.hpp', '.cs',
-                        '.swift', '.kt', '.dart', '.lua', '.sh', '.bash',
-                        '.yml', '.yaml', '.json', '.xml', '.html', '.css',
-                        '.md', '.txt', '.sql', '.pl', '.r', '.m'}
+        code_extensions = {
+            ".py",
+            ".js",
+            ".ts",
+            ".jsx",
+            ".tsx",
+            ".java",
+            ".go",
+            ".rs",
+            ".rb",
+            ".php",
+            ".c",
+            ".cpp",
+            ".h",
+            ".hpp",
+            ".cs",
+            ".swift",
+            ".kt",
+            ".dart",
+            ".lua",
+            ".sh",
+            ".bash",
+            ".yml",
+            ".yaml",
+            ".json",
+            ".xml",
+            ".html",
+            ".css",
+            ".md",
+            ".txt",
+            ".sql",
+            ".pl",
+            ".r",
+            ".m",
+        }
 
-        lines = text.strip().split('\n')
+        lines = text.strip().split("\n")
         for line in lines:
             line = line.strip()
             if not line:
@@ -237,22 +282,22 @@ class SubLLMTools:
             for ext in code_extensions:
                 if ext in line:
                     # Additional check: if it looks like a file path (contains / or . or ends with ext)
-                    if '/' in line or '.' in line or line.endswith(ext):
+                    if "/" in line or "." in line or line.endswith(ext):
                         return True
 
         return False
 
     def _guess_language(self, path: str) -> str:
-        ext = path.split('.')[-1].lower()
+        ext = path.split(".")[-1].lower()
         mapping = {
-            'py': 'python',
-            'js': 'javascript',
-            'ts': 'typescript',
-            'html': 'html',
-            'css': 'css',
-            'md': 'markdown',
-            'json': 'json',
-            'yml': 'yaml',
-            'yaml': 'yaml'
+            "py": "python",
+            "js": "javascript",
+            "ts": "typescript",
+            "html": "html",
+            "css": "css",
+            "md": "markdown",
+            "json": "json",
+            "yml": "yaml",
+            "yaml": "yaml",
         }
-        return mapping.get(ext, 'text')
+        return mapping.get(ext, "text")

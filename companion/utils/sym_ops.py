@@ -1,9 +1,18 @@
-import re
-import yaml
 import logging
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any, Tuple
-from companion.utils.preprocessor import SymOpsPreprocessor, PlainMarkdownConverter, strip_reasoning_tags, reasoning_to_thought, extract_reasoning_actions, truncate_reasoning_loop
+
+import yaml
+
+from companion.utils.preprocessor import (
+    PlainMarkdownConverter,
+    SymOpsPreprocessor,
+    extract_reasoning_actions,
+    reasoning_to_thought,
+    strip_reasoning_tags,
+    truncate_reasoning_loop,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +54,9 @@ class Action:
     type: str
     path: str
     content: str = ""
-    depends_on: Optional[str] = None
+    depends_on: str | None = None
     confidence: float = 1.0
-    params: Dict[str, str] = field(default_factory=dict)
+    params: dict[str, str] = field(default_factory=dict)
     auto_generated: bool = False
 
 
@@ -59,8 +68,8 @@ _BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\s*:")
 
 
 def extract_bare_key_params(
-    text: str, valid_keys: Optional[set[str]] = None
-) -> Tuple[Dict[str, str], str]:
+    text: str, valid_keys: set[str] | None = None
+) -> tuple[dict[str, str], str]:
     """Parse leading "key: value" lines as parameters (no --- delimiters).
 
     Models often write parameter lines directly in the content block::
@@ -96,16 +105,16 @@ def extract_bare_key_params(
     except yaml.YAMLError:
         parsed = None
     if isinstance(parsed, dict):
-        params = {
+        parsed_params = {
             k: (str(v) if v is not None else "")
             for k, v in parsed.items()
             if valid_keys is None or k in valid_keys
         }
-        if params:
-            return params, ""
+        if parsed_params:
+            return parsed_params, ""
         return {}, text
     # Fallback: single-line "key: value" leading lines only.
-    params: Dict[str, str] = {}
+    params: dict[str, str] = {}
     i = start
     while i < len(lines):
         stripped = lines[i].strip()
@@ -124,13 +133,13 @@ def extract_bare_key_params(
 
 @dataclass
 class ParsedResult:
-    thoughts: List[str]
-    vitals: dict
-    actions: List[Action]
-    questions: List[str]
-    errors: List[str]
+    thoughts: list[str]
+    vitals: dict[str, float]
+    actions: list[Action]
+    questions: list[str]
+    errors: list[str]
     confidence: float = 1.0
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
 
 class ParseError(Exception):
@@ -147,9 +156,9 @@ class ParseError(Exception):
         self,
         message: str,
         *,
-        line_number: Optional[int] = None,
-        expected: Optional[str] = None,
-        actual: Optional[str] = None,
+        line_number: int | None = None,
+        expected: str | None = None,
+        actual: str | None = None,
     ) -> None:
         """Initialize a detailed parse error.
 
@@ -192,7 +201,7 @@ class AutoRepair:
         return text
 
     @staticmethod
-    def _apply_outside_blocks(text: str, fix_line) -> str:
+    def _apply_outside_blocks(text: str, fix_line: Callable[[str], str]) -> str:
         """
         <<< ～ >>> コンテンツブロックの外側の行にのみ行単位の修復関数を適用する。
 
@@ -207,7 +216,7 @@ class AutoRepair:
             修復適用後の全文
         """
         lines = text.split("\n")
-        out: List[str] = []
+        out: list[str] = []
         in_block = False
 
         for line in lines:
@@ -266,7 +275,7 @@ class AutoRepair:
             フェンス変換後の全文
         """
         lines = text.split("\n")
-        fixed: List[str] = []
+        fixed: list[str] = []
         in_symops_block = False  # 既存の <<< ～ >>> の内側
         in_md_fence = False  # 変換中の ``` フェンスの内側
 
@@ -354,8 +363,23 @@ class AutoRepair:
     # 自然言語の説明文が誤って行頭一致した際に、アクション化を見送るための
     # 目印となる先頭語（冠詞・前置詞・接続詞など）。
     _PROSE_LEAD_WORDS = {
-        "a", "an", "the", "to", "for", "and", "or", "that", "this", "it",
-        "of", "in", "on", "with", "so", "then", "now",
+        "a",
+        "an",
+        "the",
+        "to",
+        "for",
+        "and",
+        "or",
+        "that",
+        "this",
+        "it",
+        "of",
+        "in",
+        "on",
+        "with",
+        "so",
+        "then",
+        "now",
     }
     # 「動詞 + 目的語らしき語句」を超える語数は、コマンド/パスではなく
     # 自然文の可能性が高いとみなす閾値。
@@ -548,7 +572,7 @@ class AutoRepair:
         """
 
         # 1. Natural language: "Confidence: 95%" -> "::c0.95"
-        def norm_percent(match):
+        def norm_percent(match: re.Match[str]) -> str:
             key_map = {"confidence": "c", "safety": "s", "memory": "m", "focus": "f"}
             key = match.group(1).lower()
             val = float(match.group(2)) / 100.0
@@ -562,7 +586,7 @@ class AutoRepair:
         )
 
         # 2. Natural language: "Confidence: 0.95" -> "::c0.95"
-        def norm_plain(match):
+        def norm_plain(match: re.Match[str]) -> str:
             key_map = {"confidence": "c", "safety": "s", "memory": "m", "focus": "f"}
             key = match.group(1).lower()
             val = match.group(2)
@@ -643,7 +667,9 @@ class FuzzyParser:
                     # Marked auto-generated so the loop does not treat repair
                     # output as an explicit user-facing response (see
                     # should_return_to_user).
-                    current_action = Action(type="response", path="", auto_generated=True)
+                    current_action = Action(
+                        type="response", path="", auto_generated=True
+                    )
                 in_content = True
                 i += 1
                 continue
@@ -692,7 +718,7 @@ class FuzzyParser:
         return result
 
     @staticmethod
-    def _dedup_consecutive_actions(actions: List[Action]) -> List[Action]:
+    def _dedup_consecutive_actions(actions: list[Action]) -> list[Action]:
         """連続する同一アクション（type, path, params, content が同じ）を1つに圧縮する。
 
         LLMが反復出力バグを起こした場合、同じアクションが何十回も並ぶ。
@@ -700,7 +726,7 @@ class FuzzyParser:
         """
         if not actions:
             return actions
-        deduped: List[Action] = []
+        deduped: list[Action] = []
         for action in actions:
             if deduped:
                 prev = deduped[-1]
@@ -719,7 +745,7 @@ class FuzzyParser:
             )
         return deduped
 
-    def _extract_yaml_frontmatter(self, content: str) -> tuple[dict, str]:
+    def _extract_yaml_frontmatter(self, content: str) -> tuple[dict[str, str], str]:
         """
         コンテンツブロックの先頭に YAML フロントマター（--- ブロック）がある場合、
         それを引数辞書としてパースし、残りのコンテンツ文字列を返す。
@@ -798,7 +824,7 @@ class FuzzyParser:
             fixed_lines.append(f'{m.group(1)}"*{m.group(2)}"' if m else line)
         return "\n".join(fixed_lines)
 
-    def _fallback_parse_key_value_lines(self, yaml_text: str) -> dict:
+    def _fallback_parse_key_value_lines(self, yaml_text: str) -> dict[str, str]:
         """
         YAML全体としてのパースに失敗した場合の最終手段。
         単純な "key: value" 形式の行のみを正規表現で抽出する。
@@ -809,7 +835,7 @@ class FuzzyParser:
         Returns:
             抽出できた key-value のみを含む辞書（不正な行は無視される）
         """
-        params: Dict[str, str] = {}
+        params: dict[str, str] = {}
         line_pattern = re.compile(r"^\s*([\w\-]+)\s*:\s*(.+?)\s*$")
         for line in yaml_text.split("\n"):
             m = line_pattern.match(line)
@@ -821,7 +847,7 @@ class FuzzyParser:
             params[key] = value
         return params
 
-    def _extract_line_params(self, raw_path: str) -> tuple[str, dict]:
+    def _extract_line_params(self, raw_path: str) -> tuple[str, dict[str, str]]:
         """
         Enhanced parameter extraction supporting quoted values and mixed content.
         Uses a greedy approach to capture the last parameter's full content even without quotes.
@@ -909,7 +935,7 @@ class FuzzyParser:
             decoded_lines.append(line)
         return "\n".join(decoded_lines)
 
-    def _split_batch_content(self, content: str) -> List[Action]:
+    def _split_batch_content(self, content: str) -> list[Action]:
         """
         execute_batch ブロックのコンテンツを %%% 区切りで分割し、
         各セグメントを個別のActionに変換する（Sym-Ops v3.2）。
@@ -932,7 +958,7 @@ class FuzzyParser:
                 actions.append(action)
         return actions
 
-    def _parse_batch_segment(self, segment: str) -> Optional[Action]:
+    def _parse_batch_segment(self, segment: str) -> Action | None:
         """
         バッチセグメント1件をActionに変換する。
         1行目: "action_name @path" または "action_name"
@@ -993,7 +1019,7 @@ class FuzzyParser:
         result.confidence = self._calculate_confidence(result)
         return result
 
-    def _extract_actions_fuzzy(self, text: str) -> List[Action]:
+    def _extract_actions_fuzzy(self, text: str) -> list[Action]:
         """Extract actions using v3.1 format. execute_batch を認識する。"""
         actions = []
         pattern = r"^::\s*(\w+)(?:\s*@\s*([^\n]+))?"
@@ -1040,7 +1066,6 @@ class FuzzyParser:
                         i = j
                         continue
 
-                content = ""
                 j = i + 1
                 has_delimiters = False
                 content_lines = []
@@ -1099,8 +1124,8 @@ class FuzzyParser:
     def _parse_vitals(
         self,
         line: str,
-        vitals: dict,
-        warnings: Optional[List[str]] = None,
+        vitals: dict[str, float],
+        warnings: list[str] | None = None,
     ) -> None:
         """Parse and range-check multiple vitals from one protocol line.
 
@@ -1143,7 +1168,7 @@ class FuzzyParser:
         """
         return bool(re.match(r"^::[cmfs](?=[+\-.0-9])", line))
 
-    def _parse_action(self, line: str, line_number: Optional[int] = None) -> Action:
+    def _parse_action(self, line: str, line_number: int | None = None) -> Action:
         """Parse one strict action line.
 
         Args:
@@ -1207,7 +1232,7 @@ class FuzzyParser:
             score *= 0.8 ** len(low_conf)
         return max(0.0, min(1.0, score))
 
-    def _extract_thoughts(self, text: str) -> List[str]:
+    def _extract_thoughts(self, text: str) -> list[str]:
         """Extract thought lines v2.
 
         Lines inside <<< >>> content blocks are raw data (file contents,
@@ -1227,7 +1252,9 @@ class FuzzyParser:
                 thoughts.append(line.strip()[2:].strip())
         return thoughts
 
-    def _extract_vitals(self, text: str, warnings: Optional[List[str]] = None) -> dict:
+    def _extract_vitals(
+        self, text: str, warnings: list[str] | None = None
+    ) -> dict[str, float]:
         """Extract range-checked Duck Vitals from outside content blocks.
 
         Args:
@@ -1237,7 +1264,7 @@ class FuzzyParser:
         Returns:
             Mapping of valid vital names to values in the 0.0-1.0 range.
         """
-        vitals = {}
+        vitals: dict[str, float] = {}
         in_block = False
         for line in text.split("\n"):
             if in_block:
@@ -1252,7 +1279,7 @@ class FuzzyParser:
                 self._parse_vitals(stripped, vitals, warnings)
         return vitals
 
-    def _extract_questions(self, text: str) -> List[str]:
+    def _extract_questions(self, text: str) -> list[str]:
         """Extract questions"""
         return [
             line.strip()[1:].strip()
@@ -1260,7 +1287,7 @@ class FuzzyParser:
             if line.strip().startswith("?")
         ]
 
-    def _extract_errors(self, text: str) -> List[str]:
+    def _extract_errors(self, text: str) -> list[str]:
         """Extract errors"""
         return [
             line.strip()[1:].strip()
@@ -1275,14 +1302,22 @@ class SymOpsProcessor:
     Generation -> Preprocess -> Markdown Convert -> Repair -> Parse -> Fallback
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize the complete Sym-Ops processing pipeline.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         self.preprocessor = SymOpsPreprocessor()
         self.markdown_converter = PlainMarkdownConverter()
         self.repairer = AutoRepair()
         self.parser = FuzzyParser()
 
     @staticmethod
-    def _strip_fabricated_tool_results(text: str) -> Tuple[str, int]:
+    def _strip_fabricated_tool_results(text: str) -> tuple[str, int]:
         """Remove hallucinated tool-result segments from model output.
 
         Weak models sometimes continue the transcript on the system's behalf:
@@ -1298,9 +1333,7 @@ class SymOpsProcessor:
         Returns:
             Tuple of (cleaned text, number of removed segments).
         """
-        envelope_re = re.compile(
-            r"\[TOOL_RESULT\].*?\[/TOOL_RESULT\]", re.DOTALL
-        )
+        envelope_re = re.compile(r"\[TOOL_RESULT\].*?\[/TOOL_RESULT\]", re.DOTALL)
         status_line_re = re.compile(r"^\s*::\s*status\s+\w+\s*$", re.MULTILINE)
 
         cleaned = text
@@ -1332,9 +1365,9 @@ class SymOpsProcessor:
         if len(lines) < threshold * 2:
             return text
 
-        result: List[str] = []
+        result: list[str] = []
         repeat_count = 0
-        prev_line: Optional[str] = None
+        prev_line: str | None = None
 
         for line in lines:
             if line == prev_line:
@@ -1363,7 +1396,9 @@ class SymOpsProcessor:
         Main processing pipeline with preprocessing
         """
         # Phase -1: 推論系モデルの <think> ブロック除去（DeepSeek-R1 / Kimi K2 / Qwen3 / GLM 等）
-        raw_output, reasoning_stripped, reasoning_content = strip_reasoning_tags(raw_output)
+        raw_output, reasoning_stripped, reasoning_content = strip_reasoning_tags(
+            raw_output
+        )
 
         # If reasoning was extracted from imd blocks, prepend as >> Thought lines
         if reasoning_content:
@@ -1382,7 +1417,9 @@ class SymOpsProcessor:
 
             if thought_block:
                 raw_output = f"<!--reasoning-start-->\n{thought_block}\n<!--reasoning-end-->\n\n{raw_output}"
-                logger.info(f"Extracted reasoning from imd blocks ({len(reasoning_content)} chars), prepended as >> Thought")
+                logger.info(
+                    f"Extracted reasoning from imd blocks ({len(reasoning_content)} chars), prepended as >> Thought"
+                )
 
         # Phase -0.7: Remove fabricated tool results.
         # Weak models sometimes continue the transcript on their own behalf,
@@ -1431,9 +1468,7 @@ class SymOpsProcessor:
             if was_converted:
                 parsed.warnings.append("Converted from plain markdown/text")
             if vague_attempt:
-                parsed.actions = [
-                    a for a in parsed.actions if a.type != "response"
-                ]
+                parsed.actions = [a for a in parsed.actions if a.type != "response"]
                 parsed.warnings.append(VAGUE_ACTION_WARNING)
             if fabricated_count:
                 parsed.warnings.append(FABRICATED_RESULT_WARNING)
@@ -1448,9 +1483,7 @@ class SymOpsProcessor:
         partial.warnings.append("Partial parse used")
         partial.warnings.append(f"Strict parse failed: {strict_error}")
         if vague_attempt:
-            partial.actions = [
-                a for a in partial.actions if a.type != "response"
-            ]
+            partial.actions = [a for a in partial.actions if a.type != "response"]
             partial.warnings.append(VAGUE_ACTION_WARNING)
         if fabricated_count:
             partial.warnings.append(FABRICATED_RESULT_WARNING)

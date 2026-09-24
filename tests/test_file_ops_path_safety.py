@@ -113,3 +113,33 @@ async def test_traversal_still_rejected_after_normalization(
     """Normalization must never widen access: traversal stays denied."""
     with pytest.raises(PermissionError):
         await file_ops.read_file(path)
+
+
+@pytest.mark.asyncio
+async def test_grep_rejects_outside_start_path(
+    file_ops: FileOps, tmp_path: Path
+) -> None:
+    """grep_files must reject an absolute search path outside the workspace."""
+    outside = tmp_path.parent / "duckflow-grep-outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+
+    with pytest.raises(PermissionError):
+        await file_ops.grep_files("secret", path=str(outside))
+
+    assert outside.read_text(encoding="utf-8") == "secret"
+
+
+@pytest.mark.asyncio
+async def test_grep_skips_symlink_to_outside(file_ops: FileOps, tmp_path: Path) -> None:
+    """grep_files must not follow workspace symlinks to outside files."""
+    outside = tmp_path.parent / "duckflow-grep-linked.txt"
+    outside.write_text("sensitive-value", encoding="utf-8")
+    link = tmp_path / "linked.txt"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable on this platform")
+
+    result = await file_ops.grep_files("sensitive-value", path=".")
+
+    assert "sensitive-value" not in result

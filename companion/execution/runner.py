@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from companion.config.config_loader import config
+from companion.tools.results import ToolResult
 from companion.tools.shell_tool import ShellTool
 
 from .summary import summarize_result
@@ -11,14 +12,14 @@ from .summary import summarize_result
 class CodeRunner:
     """Run code execution tasks and return concise user-facing summaries."""
 
-    async def run_command(self, command: str) -> str:
+    async def run_command(self, command: str) -> str | ToolResult:
         """Execute a shell command through the project shell tool.
 
         Args:
             command: Shell command text to execute.
 
         Returns:
-            Combined stdout/stderr text returned by ShellTool.
+            Combined command output, or a structured execution error.
         """
         return await ShellTool.run_command(command)
 
@@ -50,7 +51,9 @@ class CodeRunner:
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            return f"❌ TimeoutError: Python execution timed out after {timeout} seconds"
+            return (
+                f"❌ TimeoutError: Python execution timed out after {timeout} seconds"
+            )
 
         stdout = stdout_bytes.decode("utf-8", errors="replace")
         stderr = stderr_bytes.decode("utf-8", errors="replace")

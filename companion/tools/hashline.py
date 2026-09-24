@@ -25,7 +25,6 @@ Hashline は、行番号とハッシュの組み合わせで行を識別し、LL
 '''
 
 import zlib
-from typing import List, Tuple
 
 
 class HashlineHelper:
@@ -50,12 +49,14 @@ class HashlineHelper:
             # 空行の場合は特殊なハッシュ値（000）
             return "000"
 
-        crc32 = zlib.crc32(stripped.encode('utf-8')) & 0xFFFFFFFF
+        crc32 = zlib.crc32(stripped.encode("utf-8")) & 0xFFFFFFFF
         hash_value = crc32 % HashlineHelper.HASH_MODULUS
         return f"{hash_value:03x}"
 
     @staticmethod
-    def format_with_hashlines(content: str, start_line: int = 1, include_hash: bool = True) -> str:
+    def format_with_hashlines(
+        content: str, start_line: int = 1, include_hash: bool = True
+    ) -> str:
         """
         コンテンツを行番号付き形式に変換する。
 
@@ -67,7 +68,7 @@ class HashlineHelper:
         Returns:
             変換された文字列
         """
-        lines = content.split('\n')
+        lines = content.split("\n")
         hashline_lines = []
 
         for i, line in enumerate(lines, start=start_line):
@@ -77,10 +78,10 @@ class HashlineHelper:
             else:
                 hashline_lines.append(f"{i}|{line}")
 
-        return '\n'.join(hashline_lines)
+        return "\n".join(hashline_lines)
 
     @staticmethod
-    def parse_anchor(anchor: str) -> Tuple[int, str]:
+    def parse_anchor(anchor: str) -> tuple[int, str]:
         """
         アンカー文字列から (行番号, ハッシュ) を抽出する。
 
@@ -93,15 +94,17 @@ class HashlineHelper:
         Raises:
             ValueError: アンカー形式が不正な場合
         """
-        if ':' not in anchor:
-            raise ValueError(f"Invalid anchor format: '{anchor}'. Expected format: 'line:hash'")
+        if ":" not in anchor:
+            raise ValueError(
+                f"Invalid anchor format: '{anchor}'. Expected format: 'line:hash'"
+            )
 
-        line_str, hash_value = anchor.split(':', 1)
+        line_str, hash_value = anchor.split(":", 1)
 
         try:
             line_num = int(line_str)
-        except ValueError:
-            raise ValueError(f"Invalid line number in anchor: '{line_str}'")
+        except ValueError as error:
+            raise ValueError(f"Invalid line number in anchor: '{line_str}'") from error
 
         if len(hash_value) != HashlineHelper.HASH_LENGTH:
             raise ValueError(
@@ -110,18 +113,16 @@ class HashlineHelper:
             )
 
         try:
-            int(hash_value, 16)  # 有効な16進数かチェック
-        except ValueError:
-            raise ValueError(f"Invalid hex hash in anchor: '{hash_value}'")
+            int(hash_value, 16)
+        except ValueError as error:
+            raise ValueError(f"Invalid hex hash in anchor: '{hash_value}'") from error
 
         return line_num, hash_value
 
     @staticmethod
     def extract_content_block(
-        file_lines: List[str],
-        start_anchor: str,
-        end_anchor: str
-    ) -> Tuple[int, int, List[str]]:
+        file_lines: list[str], start_anchor: str, end_anchor: str
+    ) -> tuple[int, int, list[str]]:
         """
         ファイル内容からアンカーで指定された範囲を抽出・検証する。
 
@@ -185,17 +186,17 @@ class HashlineHelper:
             )
 
         # 範囲を抽出（終了行を含む）
-        extracted = file_lines[start_idx:end_idx + 1]
+        extracted = file_lines[start_idx : end_idx + 1]
 
         return start_idx, end_idx, extracted
 
     @staticmethod
     def format_context_after_edit(
-        file_lines: List[str],
+        file_lines: list[str],
         edit_start_idx: int,
         edit_end_idx: int,
         context_lines: int = 5,
-        include_hash: bool = False
+        include_hash: bool = False,
     ) -> str:
         """
         編集後のコンテキストを行番号付き形式で返す。
@@ -218,7 +219,7 @@ class HashlineHelper:
         context_lines_list = file_lines[context_start:context_end]
 
         return HashlineHelper.format_with_hashlines(
-            '\n'.join(context_lines_list), 
-            start_line=context_start + 1, 
-            include_hash=include_hash
+            "\n".join(context_lines_list),
+            start_line=context_start + 1,
+            include_hash=include_hash,
         )

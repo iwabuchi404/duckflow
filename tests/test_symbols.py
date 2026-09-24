@@ -5,14 +5,12 @@ Tests for:
 - symbols.py: list_symbols, find_definition
 """
 
-import asyncio
-import tempfile
 import pytest
-from pathlib import Path
 
 from companion.tools.file_ops import FileOps
+from companion.tools.file_ops import file_ops as shared_file_ops
 from companion.tools.results import ToolResult, ToolStatus
-from companion.tools.symbols import list_symbols, find_definition, _extract_symbols
+from companion.tools.symbols import _extract_symbols, find_definition, list_symbols
 
 
 @pytest.fixture
@@ -55,7 +53,8 @@ def nested_func():
         return 42
 
     return inner()
-''')
+'''
+    )
 
     (tmp_path / "test_pkg" / "other.py").write_text(
         '''"""Another module."""
@@ -69,9 +68,19 @@ def shared_name():
 def unique_func():
     """Only in other.py."""
     return 42
-''')
+'''
+    )
 
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def active_symbol_workspace(workspace):
+    """Use the shared workspace root for symbol tools."""
+    previous_root = shared_file_ops.workspace_root
+    shared_file_ops.set_workspace_root(str(workspace))
+    yield
+    shared_file_ops.set_workspace_root(str(previous_root))
 
 
 @pytest.fixture
@@ -93,7 +102,9 @@ async def test_grep_case_sensitive_default(file_ops):
 @pytest.mark.asyncio
 async def test_grep_case_insensitive(file_ops):
     """case_sensitive=False should match regardless of case."""
-    result = await file_ops.grep_files("def", path="test_pkg", include="*.py", case_sensitive=False)
+    result = await file_ops.grep_files(
+        "def", path="test_pkg", include="*.py", case_sensitive=False
+    )
     assert "match(es) found" in result
     assert "def top_level_func" in result
 
@@ -121,7 +132,9 @@ async def test_grep_file_grouping(file_ops):
 @pytest.mark.asyncio
 async def test_grep_truncation_explicit(file_ops):
     """Truncation should be explicitly stated."""
-    result = await file_ops.grep_files(".", path="test_pkg", include="*.py", max_results=2)
+    result = await file_ops.grep_files(
+        ".", path="test_pkg", include="*.py", max_results=2
+    )
     assert "truncated" in result.lower()
 
 
@@ -138,7 +151,7 @@ async def test_grep_no_matches(file_ops):
 @pytest.mark.asyncio
 async def test_list_symbols_basic(workspace):
     """list_symbols should return all functions and classes."""
-    result = await list_symbols("test_pkg/example.py", workspace_root=str(workspace))
+    result = await list_symbols("test_pkg/example.py")
     assert "top_level_func" in result
     assert "MyClass" in result
     assert "method_a" in result
@@ -148,21 +161,21 @@ async def test_list_symbols_basic(workspace):
 @pytest.mark.asyncio
 async def test_list_symbols_line_ranges(workspace):
     """list_symbols should include line ranges."""
-    result = await list_symbols("test_pkg/example.py", workspace_root=str(workspace))
+    result = await list_symbols("test_pkg/example.py")
     assert "lines" in result
 
 
 @pytest.mark.asyncio
 async def test_list_symbols_docstring(workspace):
     """list_symbols should include docstring first line."""
-    result = await list_symbols("test_pkg/example.py", workspace_root=str(workspace))
+    result = await list_symbols("test_pkg/example.py")
     assert "A top-level function" in result
 
 
 @pytest.mark.asyncio
 async def test_list_symbols_nested(workspace):
     """list_symbols should show nested functions with qualified names."""
-    result = await list_symbols("test_pkg/example.py", workspace_root=str(workspace))
+    result = await list_symbols("test_pkg/example.py")
     assert "nested_func.inner" in result
 
 
@@ -170,7 +183,7 @@ async def test_list_symbols_nested(workspace):
 async def test_list_symbols_non_python(workspace):
     """list_symbols should reject non-Python files."""
     (workspace / "test.txt").write_text("not python")
-    result = await list_symbols("test.txt", workspace_root=str(workspace))
+    result = await list_symbols("test.txt")
     assert isinstance(result, ToolResult)
     assert result.status == ToolStatus.ERROR
     assert "not a python file" in result.content.lower()
@@ -179,7 +192,7 @@ async def test_list_symbols_non_python(workspace):
 @pytest.mark.asyncio
 async def test_list_symbols_not_found(workspace):
     """list_symbols should handle missing files."""
-    result = await list_symbols("nonexistent.py", workspace_root=str(workspace))
+    result = await list_symbols("nonexistent.py")
     assert isinstance(result, ToolResult)
     assert result.status == ToolStatus.ERROR
     assert "not found" in result.content.lower()
@@ -191,7 +204,7 @@ async def test_list_symbols_not_found(workspace):
 @pytest.mark.asyncio
 async def test_find_definition_single(workspace):
     """find_definition should find a unique symbol."""
-    result = await find_definition("unique_func", scope="test_pkg", workspace_root=str(workspace))
+    result = await find_definition("unique_func", scope="test_pkg")
     assert "other.py" in result
     assert "def unique_func" in result
 
@@ -199,7 +212,7 @@ async def test_find_definition_single(workspace):
 @pytest.mark.asyncio
 async def test_find_definition_multiple(workspace):
     """find_definition should list all matches for shared names."""
-    result = await find_definition("shared_name", scope="test_pkg", workspace_root=str(workspace))
+    result = await find_definition("shared_name", scope="test_pkg")
     assert "1 found" in result or "found" in result
     assert "other.py" in result
 
@@ -207,14 +220,14 @@ async def test_find_definition_multiple(workspace):
 @pytest.mark.asyncio
 async def test_find_definition_not_found(workspace):
     """find_definition should report when no definition is found."""
-    result = await find_definition("NONEXISTENT_XYZ", scope="test_pkg", workspace_root=str(workspace))
+    result = await find_definition("NONEXISTENT_XYZ", scope="test_pkg")
     assert "No definition" in result
 
 
 @pytest.mark.asyncio
 async def test_find_definition_class_method(workspace):
     """find_definition should find class methods."""
-    result = await find_definition("method_a", scope="test_pkg", workspace_root=str(workspace))
+    result = await find_definition("method_a", scope="test_pkg")
     assert "example.py" in result
     assert "method_a" in result
 

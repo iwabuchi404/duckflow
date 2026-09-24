@@ -4,13 +4,22 @@ Task Management Module
 """
 
 from .pecking_order import PeckingOrder, TaskDecompositionResult
-from .task_hierarchy import TaskHierarchy, TaskNode, TaskStatus, TaskPriority
+from .task_hierarchy import (
+    TaskHierarchy,
+    TaskNode,
+    TaskPriority,
+    TaskProfileResult,
+    TaskProfileType,
+    TaskStatus,
+)
 
 __all__ = [
-    'PeckingOrder',
-    'TaskDecompositionResult',
-    'TaskHierarchy', 
-    'TaskNode',
-    'TaskStatus',
-    'TaskPriority'
+    "PeckingOrder",
+    "TaskDecompositionResult",
+    "TaskHierarchy",
+    "TaskNode",
+    "TaskProfileResult",
+    "TaskProfileType",
+    "TaskStatus",
+    "TaskPriority",
 ]

@@ -1,11 +1,10 @@
-import subprocess
-import logging
 import asyncio
-from typing import Tuple
+import logging
 
 from companion.config.config_loader import config
 from companion.tools.file_ops import file_ops
 from companion.tools.results import ToolResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,12 +67,16 @@ class ShellTool:
 
             try:
                 timeout = config.get("tool.shell_timeout", 30)
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=timeout
+                )
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
                 return ToolResult.error(
-                    "run_command", command, f"Command timed out after {timeout} seconds: {command}"
+                    "run_command",
+                    command,
+                    f"Command timed out after {timeout} seconds: {command}",
                 )
 
             output = ""
@@ -89,9 +92,7 @@ class ShellTool:
             # flow is unchanged: plain string results are successful tool
             # executions regardless of the command's own exit code.
             if process.returncode != 0:
-                output = (
-                    f"[command exited with code {process.returncode}]\n" + output
-                )
+                output = f"[command exited with code {process.returncode}]\n" + output
             output += f"\nexit_code: {process.returncode}"
 
             return output.strip()

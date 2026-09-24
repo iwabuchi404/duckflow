@@ -1,12 +1,32 @@
+import ast
 import os
 import re
-import ast
-import shutil
-from typing import List, Optional, Dict, Tuple
 from pathlib import Path
+from typing import TypedDict
+
 import yaml
+
 from .hashline import HashlineHelper
 from .results import ToolResult
+
+ReadFileResult = dict[str, object]
+
+
+class _EditParams(TypedDict):
+    """Normalized parameters for one find/replace edit."""
+
+    find: str
+    replace: str
+    occurrence: int
+
+
+class _FallbackEditParams(TypedDict, total=False):
+    """Partially parsed find/replace parameters."""
+
+    find: str
+    replace: str
+    occurrence: int
+
 
 # find_files / grep_files のディレクトリ走査で除外するノイズディレクトリ。
 # ドット始まり（.git, .venv 等）以外にも、ビルド成果物やキャッシュ等
@@ -35,7 +55,7 @@ def _is_noise_dir_name(name: str) -> bool:
     return name in NOISE_DIR_NAMES or name.endswith(".egg-info")
 
 
-def _extract_symbol_headers(file_path: Path) -> Dict[int, str]:
+def _extract_symbol_headers(file_path: Path) -> dict[int, str]:
     """Extract symbol headers for a Python file using ast.
 
     Returns a dict mapping line numbers to the nearest enclosing
@@ -56,12 +76,19 @@ def _extract_symbol_headers(file_path: Path) -> Dict[int, str]:
     except (SyntaxError, ValueError, OSError):
         return {}
 
-    headers: Dict[int, str] = {}
+    headers: dict[int, str] = {}
     lines = source.splitlines()
 
-    def _get_signature(node) -> str:
-        """Extract a readable signature from an ast node."""
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    def _get_signature(node: ast.AST) -> str:
+        """Extract a readable signature from an AST node.
+
+        Args:
+            node: AST node to inspect.
+
+        Returns:
+            Source signature for a function or class, or an empty string.
+        """
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             # Build "def name(args) -> ret" from source line
             line_idx = node.lineno - 1
             if line_idx < len(lines):
@@ -74,10 +101,18 @@ def _extract_symbol_headers(file_path: Path) -> Dict[int, str]:
             return f"class {node.name}"
         return ""
 
-    def _walk(node, current_header: str = ""):
-        """Walk the AST and record the enclosing symbol for each line range."""
+    def _walk(node: ast.AST, current_header: str = "") -> None:
+        """Record the enclosing symbol header for every AST line range.
+
+        Args:
+            node: Current AST node.
+            current_header: Header inherited from the enclosing symbol.
+
+        Returns:
+            None.
+        """
         header = current_header
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             header = _get_signature(node)
 
         # Record the header for this node's line range (skip nodes without lineno)
@@ -94,7 +129,7 @@ def _extract_symbol_headers(file_path: Path) -> Dict[int, str]:
     return headers
 
 
-def _find_symbol_for_line(headers: Dict[int, str], line_num: int) -> str | None:
+def _find_symbol_for_line(headers: dict[int, str], line_num: int) -> str | None:
     """Find the enclosing symbol header for a given line number.
 
     Does a reverse search from the given line to find the nearest
@@ -110,6 +145,7 @@ def _find_symbol_for_line(headers: Dict[int, str], line_num: int) -> str | None:
     for ln in range(line_num, 0, -1):
         if ln in headers and headers[ln]:
             return headers[ln]
+    return None
 
 
 class FileOps:
@@ -117,27 +153,69 @@ class FileOps:
     File Operations with Duck Keeper Safety.
     """
 
-    def __init__(self, workspace_root: str = "."):
+    def __init__(self, workspace_root: str = ".") -> None:
+        """Initialize file operations rooted at a workspace directory.
+
+        Args:
+            workspace_root: Workspace directory path.
+
+        Returns:
+            None.
+        """
         self.workspace_root = Path(workspace_root).resolve()
 
-    def set_workspace_root(self, path: str):
-        """Set the workspace root directory."""
+    def set_workspace_root(self, path: str) -> None:
+        """Set and create the workspace root directory when necessary.
+
+        Args:
+            path: New workspace root path.
+
+        Returns:
+            None.
+        """
         self.workspace_root = Path(path).resolve()
         if not self.workspace_root.exists():
             self.workspace_root.mkdir(parents=True, exist_ok=True)
         print(f"📂 Workspace set to: {self.workspace_root}")
 
-    def _is_safe_path(self, path: str) -> bool:
-        """Duck Keeper: Ensure path is within workspace."""
+    def is_within_workspace(self, path: Path) -> bool:
+        """Return whether a resolved path is inside the active workspace.
+
+        Args:
+            path: Resolved filesystem path to inspect.
+
+        Returns:
+            True when the path is the workspace root or one of its descendants.
+        """
         try:
-            target_path = (self.workspace_root / path).resolve()
-            return (
-                self.workspace_root in target_path.parents
-                or target_path == self.workspace_root
-                or target_path.parent == self.workspace_root
-            )
-        except Exception:
+            path.resolve().relative_to(self.workspace_root)
+        except ValueError:
             return False
+        return True
+
+    def resolve_path(self, path: str) -> Path:
+        """Resolve a model-provided path inside the active workspace.
+
+        Args:
+            path: Workspace-relative or recognized virtual path.
+
+        Returns:
+            Canonical path contained by the workspace root.
+
+        Raises:
+            PermissionError: If the canonical target escapes the workspace.
+        """
+        normalized = self._normalize_model_path(path)
+        target = (self.workspace_root / normalized).resolve()
+        if not self.is_within_workspace(target):
+            raise PermissionError(
+                f"Duck Keeper Alert: Access denied to {path} (Outside workspace). "
+                f"Paths must be RELATIVE to the workspace root "
+                f"(e.g. 'orders.py' or 'src/utils.py'). Do not use absolute "
+                f"paths, '/workspace/' prefixes, or filesystem-root searches — "
+                f"only files inside this project are accessible."
+            )
+        return target
 
     def _normalize_model_path(self, path: str) -> str:
         """Best-effort normalization of common model path hallucinations.
@@ -147,7 +225,7 @@ class FileOps:
         from shell output ('/tmp/.../<ws_name>/orders.py'). This maps the
         common forms onto workspace-relative candidates.
 
-        Safety note: the result is still validated by _is_safe_path —
+        Safety note: the result is still validated by resolve_path —
         normalization can only narrow a path toward the workspace, never
         grant access outside it.
 
@@ -194,16 +272,15 @@ class FileOps:
         return cleaned
 
     def _get_full_path(self, path: str) -> Path:
-        normalized = self._normalize_model_path(path)
-        if not self._is_safe_path(normalized):
-            raise PermissionError(
-                f"Duck Keeper Alert: Access denied to {path} (Outside workspace). "
-                f"Paths must be RELATIVE to the workspace root "
-                f"(e.g. 'orders.py' or 'src/utils.py'). Do not use absolute "
-                f"paths, '/workspace/' prefixes, or filesystem-root searches — "
-                f"only files inside this project are accessible."
-            )
-        return (self.workspace_root / normalized).resolve()
+        """Resolve a path through the shared workspace boundary.
+
+        Args:
+            path: Workspace-relative or recognized virtual path.
+
+        Returns:
+            Canonical path contained by the workspace root.
+        """
+        return self.resolve_path(path)
 
     def file_exists(self, path: str) -> bool:
         """Check if a file exists within the workspace."""
@@ -212,7 +289,9 @@ class FileOps:
         except Exception:
             return False
 
-    async def read_file(self, path: str, start: int = 1, end: int = 300) -> dict:
+    async def read_file(
+        self, path: str, start: int = 1, end: int = 300
+    ) -> ReadFileResult:
         """
         Read file content with hashline format for precise editing.
 
@@ -250,7 +329,7 @@ class FileOps:
         size_bytes = os.path.getsize(full_path)
 
         try:
-            with open(full_path, "r", encoding="utf-8") as f:
+            with open(full_path, encoding="utf-8") as f:
                 # 1-indexed to 0-indexed slice
                 # islice(iterable, start, stop)
                 # To read lines from start_line, we skip start_line - 1 lines.
@@ -326,7 +405,9 @@ class FileOps:
             processed.append(line)
 
         # Step 2: 非空行の最小インデントを計算
-        indents = [len(l) - len(l.lstrip(" ")) for l in processed if l.strip()]
+        indents = [
+            len(line) - len(line.lstrip(" ")) for line in processed if line.strip()
+        ]
         min_indent = min(indents) if indents else 0
 
         # Step 3: 最小インデント除去 + 末尾トリム
@@ -349,7 +430,7 @@ class FileOps:
         タブ/スペースの差、絶対インデントの差は吸収するが、
         ブロック内の相対的なインデント構造は保持して比較する。
         """
-        find_lines = [l.rstrip("\n") for l in find_text.splitlines()]
+        find_lines = [line.rstrip("\n") for line in find_text.splitlines()]
         find_len = len(find_lines)
         if find_len == 0:
             return None
@@ -405,8 +486,8 @@ class FileOps:
         import difflib as _difflib
 
         # 各行を正規化して比較しやすくする
-        f_norm = [self._normalize_line(l) for l in find_lines]
-        c_norm = [self._normalize_line(l) for l in candidate_lines]
+        f_norm = [self._normalize_line(line) for line in find_lines]
+        c_norm = [self._normalize_line(line) for line in candidate_lines]
 
         diff = _difflib.ndiff(f_norm, c_norm)
         return "\n".join([line for line in diff if line.startswith(("-", "+", "?"))])
@@ -423,9 +504,9 @@ class FileOps:
         stripped = content.rstrip() if content else ""
         if stripped.endswith("...") or stripped.endswith("…"):
             return (
-                f"⚠️ Content appears truncated (ends with '...'). "
-                f"File NOT written. Use ::append_file with start=true to write "
-                f"in chunks, or provide complete content."
+                "⚠️ Content appears truncated (ends with '...'). "
+                "File NOT written. Use ::append_file with start=true to write "
+                "in chunks, or provide complete content."
             )
 
         # Sanitize content before writing
@@ -522,12 +603,12 @@ class FileOps:
             開始(<<<<<<< )と区切り(=======)の両方が存在すれば True
         """
         lines = text.split("\n")
-        has_open = any(cls._GIT_CONFLICT_OPEN_RE.match(l) for l in lines)
-        has_sep = any(cls._GIT_CONFLICT_SEP_RE.match(l) for l in lines)
+        has_open = any(cls._GIT_CONFLICT_OPEN_RE.match(line) for line in lines)
+        has_sep = any(cls._GIT_CONFLICT_SEP_RE.match(line) for line in lines)
         return has_open and has_sep
 
     @classmethod
-    def _parse_search_replace_markers(cls, content: str) -> List[dict]:
+    def _parse_search_replace_markers(cls, content: str) -> list[_EditParams]:
         """
         SEARCH/REPLACE マーカー形式のコンテンツを find/replace ペアへ変換する。
 
@@ -544,7 +625,7 @@ class FileOps:
             区切り `=======` を欠くなど分離不能なブロックはスキップする。
         """
         lines = content.split("\n")
-        pairs: List[dict] = []
+        pairs: list[_EditParams] = []
         i = 0
         n = len(lines)
 
@@ -555,7 +636,7 @@ class FileOps:
 
             # SEARCH 本文を区切りまで収集
             i += 1
-            search_lines: List[str] = []
+            search_lines: list[str] = []
             found_sep = False
             while i < n:
                 if cls._SR_SEP_RE.match(lines[i]):
@@ -573,7 +654,7 @@ class FileOps:
                 continue
 
             # REPLACE 本文を終端まで（終端欠落時は次の開始 or EOF まで）収集
-            replace_lines: List[str] = []
+            replace_lines: list[str] = []
             while i < n:
                 if cls._SR_CLOSE_RE.match(lines[i]):
                     i += 1
@@ -669,7 +750,7 @@ class FileOps:
         import re as _re
 
         # 各セグメントからパース
-        edits_params = []
+        edits_params: list[_EditParams] = []
 
         # 1つ目のアクション（トップレベル引数）を最初に追加（もし存在すれば）
         if find:
@@ -703,11 +784,11 @@ class FileOps:
                     "edit_file",
                     path,
                     (
-                        f"Reason: marker_parse_failed\n"
-                        f"Message: Found a SEARCH marker but could not extract a valid "
-                        f"SEARCH/REPLACE pair (missing '=======' separator?).\n"
-                        f"Fix: Use the exact form:\n"
-                        f"<<<<<<< SEARCH\n(old code)\n=======\n(new code)\n>>>>>>> REPLACE"
+                        "Reason: marker_parse_failed\n"
+                        "Message: Found a SEARCH marker but could not extract a valid "
+                        "SEARCH/REPLACE pair (missing '=======' separator?).\n"
+                        "Fix: Use the exact form:\n"
+                        "<<<<<<< SEARCH\n(old code)\n=======\n(new code)\n>>>>>>> REPLACE"
                     ),
                 )
 
@@ -720,10 +801,10 @@ class FileOps:
                         "edit_file",
                         path,
                         (
-                            f"Reason: marker_leak_in_replace\n"
-                            f"Message: The REPLACE content still contains conflict/marker lines, "
-                            f"which usually means the markers were mis-parsed.\n"
-                            f"Fix: Re-issue the edit, or use ::write_file for whole-region rewrites."
+                            "Reason: marker_leak_in_replace\n"
+                            "Message: The REPLACE content still contains conflict/marker lines, "
+                            "which usually means the markers were mis-parsed.\n"
+                            "Fix: Re-issue the edit, or use ::write_file for whole-region rewrites."
                         ),
                     )
 
@@ -778,7 +859,11 @@ class FileOps:
         return await self._apply_edits(path, full_path, edits_params, content)
 
     async def _apply_edits(
-        self, path: str, full_path: Path, edits_params: List[dict], content: str
+        self,
+        path: str,
+        full_path: Path,
+        edits_params: list[_EditParams],
+        content: str,
     ) -> str | ToolResult:
         """
         収集済みの find/replace ペアを対象ファイルに適用する共通処理。
@@ -823,7 +908,7 @@ class FileOps:
         except UnicodeDecodeError:
             raw_content = full_path.read_text(encoding="latin-1")
 
-        file_lines = [l.rstrip("\n") for l in raw_content.split("\n")]
+        file_lines = [line.rstrip("\n") for line in raw_content.split("\n")]
 
         # すべてのマッチ箇所を特定
         resolved = []
@@ -849,7 +934,12 @@ class FileOps:
                         f.splitlines(), cand_lines
                     )
 
-                cand_str = "\n".join([f'  - line {l}: "{c}"' for l, c in candidates])
+                cand_str = "\n".join(
+                    [
+                        f'  - line {line}: "{candidate}"'
+                        for line, candidate in candidates
+                    ]
+                )
 
                 return ToolResult.error(
                     "edit_file",
@@ -873,7 +963,9 @@ class FileOps:
         # 逐次適用と結果収集
         for start_idx, end_idx, r_text in resolved:
             # 置換後のコードからもハッシュや行番号を除去
-            r_lines = [self._strip_hash_from_content(l) for l in r_text.splitlines()]
+            r_lines = [
+                self._strip_hash_from_content(line) for line in r_text.splitlines()
+            ]
             file_lines[start_idx : end_idx + 1] = r_lines
 
         # 書き込み
@@ -897,27 +989,30 @@ class FileOps:
             f"--- End of Context ---"
         )
 
-    def _extract_find_replace_fallback(self, text: str) -> dict:
-        """
-        YAMLパースに失敗した場合の正規表現による抽出。
-        ブロックの共通インデントを自動で削除する。
-        1行形式 (find: old_text) にも対応 (v2.2)。
+    def _extract_find_replace_fallback(self, text: str) -> _FallbackEditParams | None:
+        """Extract normalized find/replace parameters with regular expressions.
+
+        Args:
+            text: Edit content to inspect after YAML parsing fails.
+
+        Returns:
+            Normalized edit parameters, or None when no find value is present.
         """
         import re as _re
 
-        res = {}
+        res: _FallbackEditParams = {}
 
         def clean_block(block_text: str) -> str:
             if not block_text:
                 return ""
             lines = block_text.splitlines()
             # 空行を除いた各行のインデントを調べる
-            indents = [len(l) - len(l.lstrip()) for l in lines if l.strip()]
+            indents = [len(line) - len(line.lstrip()) for line in lines if line.strip()]
             if not indents:
                 return block_text.strip()
             min_indent = min(indents)
             return "\n".join(
-                [l[min_indent:] if l.strip() else "" for l in lines]
+                [line[min_indent:] if line.strip() else "" for line in lines]
             ).rstrip()
 
         # 1. Multi-line search (find: | または find: > に続くテキスト)
@@ -1032,7 +1127,7 @@ class FileOps:
         return _re.sub(r"^\s*\d+(?::[0-9a-fA-F]+)?\|\s*", "", line)
 
     async def list_files(
-        self, path: str = ".", glob: Optional[str] = None, depth: int = 2
+        self, path: str = ".", glob: str | None = None, depth: int = 2
     ) -> str:
         """
         List files and directories under a path.
@@ -1107,7 +1202,7 @@ class FileOps:
             raise IsADirectoryError(f"Path is a directory: {path}")
 
         # Read current content
-        with open(full_path, "r", encoding="utf-8") as f:
+        with open(full_path, encoding="utf-8") as f:
             content = f.read()
 
         # Count occurrences
@@ -1166,7 +1261,7 @@ class FileOps:
         if start < 1 or end < start:
             return f"Error: Invalid range {start}-{end}"
 
-        with open(full_path, "r", encoding="utf-8") as f:
+        with open(full_path, encoding="utf-8") as f:
             lines = f.readlines()
 
         if start > len(lines):
@@ -1187,12 +1282,6 @@ class FileOps:
             preview_lines.append(f"{prefix} {i:4d}| {line_content}")
 
         pre_edit_preview = "\n".join(preview_lines)
-        warning_header = (
-            "編集後のプレビュー (Post-edit Preview) ---\n"
-            "⚠️ 注意: 行頭の ' N| ' (行番号) および '>>>' (変更箇所) は、ツールの表示用装飾です。\n"
-            "実際のファイルには含まれません。次順の edit_lines や write_file では、\n"
-            "これらの装飾を除去した【生データのみ】をコンテンツブロックに記述してください。\n"
-        )
 
         if dry_run:
             # Dry run: show what would change without modifying file
@@ -1238,7 +1327,7 @@ class FileOps:
 
     async def find_files(
         self, pattern: str = "*", recursive: bool = True, path: str = "."
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Find files matching a pattern.
         Supports wildcards like *.py, test_*.md, etc.
@@ -1264,38 +1353,48 @@ class FileOps:
         from fnmatch import fnmatch
 
         # 検索開始ディレクトリを決定
-        start_dir = (self.workspace_root / path).resolve()
+        start_dir = self.resolve_path(path)
         if not start_dir.is_dir():
             # pathがファイルの場合、その親ディレクトリを検索対象にする
             start_dir = start_dir.parent
 
-        results = []
+        results: list[str] = []
+        visited_directories: set[Path] = set()
 
-        def search_dir(directory: Path, depth: int = 0):
-            if depth > 10:  # Prevent infinite recursion
+        def search_dir(directory: Path, depth: int = 0) -> None:
+            """Collect matches recursively within the depth limit.
+
+            Args:
+                directory: Directory to inspect.
+                depth: Current recursion depth.
+
+            Returns:
+                None.
+            """
+            if depth > 10:
                 return
+            resolved_directory = directory.resolve()
+            if (
+                not self.is_within_workspace(resolved_directory)
+                or resolved_directory in visited_directories
+            ):
+                return
+            visited_directories.add(resolved_directory)
 
             try:
                 for item in directory.iterdir():
-                    # Skip hidden files/dirs and known noise directories
                     if item.name.startswith(".") or _is_noise_dir_name(item.name):
                         continue
-
-                    # Check if it's within workspace
-                    try:
-                        rel_path = item.relative_to(self.workspace_root)
-                    except ValueError:
-                        continue  # Outside workspace
-
-                    # Match files
-                    if item.is_file() and fnmatch(item.name, pattern):
+                    resolved_item = item.resolve()
+                    if not self.is_within_workspace(resolved_item):
+                        continue
+                    rel_path = resolved_item.relative_to(self.workspace_root)
+                    if resolved_item.is_file() and fnmatch(item.name, pattern):
                         results.append(str(rel_path))
-
-                    # Recurse into directories
-                    if item.is_dir() and recursive:
-                        search_dir(item, depth + 1)
+                    if resolved_item.is_dir() and recursive:
+                        search_dir(resolved_item, depth + 1)
             except PermissionError:
-                pass  # Skip directories we can't access
+                return
 
         search_dir(start_dir)
         return sorted(results)
@@ -1352,39 +1451,55 @@ class FileOps:
             )
 
         # Search directory
-        start_dir = (self.workspace_root / path).resolve()
+        start_dir = self.resolve_path(path)
         if not start_dir.exists():
             return ToolResult.error("grep_files", path, f"Path not found: {path}")
 
         # Collect files
         if start_dir.is_file():
-            files_to_search: List[Path] = [start_dir]
+            files_to_search: list[Path] = [start_dir]
         else:
             files_to_search = []
+            visited_directories: set[Path] = set()
 
             def collect_files(directory: Path, depth: int = 0) -> None:
+                """Collect matching files without leaving the workspace.
+
+                Args:
+                    directory: Directory to inspect.
+                    depth: Current recursion depth.
+
+                Returns:
+                    None.
+                """
                 if depth > 15:
                     return
+                resolved_directory = directory.resolve()
+                if (
+                    not self.is_within_workspace(resolved_directory)
+                    or resolved_directory in visited_directories
+                ):
+                    return
+                visited_directories.add(resolved_directory)
                 try:
                     for item in sorted(directory.iterdir(), key=lambda x: x.name):
                         if item.name.startswith(".") or _is_noise_dir_name(item.name):
                             continue
-                        if item.is_file() and fnmatch(item.name, include):
-                            try:
-                                item.relative_to(self.workspace_root)
-                                files_to_search.append(item)
-                            except ValueError:
-                                pass
-                        elif item.is_dir() and recursive:
-                            collect_files(item, depth + 1)
+                        resolved_item = item.resolve()
+                        if not self.is_within_workspace(resolved_item):
+                            continue
+                        if resolved_item.is_file() and fnmatch(item.name, include):
+                            files_to_search.append(resolved_item)
+                        elif resolved_item.is_dir() and recursive:
+                            collect_files(resolved_item, depth + 1)
                 except PermissionError:
-                    pass
+                    return
 
             collect_files(start_dir)
 
         # Search each file and collect matches with symbol headers
         # Group by file: {rel_path: [(line_num, line_content, symbol_header), ...]}
-        file_matches: Dict[str, List[Tuple[int, str, str | None]]] = {}
+        file_matches: dict[str, list[tuple[int, str, str | None]]] = {}
         total_matches = 0
         truncated = False
 
@@ -1395,11 +1510,11 @@ class FileOps:
             try:
                 rel_path = str(file_path.relative_to(self.workspace_root))
                 # Extract symbol headers for Python files
-                symbol_headers: Dict[int, str] = {}
+                symbol_headers: dict[int, str] = {}
                 if file_path.suffix == ".py":
                     symbol_headers = _extract_symbol_headers(file_path)
 
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                with open(file_path, encoding="utf-8", errors="ignore") as f:
                     for line_num, line in enumerate(f, 1):
                         if regex.search(line):
                             sym = _find_symbol_for_line(symbol_headers, line_num)
@@ -1418,7 +1533,7 @@ class FileOps:
             return f"No matches found for pattern '{pattern}' in '{path}' (include='{include}'{cs_note})"
 
         # Build grouped output
-        parts: List[str] = []
+        parts: list[str] = []
         for fpath, matches in sorted(file_matches.items()):
             parts.append(f"--- {fpath} ({len(matches)} match(es)) ---")
             current_sym: str | None = None
@@ -1476,7 +1591,6 @@ class FileOps:
         Returns:
             成功時メッセージまたはエラーメッセージ
         """
-        import re as _re
 
         full_path = self._get_full_path(path)
         if not full_path.exists():
@@ -1493,11 +1607,11 @@ class FileOps:
                     "delete_lines",
                     path,
                     (
-                        f"Reason: marker_parse_failed\n"
-                        f"Message: Found a SEARCH marker but could not extract a valid "
-                        f"SEARCH/REPLACE deletion pair (missing '=======' separator?).\n"
-                        f"Fix: Use an empty REPLACE section:\n"
-                        f"<<<<<<< SEARCH\n(code to delete)\n=======\n>>>>>>> REPLACE"
+                        "Reason: marker_parse_failed\n"
+                        "Message: Found a SEARCH marker but could not extract a valid "
+                        "SEARCH/REPLACE deletion pair (missing '=======' separator?).\n"
+                        "Fix: Use an empty REPLACE section:\n"
+                        "<<<<<<< SEARCH\n(code to delete)\n=======\n>>>>>>> REPLACE"
                     ),
                 )
 
@@ -1506,10 +1620,10 @@ class FileOps:
                     "delete_lines",
                     path,
                     (
-                        f"Reason: multiple_delete_markers_not_supported\n"
-                        f"Message: delete_lines accepts one SEARCH/REPLACE block per action.\n"
-                        f"Fix: Use one delete_lines action per deleted region, or use edit_file "
-                        f"for coordinated multi-region changes."
+                        "Reason: multiple_delete_markers_not_supported\n"
+                        "Message: delete_lines accepts one SEARCH/REPLACE block per action.\n"
+                        "Fix: Use one delete_lines action per deleted region, or use edit_file "
+                        "for coordinated multi-region changes."
                     ),
                 )
 
@@ -1519,10 +1633,10 @@ class FileOps:
                     "delete_lines",
                     path,
                     (
-                        f"Reason: delete_lines_replace_not_empty\n"
-                        f"Message: delete_lines only deletes the SEARCH block; the REPLACE "
-                        f"section must be empty.\n"
-                        f"Fix: Use edit_file when you want to replace text instead of deleting it."
+                        "Reason: delete_lines_replace_not_empty\n"
+                        "Message: delete_lines only deletes the SEARCH block; the REPLACE "
+                        "section must be empty.\n"
+                        "Fix: Use edit_file when you want to replace text instead of deleting it."
                     ),
                 )
 
@@ -1543,8 +1657,8 @@ class FileOps:
                 "delete_lines",
                 path,
                 (
-                    f"Reason: No 'find' snippet specified for deletion.\n"
-                    f"Fix: Use 'find:' key in content block."
+                    "Reason: No 'find' snippet specified for deletion.\n"
+                    "Fix: Use 'find:' key in content block."
                 ),
             )
 
@@ -1554,14 +1668,16 @@ class FileOps:
         except UnicodeDecodeError:
             raw_content = full_path.read_text(encoding="latin-1")
 
-        file_lines = [l.rstrip("\n") for l in raw_content.split("\n")]
+        file_lines = [line.rstrip("\n") for line in raw_content.split("\n")]
 
         # マッチング
         match = self._find_context_match(file_lines, f_text, occ)
         if match is None:
             first_line = f_text.splitlines()[0] if f_text.strip() else ""
             candidates = self._find_similar_lines(file_lines, first_line)
-            cand_str = "\n".join([f'  - line {l}: "{c}"' for l, c in candidates])
+            cand_str = "\n".join(
+                [f'  - line {line}: "{candidate}"' for line, candidate in candidates]
+            )
             return ToolResult.error(
                 "delete_lines",
                 path,

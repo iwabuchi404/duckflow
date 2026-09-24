@@ -7,32 +7,30 @@
 """
 
 from companion.prompts.templates import (
-    SYSTEM_PROMPT_TEMPLATE,
-    INVESTIGATION_MODE_INSTRUCTIONS,
-    PLANNING_MODE_INSTRUCTIONS,
-    TASK_MODE_INSTRUCTIONS,
     MODE_MAP,
+    SYSTEM_PROMPT_TEMPLATE,
 )
-from companion.prompts.few_shot import FEW_SHOT_EXAMPLES
-from companion.utils.response_format import SYMOPS_SYSTEM_PROMPT
 
 # 後方互換: ActionList のインポートも維持
 from companion.state.agent_state import ActionList  # noqa: F401
+from companion.utils.response_format import SYMOPS_SYSTEM_PROMPT
 
 
-def get_system_prompt(tool_descriptions: str, state_context: str, mode: str = "planning") -> str:
+def get_system_prompt(
+    tool_descriptions: str, state_context: str, mode: str = "planning"
+) -> str:
     """
-    システムプロンプトを組み立てる（後方互換ラッパー）。
+        システムプロンプトを組み立てる（後方互換ラッパー）。
 
-    Args:
-        tool_descriptions: ツール一覧の説明文
-        state_context: AgentState.to_prompt_context() の出力
-mode: "planning" | "investigation" | "task"
+        Args:
+            tool_descriptions: ツール一覧の説明文
+            state_context: AgentState.to_prompt_context() の出力
+    mode: "planning" | "investigation" | "task"
 
-    Returns:
-        完全なシステムプロンプト文字列
+        Returns:
+            完全なシステムプロンプト文字列
     """
-    mode_instructions = MODE_MAP.get(mode, '')
+    mode_instructions = MODE_MAP.get(mode, "")
 
     base_prompt = SYSTEM_PROMPT_TEMPLATE.format(
         tool_descriptions=tool_descriptions,
@@ -40,4 +38,4 @@ mode: "planning" | "investigation" | "task"
         mode_specific_instructions=mode_instructions,
     )
 
-    return base_prompt + '\n\n' + SYMOPS_SYSTEM_PROMPT
+    return base_prompt + "\n\n" + SYMOPS_SYSTEM_PROMPT

@@ -1,9 +1,11 @@
-from companion.state.agent_state import AgentState, AgentPhase
+from companion.state.agent_state import AgentPhase, AgentState
+
 
 class ApprovalTool:
     """
     Manages user approval and 'Duck Call' (consultation).
     """
+
     def __init__(self, state: AgentState):
         self.state = state
 
@@ -21,7 +23,7 @@ class ApprovalTool:
         """
         print(f"\n📞 DUCK CALL: {message}")
         print("   (The agent is pausing for your input...)\n")
-        
+
         # Set phase to AWAITING_USER so the loop prompts for input next
         self.state.phase = AgentPhase.AWAITING_USER
 
@@ -32,4 +34,3 @@ class ApprovalTool:
         if message and message.strip():
             return f"Paused for user input. Question was: {message.strip()}"
         return "Paused for user input."
-

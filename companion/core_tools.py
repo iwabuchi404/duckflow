@@ -5,13 +5,13 @@ Tool registration and mode-scoped tool description helpers for DuckAgent.
 import inspect
 import types
 import typing
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from companion.tools.file_ops import file_ops
 from companion.tools.memory_tool import MemoryTool
-from companion.tools.symbols import find_symbol, replace_function
 from companion.tools.retrieve_result_tool import make_retrieve_result_tool
-
+from companion.tools.symbols import find_symbol, replace_function
 
 # モデル接触面の再設計（docs/agent_surface_redesign_design.md §4）に基づく
 # ツール面。25個から14〜15個へ縮小し、選択の曖昧さを減らす。
@@ -166,7 +166,9 @@ def _format_type_name(annotation: Any) -> str:
         return "|".join(_format_type_name(a) for a in args)
 
     if hasattr(annotation, "__name__"):
-        return annotation.__name__
+        name = getattr(annotation, "__name__", None)
+        if isinstance(name, str):
+            return name
     return str(annotation).replace("typing.", "")
 
 
@@ -229,8 +231,14 @@ def get_tool_descriptions(
             # Params that are passed inside the <<<>>> content block,
             # not as inline key=value arguments
             _CONTENT_BLOCK_PARAMS = {
-                "content", "body", "code", "plan_data", "goal",
-                "find", "replace", "occurrence",  # edit_file: SEARCH/REPLACE in block
+                "content",
+                "body",
+                "code",
+                "plan_data",
+                "goal",
+                "find",
+                "replace",
+                "occurrence",  # edit_file: SEARCH/REPLACE in block
             }
 
             for p_name, p in sig.parameters.items():

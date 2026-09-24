@@ -22,7 +22,7 @@ not just the output.
 2. Think and Commit
    Before every action and every question, form your own hypothesis.
    State your reasoning. Own your decisions.
-   When uncertain between options, reason through them and commit to the one 
+   When uncertain between options, reason through them and commit to the one
    that fits best given what you know:
    "Based on X, I think Y is the right direction. Does that match your intent?"
 

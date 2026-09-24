@@ -1,64 +1,83 @@
-from enum import Enum
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
+
 
 class ToolStatus(Enum):
     OK = "ok"
     ERROR = "error"
     TRUNCATED = "truncated"
 
+
 @dataclass
 class ToolResult:
     status: ToolStatus
     tool_name: str
     target: str
-    content: Any # str, dict, list 等
-    
+    content: Any  # str, dict, list 等
+
     @classmethod
     def ok(cls, tool_name: str, target: str, content: Any) -> "ToolResult":
         """Create a successful ToolResult."""
-        return cls(status=ToolStatus.OK, tool_name=tool_name, target=target, content=content)
-    
+        return cls(
+            status=ToolStatus.OK, tool_name=tool_name, target=target, content=content
+        )
+
     @classmethod
     def error(cls, tool_name: str, target: str, content: Any) -> "ToolResult":
         """Create an error ToolResult."""
-        return cls(status=ToolStatus.ERROR, tool_name=tool_name, target=target, content=content)
-    
+        return cls(
+            status=ToolStatus.ERROR, tool_name=tool_name, target=target, content=content
+        )
+
     @classmethod
     def truncated(cls, tool_name: str, target: str, content: Any) -> "ToolResult":
         """Create a truncated ToolResult (e.g., file too large)."""
-        return cls(status=ToolStatus.TRUNCATED, tool_name=tool_name, target=target, content=content)
+        return cls(
+            status=ToolStatus.TRUNCATED,
+            tool_name=tool_name,
+            target=target,
+            content=content,
+        )
 
-def serialize_to_text(data, indent_level=0) -> str:
-    """
-    任意のデータ(dict, list, str)を効率的なテキスト形式に変換する汎用コンバーター。
+
+def serialize_to_text(data: object, indent_level: int = 0) -> str:
+    """Convert arbitrary data to an efficient text representation.
+
+    Args:
+        data: Value to serialize.
+        indent_level: Current indentation level.
+
+    Returns:
+        Indented text representation of the supplied value.
     """
     indent = "  " * indent_level
-    lines = []
+    lines: list[str] = []
 
     if isinstance(data, dict):
         for key, value in data.items():
-            if isinstance(value, (dict, list)) and value:
+            if isinstance(value, dict | list) and value:
                 # ネストがある場合は次の行へ
                 lines.append(f"{indent}{key}:")
                 lines.append(serialize_to_text(value, indent_level + 1))
             else:
                 # 値が単純な場合は同一行に
                 lines.append(f"{indent}{key}: {value}")
-    
+
     elif isinstance(data, list):
         for item in data:
-            if isinstance(item, (dict, list)) and item:
+            if isinstance(item, dict | list) and item:
                 lines.append(f"{indent}-")
                 lines.append(serialize_to_text(item, indent_level + 1))
             else:
                 lines.append(f"{indent}- {item}")
-    
+
     else:
         # 文字列や数値など
         lines.append(f"{indent}{data}")
 
     return "\n".join(lines)
+
 
 # ツール結果メッセージのエンベロープマーカー。
 # ツール実行結果は会話履歴に role="user" で注入されるため、本物のユーザー発言と

@@ -4,8 +4,8 @@ Pre-dispatch action list normalization helpers for DuckAgent.
 
 import difflib
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
-from typing import Collection
 
 from companion.state.agent_state import Action, ActionList, SyntaxErrorInfo
 

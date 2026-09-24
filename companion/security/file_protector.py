@@ -6,12 +6,12 @@ Rules:
 - Allow create/write/delete only inside configured work_dir
 - Reject dangerous extensions for write/delete
 """
+
 from pathlib import Path
-from typing import List
 
 
 class FileProtector:
-    def __init__(self, work_dir: str, safe_extensions: List[str]):
+    def __init__(self, work_dir: str, safe_extensions: list[str]):
         self.work_dir = str(Path(work_dir).resolve())
         self.safe_extensions = safe_extensions
         self._dangerous_ext = [".exe", ".bat", ".sh", ".ps1"]
@@ -38,10 +38,10 @@ class FileProtector:
         if op in ["write", "create", "delete", "move", "copy", "mkdir"]:
             if not self.is_inside_workdir(file_path):
                 return False
-            if op in ["write", "create", "delete"] and not self.is_safe_extension(file_path):
+            if op in ["write", "create", "delete"] and not self.is_safe_extension(
+                file_path
+            ):
                 return False
             return True
         # read/list are always allowed in Phase 1
         return True
-
-

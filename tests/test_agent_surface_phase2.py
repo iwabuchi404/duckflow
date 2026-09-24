@@ -9,6 +9,7 @@ from companion.core import DuckAgent
 from companion.core_tools import MODE_TOOL_MAPPING, UNIVERSAL_TOOLS
 from companion.state.agent_state import AgentState, TaskStatus
 from companion.tools.file_ops import FileOps
+from companion.tools.file_ops import file_ops as shared_file_ops
 from companion.tools.plan_tool import PlanTool
 from companion.tools.symbols import find_symbol
 
@@ -92,19 +93,30 @@ class Beta:
     return tmp_path
 
 
+@pytest.fixture
+def active_symbol_workspace(symbol_workspace):
+    """Configure the shared workspace used by symbol tools."""
+    previous_root = shared_file_ops.workspace_root
+    shared_file_ops.set_workspace_root(str(symbol_workspace))
+    yield
+    shared_file_ops.set_workspace_root(str(previous_root))
+
+
 @pytest.mark.asyncio
-async def test_find_symbol_by_name_delegates_to_find_definition(symbol_workspace):
+async def test_find_symbol_by_name_delegates_to_find_definition(
+    active_symbol_workspace,
+):
     """find_symbol(name=...) should behave like find_definition."""
-    result = await find_symbol(name="alpha", scope="pkg", workspace_root=str(symbol_workspace))
+    result = await find_symbol(name="alpha", scope="pkg")
 
     assert "alpha" in result
     assert "pkg" in result.replace("\\", "/")
 
 
 @pytest.mark.asyncio
-async def test_find_symbol_by_path_delegates_to_list_symbols(symbol_workspace):
+async def test_find_symbol_by_path_delegates_to_list_symbols(active_symbol_workspace):
     """find_symbol(path=...) should behave like list_symbols."""
-    result = await find_symbol(path="pkg/mod.py", workspace_root=str(symbol_workspace))
+    result = await find_symbol(path="pkg/mod.py")
 
     assert "alpha" in result
     assert "Beta" in result
@@ -112,9 +124,9 @@ async def test_find_symbol_by_path_delegates_to_list_symbols(symbol_workspace):
 
 
 @pytest.mark.asyncio
-async def test_find_symbol_requires_name_or_path(symbol_workspace):
+async def test_find_symbol_requires_name_or_path(active_symbol_workspace):
     """find_symbol with neither name nor path should return a clear error."""
-    result = await find_symbol(workspace_root=str(symbol_workspace))
+    result = await find_symbol()
 
     from companion.tools.results import ToolResult
 
@@ -271,7 +283,9 @@ def test_tool_descriptions_show_required_and_optional_param_types():
     agent = DuckAgent(llm_client=DummyLLM())
     desc = agent.get_tool_descriptions("task")
 
-    grep_line = next(line for line in desc.splitlines() if line.startswith("- ::grep_files"))
+    grep_line = next(
+        line for line in desc.splitlines() if line.startswith("- ::grep_files")
+    )
     assert "pattern:str" in grep_line  # required, no default shown
     assert '[include:str="*"]' in grep_line  # optional, default shown
 

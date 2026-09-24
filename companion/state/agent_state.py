@@ -1,8 +1,12 @@
-from typing import List, Optional, Dict, Any, Literal, Union
-from pydantic import BaseModel, Field, field_validator
-from datetime import datetime
 import uuid
+from datetime import datetime
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Literal, Optional
+
+from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from companion.modules.memory import MemoryManager
 
 # --- Enums ---
 
@@ -68,7 +72,7 @@ class InvestigationState(BaseModel):
         description=f"仮説試行回数 ({MAX_HYPOTHESIS_ATTEMPTS}回失敗でduck_call強制)",
     )
     ooda_cycle: int = Field(0, description="OODAサイクル数")
-    observations: List[str] = Field(default_factory=list, description="観察結果ログ")
+    observations: list[str] = Field(default_factory=list, description="観察結果ログ")
 
 
 # --- Pacemaker Intervention ---
@@ -98,8 +102,8 @@ class Task(BaseModel):
     description: str = ""
     status: TaskStatus = TaskStatus.PENDING
     result: str = ""
-    command: Optional[str] = None  # 実行するコマンドがあれば
-    file_path: Optional[str] = None  # 編集するファイルがあれば
+    command: str | None = None  # 実行するコマンドがあれば
+    file_path: str | None = None  # 編集するファイルがあれば
     action: Optional["Action"] = None  # 実行するツールアクション (Explicit)
 
 
@@ -110,7 +114,7 @@ class Step(BaseModel):
     title: str
     description: str = ""
     status: TaskStatus = TaskStatus.PENDING
-    tasks: List[Task] = Field(default_factory=list)
+    tasks: list[Task] = Field(default_factory=list)
 
     def add_task(self, title: str, description: str = "") -> Task:
         task = Task(title=title, description=description)
@@ -122,7 +126,7 @@ class Plan(BaseModel):
     """長期計画"""
 
     goal: str
-    steps: List[Step] = Field(default_factory=list)
+    steps: list[Step] = Field(default_factory=list)
     current_step_index: int = 0
     is_complete: bool = False
 
@@ -131,7 +135,7 @@ class Plan(BaseModel):
         self.steps.append(step)
         return step
 
-    def get_current_step(self) -> Optional[Step]:
+    def get_current_step(self) -> Step | None:
         if 0 <= self.current_step_index < len(self.steps):
             return self.steps[self.current_step_index]
         return None
@@ -144,7 +148,7 @@ class Action(BaseModel):
     """LLMが生成する単一の行動"""
 
     name: str = Field(..., description="実行するツール/アクションの名前")
-    parameters: Dict[str, Any] = Field(
+    parameters: dict[str, Any] = Field(
         default_factory=dict, description="アクションの引数"
     )
     thought: str = Field(default="", description="このアクションを選んだ理由")
@@ -153,12 +157,12 @@ class Action(BaseModel):
         description="パーサー/修復フォールバックが生成した場合はTrue。モデルの明示的意思ではないため、"
         "自律ループを単独で終了させてはならない。",
     )
-    tool_call_id: Optional[str] = Field(
+    tool_call_id: str | None = Field(
         default=None,
         description="nativeプロトコルのtool_call ID。ID基準の履歴再構築と"
         "実行イベント対応に使う。Sym-Ops経路ではNone。",
     )
-    native_turn: Optional[str] = Field(
+    native_turn: str | None = Field(
         default=None,
         description="nativeプロトコルでこのアクションを生成したターンの識別子"
         "（{epoch}:{turn}）。履歴サマリと verbatim assistant メッセージの"
@@ -169,12 +173,12 @@ class Action(BaseModel):
 class ActionList(BaseModel):
     """Internal action container produced from parsed main-agent Sym-Ops output."""
 
-    actions: List[Action]
+    actions: list[Action]
     reasoning: str = Field(..., description="全体的な思考プロセス")
-    vitals: Optional[Dict[str, float]] = Field(
+    vitals: dict[str, float] | None = Field(
         default=None, description="アヒルのバイタル情報"
     )
-    parse_error_type: Optional[str] = Field(
+    parse_error_type: str | None = Field(
         default=None,
         description=(
             "Sym-Ops のパースが完全失敗、または空応答だった場合のエラー種別"
@@ -182,7 +186,7 @@ class ActionList(BaseModel):
             "に渡すため。正常パース時は None"
         ),
     )
-    parse_error_detail: Optional[str] = Field(
+    parse_error_detail: str | None = Field(
         default=None, description="parse_error_type が設定された場合の詳細メッセージ"
     )
 
@@ -194,25 +198,32 @@ class AgentState(BaseModel):
     """エージェントの全状態を保持するSingle Source of Truth"""
 
     phase: AgentPhase = AgentPhase.IDLE
-    vitals: Vitals = Field(default_factory=Vitals)
+    vitals: Vitals = Field(
+        default_factory=lambda: Vitals(
+            confidence=1.0,
+            safety=1.0,
+            memory=1.0,
+            focus=1.0,
+        )
+    )
 
     # Sym-Ops v3.1 モード管理
     current_mode: AgentMode = AgentMode.PLANNING
-    investigation_state: Optional[InvestigationState] = None
+    investigation_state: InvestigationState | None = None
 
     # Context
-    conversation_history: List[Dict[str, str]] = Field(default_factory=list)
-    current_plan: Optional[Plan] = None
+    conversation_history: list[dict[str, str]] = Field(default_factory=list)
+    current_plan: Plan | None = None
 
     # Working Memory
     working_directory: str = "."
-    known_files: List[str] = Field(default_factory=list)
+    known_files: list[str] = Field(default_factory=list)
 
     # Last Action Result
-    last_action_result: Optional[str] = None
+    last_action_result: str | None = None
 
     # 直前ターンの構文エラー（次ターンのプロンプトに注入後クリアされる）
-    last_syntax_errors: List[SyntaxErrorInfo] = Field(default_factory=list)
+    last_syntax_errors: list[SyntaxErrorInfo] = Field(default_factory=list)
 
     # Proactive Continuation
     proactive_continuation_enabled: bool = Field(
@@ -237,12 +248,12 @@ class AgentState(BaseModel):
     )
     turn_count: int = Field(default=0, description="ターン数（ユーザー入力回数）")
 
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content: str) -> None:
         self.conversation_history.append({"role": role, "content": content})
 
     async def add_message_with_pruning(
-        self, role: str, content: str, memory_manager: Any = None
-    ):
+        self, role: str, content: str, memory_manager: "MemoryManager | None" = None
+    ) -> None:
         """
         メッセージを追加し、必要なら履歴を整理
 
@@ -299,9 +310,7 @@ class AgentState(BaseModel):
                     f"Current Step: {current_step.title} ({current_step.status.value})"
                 )
                 if current_step.tasks:
-                    pending_tasks = [
-                        t for t in current_step.tasks if t.status == TaskStatus.PENDING
-                    ]
+                    [t for t in current_step.tasks if t.status == TaskStatus.PENDING]
                     completed_tasks = [
                         t
                         for t in current_step.tasks
@@ -328,17 +337,22 @@ class AgentState(BaseModel):
         """
         return self.current_mode.value
 
-    def enter_investigation_mode(self):
+    def enter_investigation_mode(self) -> None:
         """Investigationモードへ遷移し、調査状態を初期化する"""
         self.current_mode = AgentMode.INVESTIGATION
-        self.investigation_state = InvestigationState()
+        self.investigation_state = InvestigationState(
+            hypothesis="",
+            hypothesis_attempts=0,
+            ooda_cycle=0,
+            observations=[],
+        )
 
-    def enter_planning_mode(self):
+    def enter_planning_mode(self) -> None:
         """Planningモードへ遷移し、調査状態をクリアする"""
         self.current_mode = AgentMode.PLANNING
         self.investigation_state = None
 
-    def enter_task_mode(self):
+    def enter_task_mode(self) -> None:
         """Taskモードへ遷移する"""
         self.current_mode = AgentMode.TASK
 
@@ -350,17 +364,18 @@ class AgentState(BaseModel):
         self.last_active = datetime.now()
         self.turn_count += 1
 
-    def to_session_dict(self) -> dict:
+    def to_session_dict(self) -> dict[str, Any]:
         """
         セッションファイルへの保存用にJSONシリアライズする。
 
         Returns:
             全フィールドをJSON互換型に変換した辞書
         """
-        return self.model_dump(mode="json")
+        session_data: dict[str, Any] = self.model_dump(mode="json")
+        return session_data
 
     @classmethod
-    def from_session_dict(cls, data: dict) -> "AgentState":
+    def from_session_dict(cls, data: dict[str, Any]) -> "AgentState":
         """
         セッションファイルから AgentState を復元する。
 
@@ -370,4 +385,5 @@ class AgentState(BaseModel):
         Returns:
             復元された AgentState インスタンス
         """
-        return cls.model_validate(data)
+        restored_state: AgentState = cls.model_validate(data)
+        return restored_state

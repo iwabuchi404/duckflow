@@ -798,3 +798,16 @@
 - **特異度が低下（回帰）**: GLM の対照課題で ASK が3回発火（v1/v2 では0回）—「sales.csv の列名は？」という**ファイルを読めば自分で分かる質問**。構造化プロンプトの「未指定要素を列挙せよ」が、エージェントが探索で発見可能な未知を「未解決の選択」と混同させた。r1 は質問で停止して失敗。
 - **結論**: SameModel binary judge の How 層はプロンプト強化でも限界 — 感度を上げると特異度が落ちる。次段は CrossModel judge（上限参照値）か OpenJev logit。
 - 副次観測: GLM frontier r3 で list_files/read_file に幻覚した content をパラメータとして混入（executor が drop して実行）— ツール呼び出し内の幻覚パターンとして記録。
+
+### 2026-09-24: プロジェクト全体レビュー
+- 調査対象: HEAD `8909e01`（作業ツリー clean、`main` は `origin/main` より6 commit ahead）。AI Cortex の context/spec/roadmap/decisions と実コードを照合。
+- 検証結果: 既存venvで `873 passed / 2 skipped`、`ruff` は2,029件、`black --check` は66ファイル、`mypy --explicit-package-bases` は429件（60ファイル）。隔離環境で `uv sync --frozen --extra dev` 後は `import main` が `openai` 欠落で失敗。
+- 優先課題: (1) `replace_function` / symbol系 / grep系で中央workspace guardと承認 policy を迂回、(2) mode mappingがprompt表示のみで、hidden mutatorの実行時強制を欠く、(3) Decision EngineのASK後もcommit actionを実行する、(4) Sym-Ops空応答時の `temperature=None` とAPI errorのresponse化、(5) evalのfalse-pass・baseline比較条件・CI/clean install欠落。
+- 評価: 明示TDE・Sym-Ops→ActionList境界・実モデル評価のGauntlet/Holdout設計は有効だが、現状は「alpha段階の研究用プロトタイプ」。安全性・再現性・実行契約の一元化と clean install の green 化が必要。
+
+### 2026-09-24: 推奨修正 #4 → #2 → #3 実装
+- **#4 clean install / CI**: `openai>=1.0.0,<2.0` を実行時依存へ追加し、pytest・pytest-asyncio・Black・Ruff・Mypy・types-PyYAMLを標準dev dependency groupへ統合。`uv.lock`更新。Ruff/Blackの既存機械的修正とMypy strict型付けを実施。`.github/workflows/ci.yml`を追加し、Windows/Linux × Python 3.10/3.12 の frozen install・clean import・pytest、およびLinuxのRuff/Black/Mypyをgate化。
+- **#2 workspace boundary**: `FileOps.resolve_path()` と `is_within_workspace()` を単一resolverとして公開。`find_files` / `grep_files` / `find_symbol` / `list_symbols` / `replace_function` / repo mapを同一境界へ接続し、outside path・workspace外symlink・循環ディレクトリを追跡。symbol toolsのmodel-facing schemaから `workspace_root` 引数を除去。
+- **#3 Decision Engine enforcement**: task-startとpost-explorationの `ask_user` 判定で、proposed commit actionsを破棄し、forced `duck_call` で直接質問して `AWAITING_USER` へ遷移。native tool callはjournalへ `blocked / executed=false` として記録し、API履歴の孤立callを防止。
+- **回帰テスト**: outside read/write、grep/repo map symlink、model schemaのworkspace_root非公開、Decision Engineのcommit破棄・forced question・native blocked journalを追加。
+- **最終検証**: `879 passed / 4 skipped`、Ruff green、Black green（90 files）、Mypy green（81 source files）、clean import green。隔離環境で `uv sync --frozen --group dev` 後も同じ品質gateと全pytestがgreen。実モデルevalは未実行。

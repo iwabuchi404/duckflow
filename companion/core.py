@@ -1,81 +1,75 @@
-import asyncio
 import logging
-import json
-from typing import Dict, Any, Callable, List
+from collections.abc import Callable
+from typing import Any
 
-from companion.state.agent_state import (
-    AgentState,
-    ActionList,
-    Action,
-    AgentPhase,
-    TaskStatus,
-    AgentMode,
-    SyntaxErrorInfo,
-    MAX_HYPOTHESIS_ATTEMPTS,
+from companion.base.llm_client import LLMClient, default_client
+from companion.core_action_executor import execute_actions as _execute_actions
+from companion.core_loop_helpers import (
+    build_intervention_prompt,
+    check_and_prune_if_needed,
+    record_parse_error_if_any,
+    should_return_to_user,
+    turn_was_unproductive,
+    update_vitals_from_response,
 )
-from companion.base.llm_client import default_client, LLMClient
-from companion.prompts.builder import PromptBuilder
-from companion.tools.file_ops import file_ops
-from companion.tools.plan_tool import PlanTool
-from companion.tools.task_tool import TaskTool
-from companion.tools.approval import ApprovalTool
-from companion.execution.task_executor import TaskExecutor
-from companion.execution.result_summarizer import ResultSummarizer
-from companion.modules.pacemaker import DuckPacemaker
-from companion.modules.memory import MemoryManager
-from companion.modules.timeline import TimelineTracker
-from companion.modules.result_cache import ResultCache
-from companion.ui import ui
 from companion.core_tools import (
     MODE_TOOL_MAPPING,
     UNIVERSAL_TOOLS,
     get_tool_descriptions,
     register_default_tools,
 )
-from companion.core_action_pipeline import (
-    build_fail_fast_history_message,
-    build_fail_fast_warning,
-    build_investigation_edit_block,
-    limit_actions_per_turn,
-    filter_known_actions,
-    move_terminal_actions_to_end,
-    remaining_actions_after,
-    should_block_investigation_edit,
-    should_fail_fast,
-)
-from companion.core_action_results import (
-    build_action_summary,
-    build_action_exception_syntax_error,
-    build_denial_context,
-    build_tool_result_message,
-    get_approval_request,
-)
-from companion.core_action_invocation import invoke_tool
 from companion.decision import DecisionEngine, decision_engine_enabled
-from companion.decision.engine import build_clarification_note
-from companion.decision.models import ACTION_ASK_USER
+from companion.decision.engine import (
+    build_clarification_message,
+    build_clarification_note,
+)
+from companion.decision.models import ACTION_ASK_USER, DecisionResult
+from companion.execution.result_summarizer import ResultSummarizer
+from companion.execution.task_executor import TaskExecutor
+from companion.modules.command_handler import CommandHandler
+from companion.modules.memory import MemoryManager
+from companion.modules.pacemaker import DuckPacemaker
+from companion.modules.result_cache import ResultCache
+from companion.modules.session_manager import SessionManager
+from companion.modules.sub_llm_manager import SubLLMManager
+from companion.modules.timeline import TimelineTracker
+from companion.prompts.builder import PromptBuilder
+from companion.state.agent_state import (
+    Action,
+    ActionList,
+    AgentPhase,
+    AgentState,
+)
+from companion.tools.approval import ApprovalTool
+from companion.tools.file_ops import file_ops
+from companion.tools.plan_tool import PlanTool
+from companion.tools.results import is_tool_result_message
+from companion.tools.sub_llm_tools import SubLLMTools
+from companion.tools.task_tool import TaskTool
+from companion.ui import ui
 
 logger = logging.getLogger(__name__)
 
-from companion.modules.command_handler import CommandHandler
-from companion.modules.session_manager import SessionManager
-from companion.tools.shell_tool import ShellTool
-from companion.tools.results import (
-    ToolStatus,
-    serialize_to_text,
-    is_tool_result_message,
-)
-from companion.tools.sub_llm_tools import SubLLMTools
-from companion.modules.sub_llm_manager import SubLLMManager
-from companion.core_action_executor import execute_actions as _execute_actions
-from companion.core_loop_helpers import (
-    update_vitals_from_response,
-    build_intervention_prompt,
-    check_and_prune_if_needed,
-    record_parse_error_if_any,
-    should_return_to_user,
-    turn_was_unproductive,
-)
+
+def _coerce_action_list(response: dict[str, Any] | ActionList | str) -> ActionList:
+    """Narrow an LLM response to the internal action container.
+
+    Args:
+        response: Value returned by ``LLMClient.chat``.
+
+    Returns:
+        The parsed action list, or an explicit parse-error list when the
+        response violates the main-agent response contract.
+    """
+    if isinstance(response, ActionList):
+        return response
+    logger.error("Main-agent LLM response was not an ActionList")
+    return ActionList(
+        actions=[],
+        reasoning="The main-agent response did not contain a valid ActionList.",
+        parse_error_type="api_error",
+        parse_error_detail="LLMClient returned an unexpected response type.",
+    )
 
 
 class DuckAgent:
@@ -87,8 +81,8 @@ class DuckAgent:
     def __init__(
         self,
         llm_client: LLMClient = default_client,
-        session_manager: "SessionManager" = None,
-        resume_state: "AgentState" = None,
+        session_manager: SessionManager | None = None,
+        resume_state: AgentState | None = None,
     ):
         """
         Args:
@@ -96,10 +90,17 @@ class DuckAgent:
             session_manager: セッション保存を担当するマネージャー（Noneなら保存しない）
             resume_state: 前回セッションから復元した AgentState（Noneなら新規）
         """
-        self.state = resume_state if resume_state is not None else AgentState()
+        self.state = (
+            resume_state
+            if resume_state is not None
+            else AgentState(
+                proactive_continuation_enabled=False,
+                steps_since_last_checkin=0,
+            )
+        )
         self.session_manager = session_manager
         self.llm = llm_client
-        self.tools: Dict[str, Callable] = {}
+        self.tools: dict[str, Callable[..., Any]] = {}
         self.running = False
         self.command_handler = CommandHandler(self)
 
@@ -128,7 +129,7 @@ class DuckAgent:
 
         # Decision Engine (H-1 experiment) — lazily created on first use so
         # the SameModel provider shares the agent's LLM client.
-        self._decision_engine: "DecisionEngine | None" = None
+        self._decision_engine: DecisionEngine | None = None
 
         # Initialize CoreActions (extracted action handlers)
         from companion.core_actions import CoreActions
@@ -137,7 +138,7 @@ class DuckAgent:
 
         register_default_tools(self)
 
-    def register_tool(self, name: str, func: Callable):
+    def register_tool(self, name: str, func: Callable[..., Any]) -> None:
         """Register a tool function available to the agent."""
         self.tools[name] = func
 
@@ -173,7 +174,7 @@ class DuckAgent:
             self.task_tool.llm = self.llm
             self.result_summarizer.llm = self.llm
 
-            self.memory_manager.llm_client = self.llm
+            self.memory_manager.llm = self.llm
             try:
                 ctx_len = await self.llm.get_context_length()
                 self.memory_manager.configure_from_context_length(ctx_len)
@@ -202,7 +203,7 @@ class DuckAgent:
     UNIVERSAL_TOOLS = UNIVERSAL_TOOLS
     MODE_TOOL_MAPPING = MODE_TOOL_MAPPING
 
-    def get_tool_descriptions(self, mode: str = None) -> str:
+    def get_tool_descriptions(self, mode: str | None = None) -> str:
         """
         Generate tool descriptions in Sym-Ops syntax (::action @target param=val).
 
@@ -231,56 +232,103 @@ class DuckAgent:
         return self._decision_engine
 
     @property
-    def decision_log(self) -> List[Dict[str, Any]]:
+    def decision_log(self) -> list[dict[str, Any]]:
         """Decision Engine の判定ログ（評価記録用。無効時は空）。"""
         if self._decision_engine is None:
             return []
         return self._decision_engine.log
 
-    async def _run_decision_gate(self, user_input: str) -> None:
-        """Fire Pacemaker task-start decision points for a new user task.
-
-        Runs the needs_clarification check before the autonomous loop
-        starts. An ask_user result is injected as a system note so the
-        agent asks via duck_call instead of guessing; provider failures
-        fall back to continue and never block normal operation.
+    async def _pause_for_clarification(
+        self, result: DecisionResult, stage: str
+    ) -> None:
+        """Pause execution with a forced clarification question.
 
         Args:
-            user_input: The raw user task text.
+            result: Decision result whose action is ``ask_user``.
+            stage: Human-readable firing stage for diagnostics.
+
+        Returns:
+            None.
+        """
+        note = build_clarification_note(result)
+        self.state.conversation_history.append({"role": "system", "content": note})
+        ui.print_info(
+            f"Decision Engine: ask_user ({stage})"
+            + (f" — {result.focus}" if result.focus else "")
+        )
+        await self.execute_actions(
+            ActionList(
+                reasoning="Decision Engine requested clarification",
+                actions=[
+                    Action(
+                        name="duck_call",
+                        parameters={"message": build_clarification_message(result)},
+                        thought="Pause before committing ambiguous work",
+                    )
+                ],
+            )
+        )
+
+    def _discard_actions_for_clarification(
+        self, action_list: ActionList, result: DecisionResult
+    ) -> None:
+        """Discard a proposed commit list after an ask_user decision.
+
+        Args:
+            action_list: Proposed actions that must not execute.
+            result: Decision result explaining the pause.
+
+        Returns:
+            None.
+        """
+        recorder = getattr(self.llm, "record_native_event", None)
+        for action in action_list.actions:
+            call_id = getattr(action, "tool_call_id", None)
+            if call_id and callable(recorder):
+                recorder(
+                    call_id,
+                    action.name,
+                    "blocked",
+                    False,
+                    f"Decision Engine requested clarification: {result.focus or result.reason}",
+                )
+        action_list.actions = []
+
+    async def _run_decision_gate(self, user_input: str) -> bool:
+        """Run task-start clarification decisions before autonomous work.
+
+        Args:
+            user_input: Raw user task text.
+
+        Returns:
+            True when execution must pause for clarification.
         """
         engine = self._get_decision_engine()
         if engine is None:
-            return
+            return False
         for request_type in self.pacemaker.pending_decisions_for_task_start():
             result = await engine.check(request_type, task=user_input, state=self.state)
             if result.action == ACTION_ASK_USER:
-                note = build_clarification_note(result)
-                self.state.conversation_history.append(
-                    {"role": "system", "content": note}
-                )
-                ui.print_info(
-                    f"Decision Engine: ask_user"
-                    + (f" — {result.focus}" if result.focus else "")
-                )
+                await self._pause_for_clarification(result, "task-start")
+                return True
+        return False
 
     async def _run_decision_gate_for_actions(
         self, user_input: str, action_list: ActionList
-    ) -> None:
-        """Fire the post-exploration decision point for this turn's actions.
-
-        Runs once per task when the first committing action (plan creation
-        or workspace mutation) appears. At that point the Context Compiler
-        can include workspace files and read_file excerpts, so ambiguity
-        that only becomes visible in file contents can be judged.
+    ) -> bool:
+        """Run and enforce the post-exploration clarification decision.
 
         Args:
-            user_input: The current task text.
-            action_list: The ActionList about to be executed.
+            user_input: Current task text.
+            action_list: Proposed actions that may contain commit operations.
+
+        Returns:
+            True when the proposed actions were discarded and work must pause.
         """
         engine = self._get_decision_engine()
         if engine is None:
-            return
-        action_names = [a.name for a in action_list.actions]
+            return False
+        action_names = [action.name for action in action_list.actions]
         for request_type in self.pacemaker.pending_decisions_for_actions(action_names):
             result = await engine.check(
                 request_type,
@@ -289,16 +337,12 @@ class DuckAgent:
                 workspace_root=str(file_ops.workspace_root),
             )
             if result.action == ACTION_ASK_USER:
-                note = build_clarification_note(result)
-                self.state.conversation_history.append(
-                    {"role": "system", "content": note}
-                )
-                ui.print_info(
-                    f"Decision Engine: ask_user (post-exploration)"
-                    + (f" — {result.focus}" if result.focus else "")
-                )
+                self._discard_actions_for_clarification(action_list, result)
+                await self._pause_for_clarification(result, "post-exploration")
+                return True
+        return False
 
-    async def run(self):
+    async def run(self) -> None:
         """Main execution loop."""
         self.running = True
 
@@ -388,7 +432,14 @@ class DuckAgent:
                 self.llm.reset_native_log()
 
                 # --- Decision Engine entry gate (H-1 experiment) ---
-                await self._run_decision_gate(user_input)
+                if await self._run_decision_gate(user_input):
+                    self.pacemaker.reset()
+                    self.state.phase = AgentPhase.AWAITING_USER
+                    self.state.touch()
+                    if self.session_manager is not None:
+                        self.session_manager.save(self.state)
+                    ui.print_token_usage(self.llm.usage_stats)
+                    continue
 
                 ui.print_vitals(
                     self.state.vitals,
@@ -457,11 +508,12 @@ class DuckAgent:
                                     + [{"role": "user", "content": intervention_prompt}]
                                 )
                                 with ui.create_spinner("Analyzing intervention..."):
-                                    action_list = await self.llm.chat(
+                                    action_list_response = await self.llm.chat(
                                         messages,
                                         response_model=ActionList,
                                         native_tools=native_tools,
                                     )
+                                action_list = _coerce_action_list(action_list_response)
                                 record_parse_error_if_any(
                                     self.state, action_list, protocol=tool_protocol
                                 )
@@ -485,11 +537,12 @@ class DuckAgent:
                                 messages = (
                                     base_messages + self.state.conversation_history
                                 )
-                                action_list = await self.llm.chat(
+                                action_list_response = await self.llm.chat(
                                     messages,
                                     response_model=ActionList,
                                     native_tools=native_tools,
                                 )
+                            action_list = _coerce_action_list(action_list_response)
                             record_parse_error_if_any(
                                 self.state, action_list, protocol=tool_protocol
                             )
@@ -506,9 +559,11 @@ class DuckAgent:
                         self.state.phase = AgentPhase.EXECUTING
                         if action_list.actions:
                             # Decision Engine: post-exploration gate (H-1 v2)
-                            await self._run_decision_gate_for_actions(
+                            if await self._run_decision_gate_for_actions(
                                 user_input, action_list
-                            )
+                            ):
+                                self.pacemaker.reset()
+                                break
                             await self.execute_actions(action_list)
 
                             if should_return_to_user(action_list, self.state):
@@ -686,6 +741,6 @@ class DuckAgent:
                 logger.error("Error in main loop", exc_info=True)
                 ui.print_error(str(e))
 
-    async def execute_actions(self, action_list: ActionList):
+    async def execute_actions(self, action_list: ActionList) -> list[Any]:
         """Dispatch and execute a list of actions."""
         return await _execute_actions(self, action_list)

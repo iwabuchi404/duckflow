@@ -4,14 +4,13 @@ Timeline tracker for action execution observability (S3-11).
 Records per-action timing data for the /timeline command.
 """
 
-import time
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
 
 
 @dataclass
 class TimelineEntry:
     """A single action execution record."""
+
     action_name: str
     start_ts: float
     end_ts: float
@@ -22,6 +21,7 @@ class TimelineEntry:
     @property
     def timestamp_str(self) -> str:
         from datetime import datetime
+
         return datetime.fromtimestamp(self.start_ts).strftime("%H:%M:%S")
 
 
@@ -34,7 +34,7 @@ class TimelineTracker:
     """
 
     def __init__(self, max_entries: int = 50):
-        self._entries: List[TimelineEntry] = []
+        self._entries: list[TimelineEntry] = []
         self._max_entries = max_entries
 
     def record(
@@ -47,7 +47,11 @@ class TimelineTracker:
     ) -> TimelineEntry:
         """Record a completed action and return the entry."""
         duration_ms = (end_ts - start_ts) * 1000
-        summary = result_summary[:120] + "..." if len(result_summary) > 120 else result_summary
+        summary = (
+            result_summary[:120] + "..."
+            if len(result_summary) > 120
+            else result_summary
+        )
         entry = TimelineEntry(
             action_name=action_name,
             start_ts=start_ts,
@@ -58,11 +62,11 @@ class TimelineTracker:
         )
         self._entries.append(entry)
         if len(self._entries) > self._max_entries:
-            self._entries = self._entries[-self._max_entries:]
+            self._entries = self._entries[-self._max_entries :]
         return entry
 
     @property
-    def entries(self) -> List[TimelineEntry]:
+    def entries(self) -> list[TimelineEntry]:
         return list(self._entries)
 
     def clear(self) -> None:

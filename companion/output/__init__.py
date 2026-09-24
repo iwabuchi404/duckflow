@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Output Module - 構造化データの人間向け出力機能
 
@@ -7,14 +6,6 @@ Output Module - 構造化データの人間向け出力機能
 人間が理解しやすい形式に変換する機能を提供します。
 """
 
-from .human_formatter import (
-    HumanOutputFormatter,
-    FormatterRequest,
-    FormattedOutput
-)
+from .human_formatter import FormattedOutput, FormatterRequest, HumanOutputFormatter
 
-__all__ = [
-    'HumanOutputFormatter',
-    'FormatterRequest', 
-    'FormattedOutput'
-]
+__all__ = ["HumanOutputFormatter", "FormatterRequest", "FormattedOutput"]

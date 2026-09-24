@@ -17,7 +17,6 @@ Tools not listed here pass through unchanged (no compression).
 
 import logging
 import re
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 # 向け）はより多く切り詰める。tier を知るのは呼び出し側（result_pipeline.py
 # が TierProfile.history_compression を渡す）だけで、このモジュール自体は
 # tier を知らず、プロファイル名から辞書を引くだけ。
-_COMPRESSION_PROFILES: Dict[str, Dict[str, int]] = {
+_COMPRESSION_PROFILES: dict[str, dict[str, int]] = {
     "standard": {
         "grep_max_excerpts": 10,
         "project_tree_max_lines": 30,
@@ -70,7 +69,9 @@ def compress_for_history(
         Compressed string suitable for LLM history injection, or the
         original string if compression yields no benefit.
     """
-    profile = _COMPRESSION_PROFILES.get(strength, _COMPRESSION_PROFILES[_DEFAULT_PROFILE])
+    profile = _COMPRESSION_PROFILES.get(
+        strength, _COMPRESSION_PROFILES[_DEFAULT_PROFILE]
+    )
 
     compressors = {
         "grep_files": _compress_grep,
@@ -104,7 +105,8 @@ def compress_for_history(
 
 # --- grep_files ---
 
-def _compress_grep(result: str, profile: Dict[str, int]) -> str:
+
+def _compress_grep(result: str, profile: dict[str, int]) -> str:
     """Compress grep_files output to top N matches + summary.
 
     Keeps:
@@ -136,11 +138,12 @@ def _compress_grep(result: str, profile: Dict[str, int]) -> str:
 
     # Group by file
     file_counts: dict[str, int] = {}
-    for m in matches:
-        match match_pattern.match(m):
-            case m_obj:
-                filepath = m_obj.group(1)
-                file_counts[filepath] = file_counts.get(filepath, 0) + 1
+    for match_line in matches:
+        match_obj = match_pattern.match(match_line)
+        if match_obj is None:
+            continue
+        filepath = match_obj.group(1)
+        file_counts[filepath] = file_counts.get(filepath, 0) + 1
 
     # Build compressed output
     parts: list[str] = []
@@ -163,14 +166,17 @@ def _compress_grep(result: str, profile: Dict[str, int]) -> str:
         if s.strip():
             parts.append(s)
 
-    parts.append("\n[Hint: Re-run grep_files with a narrower pattern or path to see all matches.]")
+    parts.append(
+        "\n[Hint: Re-run grep_files with a narrower pattern or path to see all matches.]"
+    )
 
     return "\n".join(parts)
 
 
 # --- get_project_tree ---
 
-def _compress_project_tree(result: str, profile: Dict[str, int]) -> str:
+
+def _compress_project_tree(result: str, profile: dict[str, int]) -> str:
     """Compress project tree output to top-level + counts.
 
     Keeps:
@@ -208,7 +214,8 @@ def _compress_project_tree(result: str, profile: Dict[str, int]) -> str:
 
 # --- run_command (success only) ---
 
-def _compress_run_command(result: str, profile: Dict[str, int]) -> str:
+
+def _compress_run_command(result: str, profile: dict[str, int]) -> str:
     """Compress successful run_command output to head/tail.
 
     Keeps:
@@ -243,7 +250,8 @@ def _compress_run_command(result: str, profile: Dict[str, int]) -> str:
 
 # --- list_symbols ---
 
-def _compress_list_symbols(result: str, profile: Dict[str, int]) -> str:
+
+def _compress_list_symbols(result: str, profile: dict[str, int]) -> str:
     """Compress list_symbols output to type aggregation + top N entries.
 
     Keeps:
@@ -265,7 +273,21 @@ def _compress_list_symbols(result: str, profile: Dict[str, int]) -> str:
         stripped = line.strip()
         if stripped:
             first_word = stripped.split()[0] if stripped.split() else ""
-            if first_word in ("class", "def", "async", "function", "interface", "type", "enum", "struct", "impl", "trait", "pub", "priv", "fn"):
+            if first_word in (
+                "class",
+                "def",
+                "async",
+                "function",
+                "interface",
+                "type",
+                "enum",
+                "struct",
+                "impl",
+                "trait",
+                "pub",
+                "priv",
+                "fn",
+            ):
                 type_counts[first_word] = type_counts.get(first_word, 0) + 1
 
     parts: list[str] = [
@@ -286,7 +308,8 @@ def _compress_list_symbols(result: str, profile: Dict[str, int]) -> str:
 
 # --- generic fallback ---
 
-def _compress_generic(result: str, profile: Dict[str, int]) -> str:
+
+def _compress_generic(result: str, profile: dict[str, int]) -> str:
     """Generic head/tail compression for any long output.
 
     Keeps:
@@ -299,7 +322,11 @@ def _compress_generic(result: str, profile: Dict[str, int]) -> str:
     if len(lines) <= profile["generic_compress_threshold"]:
         # Single very long line? Truncate by chars.
         if len(result) > 2000:
-            return result[:1000] + f"\n[... {len(result) - 2000} chars omitted ...]\n" + result[-1000:]
+            return (
+                result[:1000]
+                + f"\n[... {len(result) - 2000} chars omitted ...]\n"
+                + result[-1000:]
+            )
         return result
 
     head = lines[:head_tail_lines]

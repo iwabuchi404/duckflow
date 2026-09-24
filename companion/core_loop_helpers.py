@@ -11,7 +11,12 @@ import re
 from typing import TYPE_CHECKING
 
 from companion.modules.pacemaker import CONTROL_ACTIONS, META_ACTIONS
-from companion.state.agent_state import ActionList, SyntaxErrorInfo
+from companion.state.agent_state import (
+    ActionList,
+    AgentState,
+    InterventionReason,
+    SyntaxErrorInfo,
+)
 
 if TYPE_CHECKING:
     from companion.core import DuckAgent
@@ -19,7 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def update_vitals_from_response(state, action_list: ActionList) -> None:
+def update_vitals_from_response(state: AgentState, action_list: ActionList) -> None:
     """Update vitals from LLM response action_list.
 
     Args:
@@ -101,7 +106,7 @@ _NATIVE_PARSE_ERROR_HINTS = {
 
 
 def record_parse_error_if_any(
-    state, action_list: ActionList, protocol: str = "symops"
+    state: AgentState, action_list: ActionList, protocol: str = "symops"
 ) -> None:
     """Record a Sym-Ops parse failure so the next turn's Correction Guide
     tells the model what went wrong, instead of silently ending the turn.
@@ -140,7 +145,7 @@ def record_parse_error_if_any(
 
 
 def build_intervention_prompt(
-    intervention, summary: str, protocol: str = "symops"
+    intervention: InterventionReason, summary: str, protocol: str = "symops"
 ) -> str:
     """Build the prompt sent to LLM during a Pacemaker intervention.
 
@@ -245,7 +250,7 @@ def _announces_pending_work(message: str) -> bool:
 _SKIPPED_RESPONSE_ERRORS = {"empty_response", "auto_response", "premature_response"}
 
 
-def turn_was_unproductive(action_list: ActionList, state) -> bool:
+def turn_was_unproductive(action_list: ActionList, state: AgentState) -> bool:
     """Detect turns that produced neither work nor a handoff.
 
     A turn whose only outputs are skipped responses (empty, auto-generated,
@@ -270,7 +275,7 @@ def turn_was_unproductive(action_list: ActionList, state) -> bool:
     return not any(a.name not in unproductive for a in action_list.actions)
 
 
-def should_return_to_user(action_list: ActionList, state) -> bool:
+def should_return_to_user(action_list: ActionList, state: AgentState) -> bool:
     """Determine if the autonomous loop should return control to the user.
 
     Returns True if a terminal action (response with content, exit, duck_call)

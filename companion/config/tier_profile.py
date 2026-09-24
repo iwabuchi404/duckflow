@@ -8,7 +8,7 @@ Tier運転プロファイル: モデルの強さに応じてプロンプト量�
 if-tier 分岐を自前で持たない。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -40,12 +40,12 @@ class TierProfile(BaseModel):
 
     tier: str = Field(description="解決された tier ('low' / 'mid' / 'high')")
     max_loops: int = Field(description="自律ループの最大反復回数の目安")
-    checkin_interval: Optional[int] = Field(
+    checkin_interval: int | None = Field(
         default=None,
         description="この回数ごとにチェックインを促す。None は強制チェックインなし（high tier）",
     )
     repo_map_token_budget: int = Field(description="repo map 注入のトークン予算")
-    escalation_threshold: Optional[int] = Field(
+    escalation_threshold: int | None = Field(
         default=None,
         description="編集が何回失敗したら中モデルへ自動委譲するか。None はエスカレーションなし",
     )
@@ -67,7 +67,7 @@ class TierProfile(BaseModel):
 
 
 # tier 別デフォルト値（docs/agent_surface_redesign_design.md §5.2 準拠）
-_TIER_DEFAULTS: Dict[str, TierProfile] = {
+_TIER_DEFAULTS: dict[str, TierProfile] = {
     TIER_LOW: TierProfile(
         tier=TIER_LOW,
         max_loops=10,
@@ -108,8 +108,8 @@ _TIER_DEFAULTS: Dict[str, TierProfile] = {
 
 
 def _find_model_entry(
-    available_models: List[Dict[str, Any]], model_name: str
-) -> Optional[Dict[str, Any]]:
+    available_models: list[dict[str, Any]], model_name: str
+) -> dict[str, Any] | None:
     """model 名が一致する available_models エントリを探す。
 
     Args:
@@ -127,7 +127,7 @@ def _find_model_entry(
 
 def resolve_tier_profile(
     model_name: str,
-    provider: Optional[str] = None,
+    provider: str | None = None,
     cfg: Any = None,
 ) -> TierProfile:
     """指定モデルの TierProfile を解決する。

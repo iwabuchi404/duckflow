@@ -8,28 +8,11 @@ Design: companion/tools/symbols.py (S3-2 Phase B)
 
 import ast
 import logging
-import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 from .file_ops import file_ops
 from .results import ToolResult
-
-
-def _resolve_workspace(workspace_root: Optional[str]) -> Path:
-    """Resolve the effective workspace root.
-
-    Args:
-        workspace_root: Explicit root, or None to use the shared file_ops
-            workspace (so symbol tools see the same files as file tools).
-
-    Returns:
-        Resolved workspace root path.
-    """
-    if workspace_root:
-        return Path(workspace_root).resolve()
-    return file_ops.workspace_root
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SymbolInfo:
     """Information about a single symbol (function/class)."""
+
     name: str
     kind: str  # "function", "async_function", "class"
     signature: str
@@ -49,12 +33,12 @@ class SymbolInfo:
         """One-line display format for list output."""
         doc = f"  # {self.docstring}" if self.docstring else ""
         # Show qualified name for nested symbols
-        simple = self.name.rsplit(".")[-1]
+        self.name.rsplit(".")[-1]
         qual_prefix = f"({self.name}) " if "." in self.name else ""
         return f"  {qual_prefix}{self.signature}  (lines {self.line_start}-{self.line_end}){doc}"
 
 
-def _parse_file(file_path: Path) -> Optional[ast.AST]:
+def _parse_file(file_path: Path) -> ast.AST | None:
     """Parse a Python file and return its AST, or None on failure."""
     try:
         source = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -64,7 +48,7 @@ def _parse_file(file_path: Path) -> Optional[ast.AST]:
         return None
 
 
-def _extract_symbols(file_path: Path, source_lines: list[str]) -> List[SymbolInfo]:
+def _extract_symbols(file_path: Path, source_lines: list[str]) -> list[SymbolInfo]:
     """Extract all top-level and nested symbols from a parsed AST.
 
     Args:
@@ -78,36 +62,59 @@ def _extract_symbols(file_path: Path, source_lines: list[str]) -> List[SymbolInf
     if tree is None:
         return []
 
-    symbols: List[SymbolInfo] = []
+    symbols: list[SymbolInfo] = []
 
-    def _visit(node: ast.AST, parent_qualname: str = ""):
+    def _visit(node: ast.AST, parent_qualname: str = "") -> None:
+        """Collect symbols recursively from an AST node.
+
+        Args:
+            node: Current AST node.
+            parent_qualname: Qualified name of the enclosing symbol.
+
+        Returns:
+            None.
+        """
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                kind = "async_function" if isinstance(child, ast.AsyncFunctionDef) else "function"
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef):
+                kind = (
+                    "async_function"
+                    if isinstance(child, ast.AsyncFunctionDef)
+                    else "function"
+                )
                 name = child.name
                 qualname = f"{parent_qualname}.{name}" if parent_qualname else name
 
                 # Extract signature from source line
                 line_idx = child.lineno - 1
-                signature = source_lines[line_idx].strip() if line_idx < len(source_lines) else f"def {name}(...)"
+                signature = (
+                    source_lines[line_idx].strip()
+                    if line_idx < len(source_lines)
+                    else f"def {name}(...)"
+                )
 
                 # Extract docstring
                 docstring = ""
-                if (child.body and isinstance(child.body[0], ast.Expr)
-                        and isinstance(child.body[0].value, ast.Constant)
-                        and isinstance(child.body[0].value.value, str)):
+                if (
+                    child.body
+                    and isinstance(child.body[0], ast.Expr)
+                    and isinstance(child.body[0].value, ast.Constant)
+                    and isinstance(child.body[0].value.value, str)
+                ):
                     raw_doc = child.body[0].value.value
                     docstring = raw_doc.strip().split("\n")[0][:80]
 
-                symbols.append(SymbolInfo(
-                    name=qualname,
-                    kind=kind,
-                    signature=signature,
-                    line_start=child.lineno,
-                    line_end=getattr(child, "end_lineno", child.lineno) or child.lineno,
-                    docstring=docstring,
-                    file_path=str(file_path),
-                ))
+                symbols.append(
+                    SymbolInfo(
+                        name=qualname,
+                        kind=kind,
+                        signature=signature,
+                        line_start=child.lineno,
+                        line_end=getattr(child, "end_lineno", child.lineno)
+                        or child.lineno,
+                        docstring=docstring,
+                        file_path=str(file_path),
+                    )
+                )
 
                 # Recurse into function body for nested functions
                 _visit(child, qualname)
@@ -117,24 +124,34 @@ def _extract_symbols(file_path: Path, source_lines: list[str]) -> List[SymbolInf
                 qualname = f"{parent_qualname}.{name}" if parent_qualname else name
 
                 line_idx = child.lineno - 1
-                signature = source_lines[line_idx].strip() if line_idx < len(source_lines) else f"class {name}"
+                signature = (
+                    source_lines[line_idx].strip()
+                    if line_idx < len(source_lines)
+                    else f"class {name}"
+                )
 
                 docstring = ""
-                if (child.body and isinstance(child.body[0], ast.Expr)
-                        and isinstance(child.body[0].value, ast.Constant)
-                        and isinstance(child.body[0].value.value, str)):
+                if (
+                    child.body
+                    and isinstance(child.body[0], ast.Expr)
+                    and isinstance(child.body[0].value, ast.Constant)
+                    and isinstance(child.body[0].value.value, str)
+                ):
                     raw_doc = child.body[0].value.value
                     docstring = raw_doc.strip().split("\n")[0][:80]
 
-                symbols.append(SymbolInfo(
-                    name=qualname,
-                    kind="class",
-                    signature=signature,
-                    line_start=child.lineno,
-                    line_end=getattr(child, "end_lineno", child.lineno) or child.lineno,
-                    docstring=docstring,
-                    file_path=str(file_path),
-                ))
+                symbols.append(
+                    SymbolInfo(
+                        name=qualname,
+                        kind="class",
+                        signature=signature,
+                        line_start=child.lineno,
+                        line_end=getattr(child, "end_lineno", child.lineno)
+                        or child.lineno,
+                        docstring=docstring,
+                        file_path=str(file_path),
+                    )
+                )
 
                 # Recurse into class body for methods
                 _visit(child, qualname)
@@ -143,9 +160,7 @@ def _extract_symbols(file_path: Path, source_lines: list[str]) -> List[SymbolInf
     return symbols
 
 
-async def list_symbols(
-    path: str, workspace_root: Optional[str] = None
-) -> str | ToolResult:
+async def list_symbols(path: str) -> str | ToolResult:
     """List all functions and classes in a Python file.
 
     Shows name, signature, line range, and docstring first line for each symbol.
@@ -160,14 +175,15 @@ async def list_symbols(
         >>>
 
     Args:
-        path: Path to a Python file (relative to workspace root).
-        workspace_root: Workspace root directory.
+        path: Path to a Python file relative to the active workspace root.
 
     Returns:
         Formatted list of symbols with signatures and line ranges.
     """
-    root = _resolve_workspace(workspace_root)
-    file_path = (root / path).resolve()
+    try:
+        file_path = file_ops.resolve_path(path)
+    except PermissionError as error:
+        return ToolResult.error("list_symbols", path, str(error))
 
     if not file_path.exists():
         return ToolResult.error("list_symbols", path, f"File not found: {path}")
@@ -176,7 +192,9 @@ async def list_symbols(
         return ToolResult.error("list_symbols", path, f"Not a Python file: {path}")
 
     try:
-        source_lines = file_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+        source_lines = file_path.read_text(
+            encoding="utf-8", errors="ignore"
+        ).splitlines()
     except OSError as e:
         return ToolResult.error("list_symbols", path, f"Cannot read file: {e}")
 
@@ -192,11 +210,7 @@ async def list_symbols(
     return "\n".join(parts)
 
 
-async def find_definition(
-    name: str,
-    scope: str = ".",
-    workspace_root: Optional[str] = None,
-) -> str | ToolResult:
+async def find_definition(name: str, scope: str = ".") -> str | ToolResult:
     """Find where a symbol (function/class) is defined.
 
     Searches all Python files under `scope` using ast. Returns the file path,
@@ -214,20 +228,21 @@ async def find_definition(
 
     Args:
         name: Symbol name to search for (function or class name).
-        scope: Directory to search (default: ".", relative to workspace root).
-        workspace_root: Workspace root directory.
+        scope: Directory to search relative to the active workspace root.
 
     Returns:
         List of definition locations with file:line and signature.
     """
-    root = _resolve_workspace(workspace_root)
-    search_dir = (root / scope).resolve()
+    try:
+        search_dir = file_ops.resolve_path(scope)
+    except PermissionError as error:
+        return ToolResult.error("find_definition", name, str(error))
 
     if not search_dir.exists():
         return ToolResult.error("find_definition", name, f"Path not found: {scope}")
 
     # Collect all Python files
-    py_files: List[Path] = []
+    py_files: list[Path] = []
     if search_dir.is_file() and search_dir.suffix == ".py":
         py_files = [search_dir]
     else:
@@ -236,21 +251,24 @@ async def find_definition(
                 continue
             py_files.append(f)
 
-    matches: List[str] = []
+    matches: list[str] = []
 
     for py_file in py_files:
+        resolved_file = py_file.resolve()
+        if not file_ops.is_within_workspace(resolved_file):
+            continue
         try:
-            source_lines = py_file.read_text(encoding="utf-8", errors="ignore").splitlines()
-            symbols = _extract_symbols(py_file, source_lines)
-            rel_path = py_file.relative_to(root)
+            source_lines = resolved_file.read_text(
+                encoding="utf-8", errors="ignore"
+            ).splitlines()
+            symbols = _extract_symbols(resolved_file, source_lines)
+            rel_path = resolved_file.relative_to(file_ops.workspace_root)
 
             for sym in symbols:
                 # Match by simple name (last component of qualified name)
                 simple_name = sym.name.rsplit(".")[-1]
                 if simple_name == name:
-                    matches.append(
-                        f"  {rel_path}:{sym.line_start}: {sym.signature}"
-                    )
+                    matches.append(f"  {rel_path}:{sym.line_start}: {sym.signature}")
         except (OSError, PermissionError):
             pass
 
@@ -262,10 +280,9 @@ async def find_definition(
 
 
 async def find_symbol(
-    name: Optional[str] = None,
-    path: Optional[str] = None,
+    name: str | None = None,
+    path: str | None = None,
     scope: str = ".",
-    workspace_root: Optional[str] = None,
 ) -> str | ToolResult:
     """Find a symbol's definition, or list symbols in a file.
 
@@ -284,19 +301,18 @@ async def find_symbol(
         >>>
 
     Args:
-        name: 定義位置を検索するシンボル名（関数/クラス名）。指定時は path/scope 配下を検索
+        name: 定義位置を検索するシンボル名（関数/クラス名）。指定時は scope 配下を検索
         path: シンボル一覧を取得したい Python ファイルのパス（name 未指定時に使用）
         scope: name 検索時の検索対象ディレクトリ（デフォルト: "."）
-        workspace_root: ワークスペースルートディレクトリ
 
     Returns:
         name 指定時: 定義位置（ファイル:行、シグネチャ）の一覧
         path のみ指定時: そのファイルのシンボル一覧
     """
     if name:
-        return await find_definition(name, scope=scope, workspace_root=workspace_root)
+        return await find_definition(name, scope=scope)
     if path:
-        return await list_symbols(path, workspace_root=workspace_root)
+        return await list_symbols(path)
     return ToolResult.error(
         "find_symbol",
         scope,
@@ -305,12 +321,7 @@ async def find_symbol(
     )
 
 
-async def replace_function(
-    path: str,
-    name: str,
-    body: str,
-    workspace_root: Optional[str] = None,
-) -> str | ToolResult:
+async def replace_function(path: str, name: str, body: str) -> str | ToolResult:
     r'''Replace a function or class definition in a Python file by name.
 
     Uses ast to locate the target symbol by name, then replaces its source
@@ -333,16 +344,17 @@ async def replace_function(
         >>>
 
     Args:
-        path: Path to the Python file (relative to workspace root).
+        path: Path to the Python file relative to the active workspace root.
         name: Symbol name to replace (function or class).
-        body: New function/class source code (must be valid Python).
-        workspace_root: Workspace root directory.
+        body: New function/class source code that must be valid Python.
 
     Returns:
         Success message with line range, or error message.
     '''
-    root = _resolve_workspace(workspace_root)
-    file_path = (root / path).resolve()
+    try:
+        file_path = file_ops.resolve_path(path)
+    except PermissionError as error:
+        return ToolResult.error("replace_function", path, str(error))
 
     if not file_path.exists():
         return ToolResult.error("replace_function", path, f"File not found: {path}")
@@ -372,11 +384,11 @@ async def replace_function(
     except SyntaxError as e:
         return ToolResult.error("replace_function", path, f"File has syntax error: {e}")
 
-    candidates: List[Tuple[int, int, str]] = []  # (lineno, end_lineno, kind)
+    candidates: list[tuple[int, int, str]] = []  # (lineno, end_lineno, kind)
 
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            simple_name = node.name.rsplit(".")[-1] if hasattr(node, 'name') else ""
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            simple_name = node.name.rsplit(".")[-1] if hasattr(node, "name") else ""
             if simple_name == name:
                 end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
                 kind = "class" if isinstance(node, ast.ClassDef) else "function"
@@ -388,9 +400,7 @@ async def replace_function(
         )
 
     if len(candidates) > 1:
-        locs = "\n".join(
-            f"  line {ln}-{end} ({kind})" for ln, end, kind in candidates
-        )
+        locs = "\n".join(f"  line {ln}-{end} ({kind})" for ln, end, kind in candidates)
         return ToolResult.error(
             "replace_function",
             path,
@@ -404,7 +414,7 @@ async def replace_function(
 
     # Replace the source lines
     # source_lines is 0-indexed, ast lineno is 1-indexed
-    new_lines = source_lines[:start_line - 1] + [body]
+    new_lines = source_lines[: start_line - 1] + [body]
     if not body.endswith("\n"):
         new_lines.append("\n")
     new_lines.extend(source_lines[end_line:])
@@ -416,7 +426,9 @@ async def replace_function(
         ast.parse(new_source)
     except SyntaxError as e:
         return ToolResult.error(
-            "replace_function", path, f"Replacement produces invalid syntax in file: {e}"
+            "replace_function",
+            path,
+            f"Replacement produces invalid syntax in file: {e}",
         )
 
     # Write the file
@@ -428,7 +440,8 @@ async def replace_function(
     # Invalidate repo map cache
     try:
         from companion.modules.repo_map import get_repo_map_generator
-        rel = str(file_path.relative_to(root)).replace("\\", "/")
+
+        rel = str(file_path.relative_to(file_ops.workspace_root)).replace("\\", "/")
         get_repo_map_generator().invalidate(rel)
     except Exception:
         pass  # Best-effort

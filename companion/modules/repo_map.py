@@ -10,10 +10,8 @@ Design: companion/modules/repo_map.py (S3-2 Phase C)
 import ast
 import logging
 import os
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -25,23 +23,37 @@ CHARS_PER_TOKEN = 4
 DEFAULT_MAX_FILES = 80
 # Noise directories to skip
 _NOISE_DIRS = {
-    "__pycache__", ".git", ".venv", "venv", "node_modules",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "dist", "build",
-    ".eggs", ".tox", "htmlcov", ".idea", ".vscode",
+    "__pycache__",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".eggs",
+    ".tox",
+    "htmlcov",
+    ".idea",
+    ".vscode",
 }
 
 
 @dataclass
 class FileSymbols:
     """Symbols extracted from a single file."""
+
     path: str
     mtime: float
-    symbols: List[Tuple[str, str, int, int]]  # (kind, signature, line_start, line_end)
+    symbols: list[tuple[str, str, int, int]]  # (kind, signature, line_start, line_end)
 
 
 @dataclass
 class RepoMap:
     """A ranked, budget-compressed repository symbol map."""
+
     text: str
     file_count: int
     symbol_count: int
@@ -65,17 +77,25 @@ class RepoMapGenerator:
         self.workspace_root = Path(workspace_root).resolve()
         self.token_budget = token_budget
         self.max_files = max_files
-        self._cache: Dict[str, FileSymbols] = {}
+        self._cache: dict[str, FileSymbols] = {}
 
-    def _collect_py_files(self) -> List[Path]:
+    def _collect_py_files(self) -> list[Path]:
         """Collect all Python files in the workspace, excluding noise dirs."""
-        py_files: List[Path] = []
+        py_files: list[Path] = []
         for root, dirs, files in os.walk(self.workspace_root):
             # Filter out noise directories in-place
-            dirs[:] = [d for d in dirs if d not in _NOISE_DIRS and not d.startswith(".")]
-            for f in files:
-                if f.endswith(".py"):
-                    py_files.append(Path(root) / f)
+            dirs[:] = [
+                d for d in dirs if d not in _NOISE_DIRS and not d.startswith(".")
+            ]
+            for filename in files:
+                if not filename.endswith(".py"):
+                    continue
+                file_path = (Path(root) / filename).resolve()
+                try:
+                    file_path.relative_to(self.workspace_root)
+                except ValueError:
+                    continue
+                py_files.append(file_path)
         return py_files
 
     def _extract_file_symbols(self, file_path: Path) -> FileSymbols:
@@ -88,22 +108,32 @@ class RepoMapGenerator:
         if cached and cached.mtime == mtime:
             return cached
 
-        symbols: List[Tuple[str, str, int, int]] = []
+        symbols: list[tuple[str, str, int, int]] = []
         try:
             source = file_path.read_text(encoding="utf-8", errors="ignore")
             tree = ast.parse(source, filename=str(file_path))
             lines = source.splitlines()
 
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
                     line_idx = node.lineno - 1
-                    sig = lines[line_idx].strip() if line_idx < len(lines) else f"def {node.name}(...)"
-                    kind = "async_def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                    sig = (
+                        lines[line_idx].strip()
+                        if line_idx < len(lines)
+                        else f"def {node.name}(...)"
+                    )
+                    kind = (
+                        "async_def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                    )
                     end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
                     symbols.append((kind, sig, node.lineno, end_line))
                 elif isinstance(node, ast.ClassDef):
                     line_idx = node.lineno - 1
-                    sig = lines[line_idx].strip() if line_idx < len(lines) else f"class {node.name}"
+                    sig = (
+                        lines[line_idx].strip()
+                        if line_idx < len(lines)
+                        else f"class {node.name}"
+                    )
                     end_line = getattr(node, "end_lineno", node.lineno) or node.lineno
                     symbols.append(("class", sig, node.lineno, end_line))
         except (SyntaxError, ValueError, OSError) as e:
@@ -113,22 +143,22 @@ class RepoMapGenerator:
         self._cache[rel_path] = fs
         return fs
 
-    def _rank_files(
-        self, file_symbols: List[FileSymbols]
-    ) -> List[FileSymbols]:
+    def _rank_files(self, file_symbols: list[FileSymbols]) -> list[FileSymbols]:
         """Rank files by a simple heuristic.
 
         Score = symbol_count * 2 + file_size_factor + recency_factor.
         Higher score = more important = included first.
         """
         now = max(fs.mtime for fs in file_symbols) if file_symbols else 0
-        scored: List[Tuple[float, FileSymbols]] = []
+        scored: list[tuple[float, FileSymbols]] = []
 
         for fs in file_symbols:
             # Symbol count factor (more symbols = more important)
             sym_score = len(fs.symbols) * 2
             # Recency factor (newer = better), normalized 0-10
-            recency = ((fs.mtime - (now - 86400 * 30)) / (86400 * 30)) * 10 if now else 0
+            recency = (
+                ((fs.mtime - (now - 86400 * 30)) / (86400 * 30)) * 10 if now else 0
+            )
             recency = max(0, min(10, recency))
             # File path priority: companion/ > tests/ > docs/ > root
             path_score = 0
@@ -146,13 +176,13 @@ class RepoMapGenerator:
         return [fs for _, fs in scored]
 
     def _format_repo_map(
-        self, ranked: List[FileSymbols], char_budget: int
-    ) -> Tuple[str, bool]:
+        self, ranked: list[FileSymbols], char_budget: int
+    ) -> tuple[str, bool]:
         """Format the ranked symbols into a compact text within budget.
 
         Returns (text, truncated).
         """
-        lines: List[str] = []
+        lines: list[str] = []
         total_chars = 0
         header = "## Repo Map (symbols)"
         total_chars += len(header) + 1
@@ -167,7 +197,7 @@ class RepoMapGenerator:
 
             file_header = f"\n### {fs.path}"
             file_section = [file_header]
-            for kind, sig, start, end in fs.symbols:
+            for _kind, sig, _start, _end in fs.symbols:
                 # Compact: just the signature
                 file_section.append(f"  {sig}")
 
@@ -206,7 +236,7 @@ class RepoMapGenerator:
             return RepoMap(text="", file_count=0, symbol_count=0)
 
         # Extract symbols from all files
-        all_symbols: List[FileSymbols] = []
+        all_symbols: list[FileSymbols] = []
         for f in py_files:
             try:
                 fs = self._extract_file_symbols(f)
@@ -243,7 +273,7 @@ class RepoMapGenerator:
 
 
 # Singleton instance (lazily initialized)
-_repo_map_generator: Optional[RepoMapGenerator] = None
+_repo_map_generator: RepoMapGenerator | None = None
 
 
 def get_repo_map_generator(workspace_root: str = ".") -> RepoMapGenerator:
@@ -255,7 +285,7 @@ def get_repo_map_generator(workspace_root: str = ".") -> RepoMapGenerator:
 
 
 def generate_repo_map_text(
-    workspace_root: str = ".", token_budget: Optional[int] = None
+    workspace_root: str = ".", token_budget: int | None = None
 ) -> str:
     """Generate repo map text for prompt injection.
 

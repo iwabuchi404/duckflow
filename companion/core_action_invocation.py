@@ -5,7 +5,8 @@ Callable invocation helpers for DuckAgent action execution.
 import asyncio
 import inspect
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from companion.config.config_loader import config
 from companion.tools.results import ToolResult
@@ -60,8 +61,10 @@ async def invoke_tool(
         A tuple of tool result and dropped parameter names.
     """
     call_params, dropped = filter_call_parameters(func, parameters)
-    resolved_tool_name = tool_name or getattr(func, "__name__", str(func))
-    target = call_params.get("path", call_params.get("command", "task"))
+    resolved_tool_name = (
+        tool_name if tool_name is not None else str(getattr(func, "__name__", func))
+    )
+    target = str(call_params.get("path", call_params.get("command", "task")) or "task")
 
     sig = inspect.signature(func)
     valid = {
@@ -82,14 +85,10 @@ async def invoke_tool(
         block = parameters["content"]
         if isinstance(block, str) and block.strip():
             recovered, remaining = extract_bare_key_params(block, valid_keys=valid)
-            for key, value in recovered.items():
+            for key, recovered_value in recovered.items():
                 if key not in call_params or not call_params[key]:
-                    call_params[key] = value
-            if (
-                remaining.strip()
-                and "body" in valid
-                and not call_params.get("body")
-            ):
+                    call_params[key] = recovered_value
+            if remaining.strip() and "body" in valid and not call_params.get("body"):
                 call_params["body"] = remaining
                 recovered["body"] = remaining
             consumed = "content" if recovered else None

@@ -1,15 +1,25 @@
-from typing import Any, Dict, Optional, List, Union
-from rich.console import Console, Group, RenderableType
-from rich.panel import Panel
-from rich.markdown import Markdown
-from rich.syntax import Syntax
-from rich.theme import Theme
-from rich.live import Live
-from rich.text import Text
-from rich.rule import Rule
-from rich.markup import escape
-import time
 import sys
+from collections.abc import Sequence
+from typing import Any, Protocol
+
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.markup import escape
+from rich.rule import Rule
+from rich.status import Status
+from rich.syntax import Syntax
+from rich.text import Text
+from rich.theme import Theme
+
+
+class _Vitals(Protocol):
+    """ステータスバーに表示するバイタル値の構造。"""
+
+    confidence: float
+    safety: float
+    memory: float
+    focus: float
 
 
 def _safe_text(value: Any) -> str:
@@ -63,10 +73,11 @@ class DuckUI:
     Supports real-time verbosity toggling via keys.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """RichベースのDuckflow UIを初期化する。"""
         self.console = Console(theme=duck_theme)
-        self.live = None
-        self.vitals_data = None
+        self.live: Live | None = None
+        self.vitals_data: _Vitals | None = None
         self.loop_info = (0, 0)
         self.status_text = ""
 
@@ -106,8 +117,8 @@ class DuckUI:
             (f"| {safe_status}", "thought"),
         )
 
-    def _check_keys(self):
-        """Non-blocking key check to toggle modes (OS-specific but encapsulated)."""
+    def _check_keys(self) -> None:
+        """キー入力を非同期に確認して詳細表示を切り替える。"""
         try:
             if sys.platform == "win32":
                 import msvcrt
@@ -132,8 +143,8 @@ class DuckUI:
         except Exception:
             pass
 
-    def start_live(self):
-        """Start the live status bar at the bottom."""
+    def start_live(self) -> None:
+        """下部ステータスバーのライブ表示を開始する。"""
         if not self.live:
             self.live = Live(
                 self._make_status_line(),
@@ -144,48 +155,81 @@ class DuckUI:
             )
             self.live.start()
 
-    def stop_live(self):
-        """Stop the live status bar."""
+    def stop_live(self) -> None:
+        """ステータスバーのライブ表示を停止する。"""
         if self.live:
             self.live.stop()
             self.live = None
 
-    def update_status(self, text: str):
-        """Update the message in the status bar."""
+    def update_status(self, text: str) -> None:
+        """ステータスバーのメッセージを更新する。
+
+        Args:
+            text: 表示するステータス文言。
+        """
         self.status_text = _safe_text(text)
         if self.live:
             self._check_keys()
             self.live.update(self._make_status_line())
 
-    def add_log(self, message: str):
-        """Add system log. In full mode, print them directly."""
+    def add_log(self, message: str) -> None:
+        """システムログを追加する。
+
+        Args:
+            message: 詳細表示時に出力するログ。
+        """
         if self.show_full_logs:
             self.console.print(f"  [log]LOG: {_safe_escape(message)}[/log]")
         # Even if not shown, we could buffer it for later or just ignore
 
-    def print_welcome(self):
+    def print_welcome(self) -> None:
+        """起動時の欢迎バナーを表示する。"""
         title = r"""
-    ____             __   ______            
+    ____             __   ______
    / __ \__  _______/ /__/ __/ /___ _      __
   / / / / / / / ___/ //_/ /_/ / __ \ | /| / /
- / /_/ / /_/ / /__/ ,< / __/ / /_/ / |/ |/ / 
-/_____/\__,_/\___/_/|_/_/ /_/\____/|__/|__/  
+ / /_/ / /_/ / /__/ ,< / __/ / /_/ / |/ |/ /
+/_____/\__,_/\___/_/|_/_/ /_/\____/|__/|__/
         """
         self.console.print(Text(title, style="duck", justify="center"))
         self.console.print(Rule(style="duck"))
 
-    def print_system(self, message: str):
+    def print_system(self, message: str) -> None:
+        """システムメッセージを表示する。
+
+        Args:
+            message: 表示するシステムメッセージ。
+        """
         self.console.print(f"ℹ️ [info]{_safe_escape(message)}[/info]")
 
-    def print_user(self, message: str):
+    def print_user(self, message: str) -> None:
+        """ユーザーメッセージを表示する。
+
+        Args:
+            message: 表示するユーザーメッセージ。
+        """
         self.console.print(f"\n[user]👤 You:[/user] {_safe_escape(message)}")
 
-    def print_thinking(self, thought: str):
-        self.console.print(f"\n[duck]🦆 Thinking...[/duck]")
+    def print_thinking(self, thought: str) -> None:
+        """思考メッセージを表示する。
+
+        Args:
+            thought: 表示する思考内容。
+        """
+        self.console.print("\n[duck]🦆 Thinking...[/duck]")
         if thought:
             self.console.print(f"  [thought]{_safe_escape(thought)}[/thought]")
 
-    def print_action(self, action_name: str, params: Dict[str, Any], thought: str):
+    def print_action(
+        self, action_name: str, params: dict[str, Any], thought: str
+    ) -> None:
+        """実行予定のアクションを表示する。
+
+        Args:
+            action_name: アクション名。
+            params: アクションに渡される引数。
+            thought: アクション選定理由。
+        """
         param_str = ", ".join(
             [f"{_safe_text(k)}={_safe_text(v)}" for k, v in params.items()]
         )
@@ -199,7 +243,13 @@ class DuckUI:
         if thought:
             self.console.print(f"   [thought]Reason: {_safe_escape(thought)}[/thought]")
 
-    def print_result(self, result: str, is_error: bool = False):
+    def print_result(self, result: str, is_error: bool = False) -> None:
+        """ツール実行結果を表示する。
+
+        Args:
+            result: 表示する結果の本文。
+            is_error: エラー結果として表示するかどうか。
+        """
         style = "error" if is_error else "success"
         icon = "❌" if is_error else "✅"
         content = _safe_text(result)
@@ -229,30 +279,70 @@ class DuckUI:
             else:
                 self.console.print(f"[dim]{_safe_escape(content)}[/dim]")
 
-    def print_vitals(self, vitals: Any, loop_count: int, max_loops: int):
+    def print_vitals(self, vitals: _Vitals, loop_count: int, max_loops: int) -> None:
+        """バイタルとループ進捗をステータスバーに反映する。
+
+        Args:
+            vitals: 表示するバイタル値。
+            loop_count: 現在のループ数。
+            max_loops: 最大ループ数。
+        """
         self.vitals_data = vitals
         self.loop_info = (loop_count, max_loops)
         if self.live:
             self._check_keys()
             self.live.update(self._make_status_line())
 
-    def print_error(self, message: str):
+    def print_error(self, message: str) -> None:
+        """エラーメッセージを表示する。
+
+        Args:
+            message: 表示するエラーメッセージ。
+        """
         self.console.print(f"[error]❌ Error: {_safe_escape(message)}[/error]")
 
-    def print_info(self, message: str):
+    def print_info(self, message: str) -> None:
+        """情報メッセージを表示する。
+
+        Args:
+            message: 表示する情報メッセージ。
+        """
         self.console.print(f"[info]ℹ️ {_safe_escape(message)}[/info]")
 
-    def print_warning(self, message: str):
+    def print_warning(self, message: str) -> None:
+        """警告メッセージを表示する。
+
+        Args:
+            message: 表示する警告メッセージ。
+        """
         self.console.print(f"[warning]⚠️  {_safe_escape(message)}[/warning]")
 
-    def print_success(self, message: str):
+    def print_success(self, message: str) -> None:
+        """成功メッセージを表示する。
+
+        Args:
+            message: 表示する成功メッセージ。
+        """
         self.console.print(f"[success]✅ {_safe_escape(message)}[/success]")
 
-    def print_token_usage(self, stats: Dict[str, Any]):
+    def print_token_usage(self, stats: dict[str, Any]) -> None:
+        """トークン使用量を表示する。
+
+        Args:
+            stats: 使用量統計。
+        """
         total = stats.get("total_tokens", 0)
         self.console.print(f"[thought]📊 Tokens: {total:,}[/thought]", justify="right")
 
-    def create_spinner(self, text: str):
+    def create_spinner(self, text: str) -> Status:
+        """待機中表示用のSpinnerを作成する。
+
+        Args:
+            text: Spinnerに表示する文言。
+
+        Returns:
+            RichのStatusオブジェクト。
+        """
         self.update_status(text)
         return self.console.status(f"[duck]{_safe_escape(text)}[/duck]", spinner="dots")
 
@@ -270,12 +360,19 @@ class DuckUI:
         return res.lower().strip() in ["y", "yes"]
 
     async def get_user_input(self, prompt: str = "You: ") -> str:
+        """複数行入力を含むユーザー入力を取得する。
+
+        Args:
+            prompt: 入力欄に表示するプロンプト。
+
+        Returns:
+            ユーザーが入力した文字列。入力終了時は終了コマンドを返す。
+        """
         if self.live:
             self.stop_live()
         from prompt_toolkit import PromptSession
-        from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.completion import NestedCompleter
-        from prompt_toolkit.keys import Keys
+        from prompt_toolkit.key_binding import KeyBindings
 
         # Define completer for slash commands
         completer = NestedCompleter.from_nested_dict(
@@ -296,7 +393,7 @@ class DuckUI:
         kb = KeyBindings()
 
         @kb.add("escape", "v")  # Alt+V
-        def _(event):
+        def _(event: Any) -> None:
             self.show_full_logs = not self.show_full_logs
             # We can't use live.update here as it's stopped, so use console.print
             status = "ON" if self.show_full_logs else "OFF"
@@ -312,7 +409,7 @@ class DuckUI:
         # Esc → Enter always submits (safe send for multiline content).
 
         @kb.add("enter")
-        def _enter(event):
+        def _enter(event: Any) -> None:
             buf = event.current_buffer
             if "\n" not in buf.text:
                 # First line, no newline yet → submit (single-line feel).
@@ -322,19 +419,19 @@ class DuckUI:
                 buf.insert_text("\n")
 
         @kb.add("c-j")
-        def _ctrl_j_newline(event):
+        def _ctrl_j_newline(event: Any) -> None:
             # Ctrl+J is what many terminals deliver for Shift+Enter. Always
             # insert a newline so the user can build multi-line input even
             # before the first Enter-based newline.
             event.current_buffer.insert_text("\n")
 
         @kb.add("escape", "enter")
-        def _alt_enter_submit(event):
+        def _alt_enter_submit(event: Any) -> None:
             # Esc → Enter submits regardless of buffer state. Reliable way to
             # send multi-line input on terminals without Shift+Enter support.
             event.current_buffer.validate_and_handle()
 
-        session = PromptSession(
+        session: PromptSession[str] = PromptSession(
             completer=completer,
             key_bindings=kb,
             multiline=False,
@@ -345,7 +442,13 @@ class DuckUI:
         except (EOFError, KeyboardInterrupt):
             return "/exit"
 
-    def print_conversation_message(self, message: str, speaker: str = "user"):
+    def print_conversation_message(self, message: str, speaker: str = "user") -> None:
+        """会話メッセージを表示する。
+
+        Args:
+            message: 表示するメッセージ本文。
+            speaker: 話者。user以外はアシスタントとして扱う。
+        """
         if speaker == "user":
             self.console.print(f"\n[user]👤 User:[/user] {_safe_escape(message)}")
         else:
@@ -353,29 +456,55 @@ class DuckUI:
                 f"\n[success]🦆 Assistant:[/success]\n{_safe_escape(message)}"
             )
 
-    def print_separator(self):
+    def print_separator(self) -> None:
+        """表示内容の区切り線を出力する。"""
         self.console.print(Rule(style="dim"))
 
     def confirm_action(self, message: str, default: bool = True) -> bool:
         return self.request_confirmation(message)
 
-    def print_markdown(self, markdown_text: str):
+    def print_markdown(self, markdown_text: str) -> None:
+        """Markdown形式のテキストを表示する。
+
+        Args:
+            markdown_text: 表示するMarkdown。
+        """
         self.console.print(Markdown(_safe_text(markdown_text)))
 
-    def print_code(self, code: str, language: str = "python"):
+    def print_code(self, code: str, language: str = "python") -> None:
+        """構文 colouring 付きでコードを表示する。
+
+        Args:
+            code: 表示するコード。
+            language: シンタックスハイライトの言語名。
+        """
         syntax = Syntax(_safe_text(code), language, theme="monokai", line_numbers=True)
         self.console.print(syntax)
 
-    def print_safety_warning(self, safety_score: float):
+    def print_safety_warning(self, safety_score: float) -> None:
+        """安全スコアの警告を表示する。
+
+        Args:
+            safety_score: 表示する安全スコア。
+        """
         self.console.print(Rule(title="🚨 Safety Warning", style="error"))
         self.console.print(
             f"[error]Safety Score が低いです: {safety_score:.2f}[/error]"
         )
 
     async def select_from_list(
-        self, title: str, options: List[tuple], description: str = ""
-    ) -> Optional[int]:
-        """Display a selection dialog with orange theme and return the chosen index."""
+        self, title: str, options: Sequence[tuple[str, Any]], description: str = ""
+    ) -> int | None:
+        """選択肢ダイアログを表示して選択インデックスを返す。
+
+        Args:
+            title: ダイアログのタイトル。
+            options: 表示ラベルと値の組。
+            description: 選択方法の説明。
+
+        Returns:
+            選択されたインデックス。キャンセル時はNone。
+        """
         if self.live:
             self.stop_live()
         from prompt_toolkit.shortcuts import radiolist_dialog
@@ -404,8 +533,8 @@ class DuckUI:
         return result
 
     async def select_model_interactive(
-        self, models: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
+        self, models: list[dict[str, Any]]
+    ) -> dict[str, Any] | None:
         """Interactive model selector using the restored selection logic."""
         if not models:
             return None

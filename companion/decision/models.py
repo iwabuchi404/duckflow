@@ -6,13 +6,22 @@ Context Compiler が抽出する。
 """
 
 from dataclasses import dataclass, field
+from typing import Literal, TypeAlias
+
+DecisionRequestType: TypeAlias = Literal[
+    "needs_clarification", "needs_replan", "completion", "test_result"
+]
+DecisionAction: TypeAlias = Literal["continue", "ask_user", "replan", "stop", "review"]
 
 # 判断要求の種別。v1 は needs_clarification のみ実装。
-DECISION_NEEDS_CLARIFICATION = "needs_clarification"
+DECISION_NEEDS_CLARIFICATION: DecisionRequestType = "needs_clarification"
 
 # 判定アクション値
-ACTION_CONTINUE = "continue"
-ACTION_ASK_USER = "ask_user"
+ACTION_CONTINUE: DecisionAction = "continue"
+ACTION_ASK_USER: DecisionAction = "ask_user"
+ACTION_REPLAN: DecisionAction = "replan"
+ACTION_STOP: DecisionAction = "stop"
+ACTION_REVIEW: DecisionAction = "review"
 
 
 @dataclass
@@ -25,7 +34,7 @@ class DecisionRequest:
         task: 発火点となったユーザー要求本文。
     """
 
-    type: str
+    type: DecisionRequestType
     focus: str = ""
     task: str = ""
 
@@ -67,7 +76,7 @@ class DecisionResult:
         raw: プロバイダの生出力（検証用）。
     """
 
-    action: str = ACTION_CONTINUE
+    action: DecisionAction = ACTION_CONTINUE
     focus: str = ""
     reason: str = ""
     raw: str = ""

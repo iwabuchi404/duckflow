@@ -10,9 +10,8 @@
 
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, cast
 
 from companion.state.agent_state import AgentState
 
@@ -58,8 +57,7 @@ class SessionManager:
         try:
             data = state.to_session_dict()
             session_file.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding='utf-8'
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             self._update_index(state)
             logger.debug(f"Session saved: {state.session_id} (turn={state.turn_count})")
@@ -71,7 +69,7 @@ class SessionManager:
     # 読み込み
     # ------------------------------------------------------------------
 
-    def load(self, session_id: str) -> Optional[AgentState]:
+    def load(self, session_id: str) -> AgentState | None:
         """
         指定された session_id のセッションを AgentState として復元する。
 
@@ -86,7 +84,7 @@ class SessionManager:
             logger.warning(f"Session file not found: {session_file}")
             return None
         try:
-            data = json.loads(session_file.read_text(encoding='utf-8'))
+            data = json.loads(session_file.read_text(encoding="utf-8"))
             state = AgentState.from_session_dict(data)
             logger.info(
                 f"Session loaded: {session_id} "
@@ -98,7 +96,7 @@ class SessionManager:
             logger.error(f"Failed to load session {session_id}: {e}")
             return None
 
-    def load_latest(self) -> Optional[AgentState]:
+    def load_latest(self) -> AgentState | None:
         """
         最新セッションを AgentState として復元する。
 
@@ -114,7 +112,7 @@ class SessionManager:
     # 一覧・メタデータ
     # ------------------------------------------------------------------
 
-    def list_sessions(self) -> List[dict]:
+    def list_sessions(self) -> list[dict[str, Any]]:
         """
         セッション一覧をメタデータで返す（最新順）。
 
@@ -125,7 +123,7 @@ class SessionManager:
         index = self._read_index()
         return list(reversed(index.get("sessions", [])))
 
-    def get_latest_id(self) -> Optional[str]:
+    def get_latest_id(self) -> str | None:
         """
         最新セッションのIDを返す。存在しなければ None。
 
@@ -147,7 +145,7 @@ class SessionManager:
             state: 保存済みの AgentState
         """
         index = self._read_index()
-        sessions: List[dict] = index.get("sessions", [])
+        sessions: list[dict[str, Any]] = index.get("sessions", [])
 
         meta = {
             "session_id": state.session_id,
@@ -169,13 +167,12 @@ class SessionManager:
 
         try:
             self.index_path.write_text(
-                json.dumps(index, ensure_ascii=False, indent=2),
-                encoding='utf-8'
+                json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except Exception as e:
             logger.error(f"Failed to update session index: {e}")
 
-    def _read_index(self) -> dict:
+    def _read_index(self) -> dict[str, Any]:
         """
         index.json を読み込む。存在しなければ空のインデックスを返す。
 
@@ -185,7 +182,9 @@ class SessionManager:
         if not self.index_path.exists():
             return {"sessions": [], "latest": None}
         try:
-            return json.loads(self.index_path.read_text(encoding='utf-8'))
+            return cast(
+                dict[str, Any], json.loads(self.index_path.read_text(encoding="utf-8"))
+            )
         except Exception as e:
             logger.error(f"Failed to read session index: {e}")
             return {"sessions": [], "latest": None}

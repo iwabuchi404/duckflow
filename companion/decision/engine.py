@@ -8,14 +8,16 @@ Core が解釈して介入する。
 import logging
 import os
 import time
-from typing import Any
+from typing import Any, cast
 
 from companion.decision.compiler import ContextCompiler
 from companion.decision.models import (
     DecisionRequest,
+    DecisionRequestType,
     DecisionResult,
 )
 from companion.decision.provider import DecisionProvider, SameModelDecisionProvider
+from companion.state.agent_state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +53,7 @@ class DecisionEngine:
         request_type: str,
         *,
         task: str,
-        state: Any,
+        state: AgentState,
         workspace_root: str | None = None,
     ) -> DecisionResult:
         """1つの判断要求を評価する。
@@ -69,7 +71,10 @@ class DecisionEngine:
         Returns:
             DecisionResult。
         """
-        request = DecisionRequest(type=request_type, task=task)
+        request = DecisionRequest(
+            type=cast(DecisionRequestType, request_type),
+            task=task,
+        )
         context = self.compiler.build(state, task, workspace_root=workspace_root)
         start = time.monotonic()
         error = ""
@@ -100,9 +105,8 @@ class DecisionEngine:
 def build_clarification_note(result: DecisionResult) -> str:
     """ask_user 判定をエージェント向けの注入ノートに変換する。
 
-    Agent はこのノートを受けて duck_call（または直接の質問文）で
-    ユーザーに確認する。結果そのものの代行はしない — 聞くべきという
-    判定だけを伝える。
+    Core はこのノートを判定監査として残し、別の forced duck_call で
+    ユーザーへの直接質問を実行する。
 
     Args:
         result: action == "ask_user" の DecisionResult。
@@ -117,8 +121,20 @@ def build_clarification_note(result: DecisionResult) -> str:
     if result.reason:
         lines.append(f"- Reason: {result.reason}")
     lines += [
-        "Before doing any work, ask the user a clarifying question about this",
-        "(via ::duck_call / the duck_call tool, or a direct question ending",
-        'with "?"). Do NOT guess the answer.',
+        "Before doing any work, ask the user a clarifying question about this.",
+        "Do not guess the answer.",
     ]
     return "\n".join(lines)
+
+
+def build_clarification_message(result: DecisionResult) -> str:
+    """Build the user-facing question for an ask_user decision.
+
+    Args:
+        result: Decision whose action is ``ask_user``.
+
+    Returns:
+        A direct clarification question suitable for a forced duck_call.
+    """
+    focus = result.focus.strip() or "the intended outcome"
+    return f"確認が必要です: {focus}。どちらの方針で進めればよいでしょうか？"

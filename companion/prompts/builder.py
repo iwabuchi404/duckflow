@@ -6,14 +6,14 @@ AgentState を受け取り、動的にシステムプロンプトを組み立て
 動的な部分を後半に配置する階層構造を持つ。
 """
 
-from typing import List, Optional
+from typing import Any
 
-from companion.state.agent_state import AgentState
-from companion.prompts.templates import SYSTEM_PROMPT_TEMPLATE, MODE_MAP
-from companion.prompts.few_shot import get_examples_for_mode
-from companion.utils.response_format import SYMOPS_SYSTEM_PROMPT
-from companion.modules.repo_map import generate_repo_map_text
 from companion.config.tier_profile import TierProfile
+from companion.modules.repo_map import generate_repo_map_text
+from companion.prompts.few_shot import get_examples_for_mode
+from companion.prompts.templates import MODE_MAP, SYSTEM_PROMPT_TEMPLATE
+from companion.state.agent_state import AgentState
+from companion.utils.response_format import SYMOPS_SYSTEM_PROMPT
 
 
 def interpretation_gate_enabled() -> bool:
@@ -40,7 +40,7 @@ class PromptBuilder:
     """
 
     def __init__(
-        self, state: AgentState, tier_profile: Optional[TierProfile] = None
+        self, state: AgentState, tier_profile: TierProfile | None = None
     ) -> None:
         """
         Args:
@@ -55,7 +55,7 @@ class PromptBuilder:
 
     def build_messages(
         self, tool_descriptions: str, protocol: str = "symops"
-    ) -> List[dict]:
+    ) -> list[dict[str, Any]]:
         """
         プロンプトキャッシュを最大限活用するためにメッセージリストを構成する。
 
@@ -112,9 +112,7 @@ class PromptBuilder:
         if interpretation_gate_enabled():
             from companion.prompts.templates import INTERPRETATION_GATE_PROMPT
 
-            messages.append(
-                {"role": "system", "content": INTERPRETATION_GATE_PROMPT}
-            )
+            messages.append({"role": "system", "content": INTERPRETATION_GATE_PROMPT})
 
         # 4. 動的なコンテキスト（ここから毎ターン確実に変動する）
         # 4a. Repo Map (先回りコンテキスト: ast-based symbol map)
@@ -157,7 +155,6 @@ class PromptBuilder:
         import re as _re
 
         from companion.prompts.templates import (
-            NATIVE_MODE_MAP,
             NATIVE_REASONING_LINES,
             NATIVE_TOOLS_SECTION,
             NATIVE_UNIFIED_ACTION,
@@ -230,7 +227,7 @@ class PromptBuilder:
         ).strip()
 
     # エラータイプ別の「正しい例」マップ
-    _CORRECTION_EXAMPLES: dict = {
+    _CORRECTION_EXAMPLES: dict[str, str] = {
         "unknown_tool": (
             "  Good: `::note @Done. Moving to next step.`\n"
             "  Good: `::response @Here is the result.`"
@@ -317,7 +314,7 @@ class PromptBuilder:
     }
 
     # Native variants without Sym-Ops grammar (only keys that differ).
-    _NATIVE_CORRECTION_EXAMPLES: dict = {
+    _NATIVE_CORRECTION_EXAMPLES: dict[str, str] = {
         "edit_find_mismatch": (
             "  Step 1: call `read_file` on the path — confirm current content\n"
             "  Step 2: retry `edit_file` with the SEARCH argument copied EXACTLY\n"

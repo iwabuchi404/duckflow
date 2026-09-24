@@ -1,5 +1,3 @@
-from companion.state.agent_state import ActionList
-
 from companion.utils.response_format import SYMOPS_SYSTEM_PROMPT
 
 SYSTEM_PROMPT_TEMPLATE = """
@@ -128,7 +126,7 @@ Follow these protocol guidelines for maximum reliability:
      [最終判断]
      >>>
      ```
-     
+
    **Action Ordering**: If you output both tool actions and a terminal action (response/note) in the same turn, the system will execute tool actions first, then the terminal action last.
      - ✅ OK: `::edit_lines @file.py ... → ::response <<< 修正しました >>>`
      - ✅ OK: `::list_directory @. → ::note <<< 構造取得完了 >>>` (note doesn't end loop)

@@ -2,18 +2,19 @@
 Duck Pacemaker - エージェントの健康状態と実行状況を監視し、介入を行う
 """
 
-from typing import List, Optional, Any, Dict
 import json
 import logging
 import re
-from companion.state.agent_state import (
-    AgentState,
-    Action,
-    InterventionReason,
-    MAX_HYPOTHESIS_ATTEMPTS,
-)
+from typing import Any
+
 from companion.config.config_loader import config
 from companion.config.tier_profile import TierProfile
+from companion.state.agent_state import (
+    MAX_HYPOTHESIS_ATTEMPTS,
+    Action,
+    AgentState,
+    InterventionReason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +141,7 @@ class DuckPacemaker:
         self.state = state
         self.loop_count = 0
         self.max_loops = config.get("agent.max_loops", 10)
-        self.execution_history: List[Dict[str, Any]] = (
+        self.execution_history: list[dict[str, Any]] = (
             []
         )  # {action, result_summary, is_error}
         self.consecutive_errors = 0
@@ -149,8 +150,8 @@ class DuckPacemaker:
         # counters of the tool that succeeded.
         #   _call_failures: "name|params" -> (count, last error kind)
         #   _kind_failures: (name, error kind) -> count
-        self._call_failures: dict[str, tuple] = {}
-        self._kind_failures: dict[tuple, int] = {}
+        self._call_failures: dict[str, tuple[int, str]] = {}
+        self._kind_failures: dict[tuple[str, str], int] = {}
         # Consecutive bookkeeping/meta actions with no real action between
         # them. Control actions (response/exit/duck_call) are neutral.
         self.meta_streak = 0
@@ -159,7 +160,7 @@ class DuckPacemaker:
         # current task. Reset at each new user task.
         self._post_exploration_fired = False
 
-    def calculate_max_loops(self, tier_profile: Optional[TierProfile] = None) -> int:
+    def calculate_max_loops(self, tier_profile: TierProfile | None = None) -> int:
         """
         タスクの種類と実測バイタルに応じて最大ループ回数を計算する。
         申告バイタル（confidence/safety）は制御に使用しない（V-A2）。
@@ -223,7 +224,7 @@ class DuckPacemaker:
         else:
             return 1.0
 
-    def update_vitals(self, action: Action, result: Any, is_error: bool):
+    def update_vitals(self, action: Action, result: Any, is_error: bool) -> None:
         """
         アクション実行結果に基づいて履歴を記録する。
         申告バイタルの更新は行わない（V-A2: decay廃止、実測ベース化）。
@@ -443,7 +444,7 @@ class DuckPacemaker:
             "is done, or (3) ::duck_call @<question> if you need the user."
         )
 
-    def pending_decisions_for_task_start(self) -> List[str]:
+    def pending_decisions_for_task_start(self) -> list[str]:
         """Return decision points to evaluate when a new user task arrives.
 
         Pacemaker owns the firing points for the Decision Engine (H-1);
@@ -460,7 +461,7 @@ class DuckPacemaker:
         self._post_exploration_fired = False
         return ["needs_clarification"]
 
-    def pending_decisions_for_actions(self, action_names: List[str]) -> List[str]:
+    def pending_decisions_for_actions(self, action_names: list[str]) -> list[str]:
         """Return decision points triggered by this turn's action names.
 
         Fires needs_clarification once per task when the first committing
@@ -509,7 +510,7 @@ class DuckPacemaker:
         kind_max = max(self._kind_failures.values(), default=0)
         return max(call_max, kind_max)
 
-    def check_health(self) -> Optional[InterventionReason]:
+    def check_health(self) -> InterventionReason | None:
         """健康状態を診断し、介入が必要ならその理由を返す。
         V-A2: 申告バイタル（safety/confidence/focus）由来の監視を廃止。
         実測値（error_rate, stagnation, hypothesis_attempts）のみで判定する。
@@ -556,7 +557,7 @@ class DuckPacemaker:
         return None
 
     @staticmethod
-    def _normalize_params(parameters: Dict[str, Any]) -> str:
+    def _normalize_params(parameters: dict[str, Any]) -> str:
         """パラメータ辞書をキー順に依存しない形で正規化する。
 
         Args:
@@ -715,7 +716,7 @@ class DuckPacemaker:
             thought=f"Pacemakerの介入により、ユーザーに相談します（理由: {reason.type}）",
         )
 
-    def reset(self):
+    def reset(self) -> None:
         """セッション終了時にカウンターをリセット"""
         self.loop_count = 0
         self.consecutive_errors = 0

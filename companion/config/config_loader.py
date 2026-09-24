@@ -1,7 +1,8 @@
 import os
-import yaml
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any
+
+import yaml
 
 
 class ConfigLoader:
@@ -10,19 +11,19 @@ class ConfigLoader:
     YAMLファイルから設定を読み込み、環境変数でオーバーライド可能にする。
     """
 
-    _instance = None
-    _config: Optional[Dict[str, Any]] = None
+    _instance: "ConfigLoader | None" = None
+    _config: dict[str, Any] | None = None
 
-    def __new__(cls):
+    def __new__(cls) -> "ConfigLoader":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self._config is None:
             self._load_config()
 
-    def _load_config(self):
+    def _load_config(self) -> None:
         """Load config from YAML file."""
         # Find duckflow.yaml in project root
         root_dir = Path(__file__).parent.parent.parent
@@ -36,7 +37,7 @@ class ConfigLoader:
             return
 
         try:
-            with open(config_path, "r", encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8") as f:
                 loaded_config = yaml.safe_load(f) or {}
             if loaded_config:
                 self._config = loaded_config
@@ -97,6 +98,8 @@ class ConfigLoader:
             # Update in-memory config
             keys = key_path.split(".")
             current = self._config
+            if current is None:
+                return False
 
             # Navigate to the parent dict
             for key in keys[:-1]:

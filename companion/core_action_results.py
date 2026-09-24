@@ -7,8 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from companion.state.agent_state import Action
-from companion.state.agent_state import SyntaxErrorInfo
+from companion.state.agent_state import Action, ActionList, SyntaxErrorInfo
 from companion.tools.results import (
     ToolResult,
     ToolStatus,
@@ -94,7 +93,8 @@ def action_target(action: Action) -> str:
     Returns:
         Path, command, or generic task target.
     """
-    return action.parameters.get("path", action.parameters.get("command", "task"))
+    target = action.parameters.get("path") or action.parameters.get("command") or "task"
+    return str(target)
 
 
 def build_tool_result_message(
@@ -137,7 +137,7 @@ def build_tool_result_message(
             target=action_target(action),
             content=envelope_content,
         )
-    formatted_res = wrap_tool_result(format_symops_response(tool_res))
+    formatted_res = str(wrap_tool_result(format_symops_response(tool_res)))
     if not approved:
         return formatted_res
 
@@ -147,7 +147,7 @@ def build_tool_result_message(
     )
 
 
-def build_action_summary(action_list: Any) -> str:
+def build_action_summary(action_list: ActionList) -> str:
     """
     Format executed action names for assistant history.
 

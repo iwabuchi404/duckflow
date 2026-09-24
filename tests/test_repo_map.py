@@ -1,13 +1,10 @@
 """Tests for S3-2 Phase C: Repo Map generation and injection."""
 
 import pytest
-from pathlib import Path
 
 from companion.modules.repo_map import (
     RepoMapGenerator,
-    RepoMap,
     generate_repo_map_text,
-    get_repo_map_generator,
 )
 
 
@@ -114,7 +111,9 @@ def test_repo_map_token_budget(tmp_path):
             "\n".join(f"def func_{i}_{j}(): pass" for j in range(20))
         )
 
-    gen = RepoMapGenerator(workspace_root=str(tmp_path), token_budget=100)  # Very small budget
+    gen = RepoMapGenerator(
+        workspace_root=str(tmp_path), token_budget=100
+    )  # Very small budget
     repo_map = gen.generate()
     assert repo_map.truncated
     # Text should be within budget (100 tokens * 4 chars = 400 chars, plus header)
@@ -129,12 +128,12 @@ def test_repo_map_caching(workspace):
     assert len(gen._cache) > 0
 
     # Second generation should use cache (same mtime)
-    core_path = str(workspace / "pkg" / "core.py")
     rel_path = "pkg/core.py"
     assert rel_path in gen._cache
 
     # Modify file -> mtime changes -> cache should be invalidated on next generate
     import time
+
     time.sleep(0.1)
     (workspace / "pkg" / "core.py").write_text("def new_func(): pass")
     gen.generate()
@@ -177,10 +176,12 @@ def test_repo_map_companion_priority(workspace):
     (workspace / "companion" / "main.py").write_text("def main(): pass")
 
     gen = RepoMapGenerator(workspace_root=str(workspace))
-    ranked = gen._rank_files([
-        gen._extract_file_symbols(workspace / "other" / "misc.py"),
-        gen._extract_file_symbols(workspace / "companion" / "main.py"),
-    ])
+    ranked = gen._rank_files(
+        [
+            gen._extract_file_symbols(workspace / "other" / "misc.py"),
+            gen._extract_file_symbols(workspace / "companion" / "main.py"),
+        ]
+    )
     # companion file should rank higher
     assert ranked[0].path == "companion/main.py"
 
@@ -189,6 +190,7 @@ def test_generate_repo_map_text_function(workspace):
     """Module-level generate_repo_map_text should return text."""
     # Reset singleton
     import companion.modules.repo_map as rm
+
     rm._repo_map_generator = None
     text = generate_repo_map_text(str(workspace))
     assert text
@@ -221,3 +223,20 @@ def test_generate_repo_map_text_respects_token_budget_override(tmp_path):
     # configure this to disable it).
     off_text = generate_repo_map_text(str(tmp_path), token_budget=0)
     assert off_text == ""
+
+
+def test_repo_map_skips_symlink_to_outside(tmp_path):
+    """Repo map must not include Python files linked from outside the workspace."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.py"
+    outside.write_text("def external_secret():\n    return 1\n", encoding="utf-8")
+    link = workspace / "linked.py"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("Symlink creation is unavailable on this platform")
+
+    repo_map = RepoMapGenerator(workspace_root=str(workspace)).generate()
+
+    assert "external_secret" not in repo_map.text

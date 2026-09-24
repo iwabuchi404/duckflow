@@ -1,21 +1,34 @@
-import os
 import json
+import logging
+import os
 import re
 import uuid
-import logging
-from typing import List, Dict, Any, Optional, Union, Tuple
-from openai import OpenAI, AsyncOpenAI, APIError
-from companion.state.agent_state import ActionList, Action
+from typing import Any, Literal, TypeVar, cast, overload
+
+from openai import APIError, AsyncOpenAI
+from openai.types.chat import ChatCompletion, ChatCompletionUserMessageParam
+from openai.types.chat.chat_completion_message import ChatCompletionMessage
+from pydantic import BaseModel
+
+from companion.base.response_preprocessor import default_preprocessor
 from companion.config.config_loader import config
 from companion.config.tier_profile import TierProfile, resolve_tier_profile
-from companion.base.response_preprocessor import default_preprocessor
+from companion.state.agent_state import Action, ActionList
+from companion.utils.preprocessor import (
+    extract_reasoning_actions,
+    reasoning_to_thought,
+    truncate_reasoning_loop,
+)
 from companion.utils.sym_ops import SymOpsProcessor
-from companion.utils.preprocessor import reasoning_to_thought, extract_reasoning_actions, truncate_reasoning_loop
 
 logger = logging.getLogger(__name__)
 
+StructuredResponseT = TypeVar("StructuredResponseT", bound=BaseModel)
 
-def _get_model_max_tokens(cfg, model_name: str, provider: str = None) -> Optional[int]:
+
+def _get_model_max_tokens(
+    cfg: Any, model_name: str, provider: str | None = None
+) -> int | None:
     """Look up model-specific max_output_tokens from config.
 
     Priority: available_models entry > provider-specific config > None
@@ -48,7 +61,7 @@ def _get_model_max_tokens(cfg, model_name: str, provider: str = None) -> Optiona
     return None
 
 
-def _extract_reasoning(message) -> str | None:
+def _extract_reasoning(message: ChatCompletionMessage) -> str | None:
     """Extract reasoning text from an OpenRouter reasoning model response.
 
     OpenRouter returns reasoning in a separate field for models like
@@ -64,20 +77,20 @@ def _extract_reasoning(message) -> str | None:
         Reasoning text if found, otherwise None.
     """
     # Direct attribute
-    reasoning = getattr(message, "reasoning", None)
-    if reasoning and isinstance(reasoning, str) and reasoning.strip():
+    reasoning: object = getattr(message, "reasoning", None)
+    if isinstance(reasoning, str) and reasoning.strip():
         return reasoning
 
     # reasoning_content (some providers use this name)
     reasoning = getattr(message, "reasoning_content", None)
-    if reasoning and isinstance(reasoning, str) and reasoning.strip():
+    if isinstance(reasoning, str) and reasoning.strip():
         return reasoning
 
     # Pydantic model_extra_fields
     extra = getattr(message, "model_extra_fields", None)
-    if extra and isinstance(extra, dict):
+    if isinstance(extra, dict):
         reasoning = extra.get("reasoning") or extra.get("reasoning_content")
-        if reasoning and isinstance(reasoning, str) and reasoning.strip():
+        if isinstance(reasoning, str) and reasoning.strip():
             return reasoning
 
     return None
@@ -110,7 +123,7 @@ def _get_retry_after(error: APIError) -> float | None:
 
 # コンテキスト長のフォールバックテーブル（API取得失敗時に使用）
 # キー: モデルIDの部分一致で検索される
-CONTEXT_LENGTH_FALLBACK: Dict[str, int] = {
+CONTEXT_LENGTH_FALLBACK: dict[str, int] = {
     # OpenAI
     "gpt-4o": 128_000,
     "gpt-4o-mini": 128_000,
@@ -171,22 +184,41 @@ class LLMClient:
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model: Optional[str] = None,
-        timeout: Optional[float] = None,
-        provider: Optional[str] = None,
-    ):
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        timeout: float | None = None,
+        provider: str | None = None,
+    ) -> None:
+        """Initialize a provider-specific OpenAI-compatible client.
 
+        Args:
+            api_key: Optional API key overriding environment configuration.
+            base_url: Optional API base URL overriding provider defaults.
+            model: Optional model identifier overriding configuration.
+            timeout: Optional request timeout in seconds.
+            provider: Optional provider identifier overriding configuration.
+
+        Returns:
+            None.
+        """
         # Load provider from config or parameter
-        self.provider = provider or config.get("llm.provider", "groq")
+        configured_provider = config.get("llm.provider", "groq")
+        self.provider: str = provider or (
+            configured_provider
+            if isinstance(configured_provider, str) and configured_provider
+            else "groq"
+        )
+        self.api_key: str | None
+        self.base_url: str | None
+        self.model: str
         logger.info(f"🔧 Initializing LLM Client with provider: {self.provider}")
 
         # Load API key based on provider (priority: param > env > config)
         api_key_env_var = None  # Track which env var we're looking for
         if api_key:
             self.api_key = api_key
-            logger.info(f"✅ Using API key from parameter")
+            logger.info("✅ Using API key from parameter")
         elif self.provider == "groq":
             api_key_env_var = "GROQ_API_KEY"
             self.api_key = os.getenv("GROQ_API_KEY")
@@ -257,12 +289,12 @@ class LLMClient:
             self.model = model
         else:
             # Try environment variable first, then config
-            self.model = os.getenv("DUCKFLOW_MODEL") or config.get(
+            configured_model = os.getenv("DUCKFLOW_MODEL") or config.get(
                 f"llm.{self.provider}.model"
             )
-
-            # Additional fallback if model is still empty/None
-            if not self.model:
+            if isinstance(configured_model, str) and configured_model:
+                self.model = configured_model
+            else:
                 self.model = "llama-3.3-70b-versatile"
                 logger.warning(
                     f"Model was not set for provider {self.provider}. Falling back to default: {self.model}"
@@ -283,10 +315,10 @@ class LLMClient:
 
         # Verbatim assistant messages of the current native-protocol run,
         # used to rebuild tool_calls history each turn. Reset per user task.
-        self._native_assistant_log: list = []
+        self._native_assistant_log: list[dict[str, Any]] = []
         # Native execution journal keyed by tool_call_id:
         # {id: {turn, tool_name, status, executed, body}}.
-        self._native_journal: dict = {}
+        self._native_journal: dict[str, dict[str, Any]] = {}
         # Monotonic per client instance (NOT reset per task): combined with
         # the per-process epoch it forms the turn id stamped on log entries
         # and Action.native_turn, so history summaries pair by identity,
@@ -320,7 +352,7 @@ class LLMClient:
             )
 
     def reinitialize(
-        self, provider: Optional[str] = None, model: Optional[str] = None
+        self, provider: str | None = None, model: str | None = None
     ) -> bool:
         """
         Reinitialize the LLM client with new provider/model settings.
@@ -427,7 +459,7 @@ class LLMClient:
 
             self._refresh_tier_profile()
 
-            logger.info(f"✅ LLM Client reinitialized successfully")
+            logger.info("✅ LLM Client reinitialized successfully")
             return True
 
         except Exception as e:
@@ -454,7 +486,9 @@ class LLMClient:
                 return True
 
             logger.info("🔍 Testing LLM connection...")
-            test_messages = [{"role": "user", "content": "ping"}]
+            test_messages: list[ChatCompletionUserMessageParam] = [
+                {"role": "user", "content": "ping"}
+            ]
 
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -548,18 +582,26 @@ class LLMClient:
                         headers={"Authorization": f"Bearer {self.api_key}"},
                     )
                     if resp.status_code == 200:
-                        data = resp.json()
-                        models = data.get("data", [])
-                        for m in models:
-                            if m.get("id") == self.model:
-                                ctx = m.get("context_length", 0)
-                                if ctx > 0:
-                                    logger.info(
-                                        f"Context length from OpenRouter API: "
-                                        f"{self.model} = {ctx:,} tokens"
-                                    )
-                                    self.context_length_source = "api"
-                                    return ctx
+                        data: object = resp.json()
+                        if isinstance(data, dict):
+                            models = data.get("data", [])
+                            if isinstance(models, list):
+                                for model_data in models:
+                                    if not isinstance(model_data, dict):
+                                        continue
+                                    if model_data.get("id") != self.model:
+                                        continue
+                                    ctx = model_data.get("context_length", 0)
+                                    if isinstance(ctx, int) and not isinstance(
+                                        ctx, bool
+                                    ):
+                                        if ctx > 0:
+                                            logger.info(
+                                                f"Context length from OpenRouter API: "
+                                                f"{self.model} = {ctx:,} tokens"
+                                            )
+                                            self.context_length_source = "api"
+                                            return ctx
                         logger.warning(
                             f"Model {self.model} not found in OpenRouter models list"
                         )
@@ -594,7 +636,7 @@ class LLMClient:
         self.context_length_source = "default"
         return fallback_default
 
-    async def _call_with_retry(self, **kwargs):
+    async def _call_with_retry(self, **kwargs: Any) -> ChatCompletion:
         """Call the LLM API with exponential backoff retry.
 
         Retries on:
@@ -603,6 +645,16 @@ class LLMClient:
         - Connection errors
 
         Uses Retry-After header for 429 when available.
+
+        Args:
+            kwargs: Keyword arguments forwarded to the OpenAI-compatible API.
+
+        Returns:
+            A non-streaming chat completion response.
+
+        Raises:
+            APIError: When the API call fails after all applicable retries.
+            OSError: When a connection fails after all applicable retries.
         """
         import asyncio as _asyncio
         import random as _random
@@ -616,7 +668,10 @@ class LLMClient:
 
         for attempt in range(max_retries + 1):
             try:
-                response = await self.client.chat.completions.create(**kwargs)
+                response = cast(
+                    ChatCompletion,
+                    await self.client.chat.completions.create(**kwargs),
+                )
                 if attempt > 0:
                     self.usage_stats["retry_successes"] += 1
                     logger.info(f"API call succeeded after {attempt} retry(es)")
@@ -639,7 +694,9 @@ class LLMClient:
                     raise
 
                 # Calculate delay
-                delay = min(base_delay * (2 ** attempt) + _random.uniform(0, 0.5), max_delay)
+                delay = min(
+                    base_delay * (2**attempt) + _random.uniform(0, 0.5), max_delay
+                )
 
                 # Respect Retry-After header for 429
                 if status_code == 429:
@@ -656,12 +713,12 @@ class LLMClient:
 
             except (_asyncio.TimeoutError, ConnectionError, OSError) as e:
                 if attempt >= max_retries:
-                    logger.error(
-                        f"API call failed after {max_retries} retries: {e}"
-                    )
+                    logger.error(f"API call failed after {max_retries} retries: {e}")
                     raise
 
-                delay = min(base_delay * (2 ** attempt) + _random.uniform(0, 0.5), max_delay)
+                delay = min(
+                    base_delay * (2**attempt) + _random.uniform(0, 0.5), max_delay
+                )
                 self.usage_stats["retry_count"] += 1
                 logger.warning(
                     f"Connection error, retrying in {delay:.1f}s "
@@ -669,12 +726,14 @@ class LLMClient:
                 )
                 await _asyncio.sleep(delay)
 
+        raise RuntimeError("Retry loop exited without a response")
+
     def _build_request_kwargs(
         self,
-        messages: List[Dict[str, Any]],
-        temperature: Optional[float],
-        max_tokens: Optional[int],
-    ) -> Dict[str, Any]:
+        messages: list[dict[str, Any]],
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> dict[str, Any]:
         """
         Build shared chat-completion kwargs from config (both protocols).
 
@@ -741,37 +800,38 @@ class LLMClient:
                 logger.info(f"🧠 Reasoning control: {reasoning_param}")
 
         # OpenAI SDKを使用してリクエスト送信 (with retry)
-        request_kwargs = dict(
-            model=self.model,
-            messages=messages,
-            temperature=temperature,
-            top_p=top_p,
-            presence_penalty=presence_penalty,
-            max_tokens=max_tokens,
-            extra_headers=extra_headers,
-        )
+        request_kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "top_p": top_p,
+            "presence_penalty": presence_penalty,
+            "max_tokens": max_tokens,
+            "extra_headers": extra_headers,
+        }
         if reasoning_param is not None:
             request_kwargs["extra_body"] = {"reasoning": reasoning_param}
         return request_kwargs
 
-    def _record_usage(self, response: Any) -> None:
+    def _record_usage(self, response: ChatCompletion) -> None:
         """
         Accumulate token usage statistics from a response.
 
         Args:
             response: Chat completion response with optional usage.
         """
-        if response.usage:
-            self.usage_stats["input_tokens"] += response.usage.prompt_tokens
-            self.usage_stats["output_tokens"] += response.usage.completion_tokens
-            self.usage_stats["total_tokens"] += response.usage.total_tokens
+        usage = response.usage
+        if usage is not None:
+            self.usage_stats["input_tokens"] += usage.prompt_tokens
+            self.usage_stats["output_tokens"] += usage.completion_tokens
+            self.usage_stats["total_tokens"] += usage.total_tokens
 
     async def _chat_native(
         self,
-        processed_messages: List[Dict[str, Any]],
-        native_tools: List[Dict[str, Any]],
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        processed_messages: list[dict[str, Any]],
+        native_tools: list[dict[str, Any]],
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> ActionList:
         """
         Main-agent turn via API-native tool calling.
@@ -863,7 +923,7 @@ class LLMClient:
 
         content = message.content or ""
         raw_calls = getattr(message, "tool_calls", None) or []
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "role": "assistant",
             "content": content,
             "_turn": turn_id,
@@ -938,15 +998,60 @@ class LLMClient:
             parse_error_detail=parse_error_detail,
         )
 
+    @overload
     async def chat(
         self,
-        messages: List[Dict[str, str]],
-        response_model: Optional[type] = None,
-        temperature: Optional[float] = None,
+        messages: list[dict[str, str]],
+        response_model: type[ActionList],
+        temperature: float | None = None,
+        raw: Literal[False] = False,
+        max_tokens: int | None = None,
+        native_tools: list[dict[str, Any]] | None = None,
+    ) -> ActionList: ...
+
+    @overload
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        response_model: None = None,
+        temperature: float | None = None,
+        raw: Literal[False] = False,
+        max_tokens: int | None = None,
+        native_tools: list[dict[str, Any]] | None = None,
+    ) -> ActionList: ...
+
+    @overload
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        response_model: type[StructuredResponseT],
+        temperature: float | None = None,
+        raw: Literal[False] = False,
+        max_tokens: int | None = None,
+        native_tools: list[dict[str, Any]] | None = None,
+    ) -> StructuredResponseT: ...
+
+    @overload
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        response_model: type[StructuredResponseT] | None = None,
+        temperature: float | None = None,
+        raw: Literal[True],
+        max_tokens: int | None = None,
+        native_tools: list[dict[str, Any]] | None = None,
+    ) -> str: ...
+
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        response_model: type[StructuredResponseT] | None = None,
+        temperature: float | None = None,
         raw: bool = False,
-        max_tokens: Optional[int] = None,
-        native_tools: Optional[List[Dict[str, Any]]] = None,
-    ) -> Union[Dict[str, Any], ActionList, str]:
+        max_tokens: int | None = None,
+        native_tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | ActionList | BaseModel | str:
         """
         Send messages to the LLM and parse the response.
 
@@ -966,7 +1071,7 @@ class LLMClient:
             return self._mock_chat(messages, response_model, raw=raw)
 
         # 1. プロバイダーに応じてメッセージを調整（キャッシュマーカーの処理）
-        processed_messages = []
+        processed_messages: list[dict[str, Any]] = []
         supports_caching = self.provider in ["openrouter", "anthropic", "deepseek"]
 
         for msg in messages:
@@ -1002,12 +1107,10 @@ class LLMClient:
                 processed_messages, temperature, max_tokens
             )
 
-            content = None
+            content: str | None = None
             for attempt in range(1, MAX_EMPTY_RETRIES + 2):
                 # OpenAI SDKを使用してリクエスト送信 (with retry)
-                response = await self._call_with_retry(
-                    **request_kwargs
-                )
+                response = await self._call_with_retry(**request_kwargs)
 
                 self._record_usage(response)
 
@@ -1025,16 +1128,15 @@ class LLMClient:
                     if cache_read > 0:
                         logger.info(f"🚀 Prompt Cache Hit: {cache_read:,} tokens")
 
-                content = response.choices[0].message.content
+                raw_content = response.choices[0].message.content
+                content = raw_content if isinstance(raw_content, str) else None
 
                 # Extract reasoning from OpenRouter reasoning models
                 # OpenRouter returns reasoning in a separate field for models like
                 # DeepSeek-R1, Kimi K2, GLM, GPT-OSS, etc.
                 reasoning_text = _extract_reasoning(response.choices[0].message)
                 if reasoning_text:
-                    logger.info(
-                        f"🧠 Extracted reasoning ({len(reasoning_text)} chars)"
-                    )
+                    logger.info(f"🧠 Extracted reasoning ({len(reasoning_text)} chars)")
                     # Truncate degenerate reasoning loops before processing
                     reasoning_text = truncate_reasoning_loop(reasoning_text)
                     thought_block = reasoning_to_thought(reasoning_text)
@@ -1069,7 +1171,7 @@ class LLMClient:
 
                     await _asyncio.sleep(1.0)  # 短いバックオフ
                     # temperatureを少し上げてリトライ（同じ空出力を避ける）
-                    temperature = min(temperature + 0.1, 1.0)
+                    temperature = min((temperature or 0.7) + 0.1, 1.0)
                     logger.info(f"Retrying with temperature={temperature:.1f}...")
                 else:
                     logger.error(
@@ -1078,9 +1180,9 @@ class LLMClient:
                     logger.error(f"Message object: {response.choices[0].message}")
 
             if raw:
-                return content
+                return content or ""
 
-            return self._parse_response(content, response_model)
+            return self._parse_response(content or "", response_model)
 
         except APIError as e:
             logger.error(f"LLM API Error: {e}")
@@ -1112,15 +1214,15 @@ class LLMClient:
 
     def _mock_chat(
         self,
-        messages: List[Dict[str, str]],
-        response_model: Optional[type] = None,
+        messages: list[dict[str, str]],
+        response_model: type[BaseModel] | None = None,
         raw: bool = False,
-    ) -> Union[Dict[str, Any], ActionList, str]:
+    ) -> dict[str, Any] | ActionList | BaseModel | str:
         """Generate a mock response for testing."""
         logger.info("🦆 [MOCK] Generating response...")
 
         # Simple heuristic mock
-        last_msg = messages[-1]["content"].lower()
+        messages[-1]["content"].lower()
 
         # Check if we're being asked for a PlanProposal (contains "steps")
         if response_model and "PlanProposal" in str(response_model):
@@ -1182,7 +1284,7 @@ class LLMClient:
         return self._parse_response(mock_content, response_model)
 
     @staticmethod
-    def _parse_replace_content(content: str, params: dict) -> None:
+    def _parse_replace_content(content: str, params: dict[str, Any]) -> None:
         """
         replace_in_file のコンテンツブロックから search/replace を抽出する。
 
@@ -1233,7 +1335,31 @@ class LLMClient:
         params["search"] = content
         params["replace"] = ""
 
-    def _parse_response(self, content: str, response_model: Optional[type] = None):
+    @overload
+    def _parse_response(
+        self, content: str, response_model: type[ActionList]
+    ) -> ActionList: ...
+
+    @overload
+    def _parse_response(
+        self, content: str, response_model: None = None
+    ) -> ActionList: ...
+
+    @overload
+    def _parse_response(
+        self, content: str, response_model: type[StructuredResponseT]
+    ) -> StructuredResponseT: ...
+
+    @overload
+    def _parse_response(
+        self, content: str, response_model: type[StructuredResponseT] | None
+    ) -> dict[str, Any] | ActionList | StructuredResponseT: ...
+
+    def _parse_response(
+        self,
+        content: str,
+        response_model: type[StructuredResponseT] | None = None,
+    ) -> dict[str, Any] | ActionList | StructuredResponseT:
         """
         Parse raw LLM text into either an internal action list or JSON model.
 
@@ -1293,13 +1419,13 @@ class LLMClient:
             )
 
             # Convert to ActionList (Internal Model)
-            actions = []
+            actions: list[Action] = []
             for action in result.actions:
                 # Map Sym-Ops action to internal Action model
 
                 # Determine tool name and params
                 tool_name = action.type
-                params = action.params.copy() if action.params else {}
+                params: dict[str, Any] = action.params.copy() if action.params else {}
 
                 logger.debug(
                     f"🔍 Mapping action: type={tool_name}, path={action.path}, content_len={len(action.content) if action.content else 0}"
@@ -1340,8 +1466,14 @@ class LLMClient:
                         # 拡張構文: "path 1 500" → path, start=1, end=500
                         # But paths may contain spaces (e.g. "docs/Sym-Ops v2.md")
                         # Only treat as pagination if the last 1-2 parts are pure digits
-                        parts = action.path.rsplit(None, 2)  # split from right, max 3 parts
-                        if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
+                        parts = action.path.rsplit(
+                            None, 2
+                        )  # split from right, max 3 parts
+                        if (
+                            len(parts) == 3
+                            and parts[1].isdigit()
+                            and parts[2].isdigit()
+                        ):
                             params["path"] = parts[0]
                             params["start"] = int(parts[1])
                             params["end"] = int(parts[2])
@@ -1385,7 +1517,7 @@ class LLMClient:
 
             # Construct ActionList
             # Join thoughts for reasoning (include reasoning-derived thoughts)
-            all_thoughts = []
+            all_thoughts: list[str] = []
             if reasoning_thoughts_text:
                 # Extract >> Thought lines from the reasoning block
                 for line in reasoning_thoughts_text.split("\n"):
@@ -1394,9 +1526,7 @@ class LLMClient:
                         all_thoughts.append(stripped[2:].strip())
             all_thoughts.extend(result.thoughts)
             reasoning = (
-                "\n".join(all_thoughts)
-                if all_thoughts
-                else "No reasoning provided."
+                "\n".join(all_thoughts) if all_thoughts else "No reasoning provided."
             )
 
             # --- Thought-Only Fallback ---
@@ -1467,7 +1597,9 @@ class LLMClient:
                 actions.append(
                     Action(
                         name="response",
-                        parameters={"message": "推論でトークンを使い切りました。続けてください。"},
+                        parameters={
+                            "message": "推論でトークンを使い切りました。続けてください。"
+                        },
                         thought="Empty body — reasoning consumed all tokens, no actions in reasoning",
                         auto_generated=True,
                     )
@@ -1494,9 +1626,7 @@ class LLMClient:
                 logger.warning(
                     "Empty Sym-Ops response: no actions, no thoughts, no reasoning."
                 )
-                parse_error_type = (
-                    "parse_failed" if strict_failure else "empty_actions"
-                )
+                parse_error_type = "parse_failed" if strict_failure else "empty_actions"
                 if strict_failure:
                     parse_error_detail = f"{strict_failure}; input={content[:180]!r}"
                 else:
@@ -1531,7 +1661,9 @@ class LLMClient:
                 parse_error_detail=str(e)[:300],
             )
 
-    def _parse_structured_response(self, content: str, response_model: type):
+    def _parse_structured_response(
+        self, content: str, response_model: type[StructuredResponseT]
+    ) -> StructuredResponseT:
         """
         Parse a JSON response into a requested Pydantic response model.
 
@@ -1550,13 +1682,15 @@ class LLMClient:
         )
 
         try:
-            if hasattr(response_model, "model_validate_json"):
-                return response_model.model_validate_json(processed)
+            validate_json = getattr(response_model, "model_validate_json", None)
+            if callable(validate_json):
+                return cast(StructuredResponseT, validate_json(processed))
 
             data = json.loads(processed)
-            if hasattr(response_model, "model_validate"):
-                return response_model.model_validate(data)
-            return data
+            validate_model = getattr(response_model, "model_validate", None)
+            if callable(validate_model):
+                return cast(StructuredResponseT, validate_model(data))
+            return cast(StructuredResponseT, data)
         except Exception as e:
             logger.error(
                 "Failed to parse structured response as %s: %s",
@@ -1571,7 +1705,7 @@ default_client = LLMClient()
 
 
 # Default client instance
-_default_client_instance = None
+_default_client_instance: LLMClient | None = None
 
 
 def get_default_client() -> LLMClient:
@@ -1589,13 +1723,37 @@ def get_default_client() -> LLMClient:
 class _DefaultClientGetter:
     """Allows accessing default_client as a dynamic getter."""
 
-    def __call__(self):
+    def __call__(self) -> LLMClient:
+        """Return a newly configured default client.
+
+        Args:
+            None.
+
+        Returns:
+            A client initialized from the latest configuration.
+        """
         return get_default_client()
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
+        """Proxy an attribute to a newly configured default client.
+
+        Args:
+            name: Attribute name requested by legacy callers.
+
+        Returns:
+            The proxied client attribute value.
+        """
         return getattr(get_default_client(), name)
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize the compatibility getter.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+        """
         # For backward compatibility with isintance checks
         pass
 

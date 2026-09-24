@@ -7,21 +7,25 @@ fail-fast, and conversation history injection.
 
 import logging
 import time
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
+from companion.base.native_protocol import sanitize_tool_references
+from companion.core_action_invocation import invoke_tool
 from companion.core_action_pipeline import (
     build_fail_fast_history_message,
     build_fail_fast_warning,
     build_investigation_edit_block,
-    limit_actions_per_turn,
     filter_known_actions,
+    limit_actions_per_turn,
     move_terminal_actions_to_end,
     remaining_actions_after,
     should_block_investigation_edit,
     should_fail_fast,
 )
 from companion.core_action_results import (
-    build_action_summary,
     build_action_exception_syntax_error,
+    build_action_summary,
     build_denial_context,
     build_dropped_params_syntax_error,
     build_no_progress_syntax_error,
@@ -29,14 +33,11 @@ from companion.core_action_results import (
     build_tool_result_message,
     get_approval_request,
 )
-from companion.base.native_protocol import sanitize_tool_references
-from companion.core_action_invocation import invoke_tool
-from companion.tool_history_policy import compress_for_history
 from companion.execution.result_pipeline import summarize_result
-from companion.modules.repo_map import get_repo_map_generator
 from companion.modules.event_logger import event_logger
+from companion.modules.repo_map import get_repo_map_generator
+from companion.state.agent_state import Action, ActionList
 from companion.tools.file_ops import file_ops
-from pathlib import Path
 from companion.tools.results import (
     ToolResult,
     ToolStatus,
@@ -44,10 +45,13 @@ from companion.tools.results import (
 )
 from companion.ui import ui
 
+if TYPE_CHECKING:
+    from companion.core import DuckAgent
+
 logger = logging.getLogger(__name__)
 
 
-async def execute_actions(agent, action_list) -> list:
+async def execute_actions(agent: "DuckAgent", action_list: ActionList) -> list[Any]:
     """Dispatch and execute a list of actions.
 
     Args:
@@ -58,7 +62,7 @@ async def execute_actions(agent, action_list) -> list:
         List of results from each action.
     """
     logger.info(f"Executing actions: {[a.name for a in action_list.actions]}")
-    results = []
+    results: list[Any] = []
 
     # --- Causal history ordering ---
     # Tool results are user-role messages. If they are appended during
@@ -112,7 +116,7 @@ async def execute_actions(agent, action_list) -> list:
         for content in pending_user_messages:
             agent.state.add_message("user", content)
 
-    mode_val = agent.state.current_mode.value if agent.state.current_mode else None
+    mode_val = agent.state.current_mode.value
     if mode_val and mode_val in agent.MODE_TOOL_MAPPING:
         mode_tools = agent.UNIVERSAL_TOOLS | agent.MODE_TOOL_MAPPING[mode_val]
     else:
@@ -122,9 +126,11 @@ async def execute_actions(agent, action_list) -> list:
     # native tool_call can be accounted for in the execution journal — an
     # unrecorded call would reach the API as an orphaned tool_call.
     proposed_actions = list(action_list.actions)
-    recorded_call_ids: set = set()
+    recorded_call_ids: set[str] = set()
 
-    def _record_native_event(action, status, executed, body) -> None:
+    def _record_native_event(
+        action: Action, status: str, executed: bool, body: Any
+    ) -> None:
         """Record a native tool-call outcome for ID-based history rebuild.
 
         No-op for actions without a tool_call_id (Sym-Ops path and
@@ -188,7 +194,13 @@ async def execute_actions(agent, action_list) -> list:
     # Move terminal actions to the end
     move_terminal_actions_to_end(action_list)
 
-    def _handle_error(action, error_content, t0, t1, executed=True):
+    def _handle_error(
+        action: Action,
+        error_content: Any,
+        t0: float,
+        t1: float,
+        executed: bool = True,
+    ) -> bool:
         """Record a tool/action error, update history, and check fail-fast."""
         nonlocal consecutive_errors
         _record_native_event(action, "error", executed, str(error_content))

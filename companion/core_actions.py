@@ -5,14 +5,18 @@ Each method corresponds to a Sym-Ops action that the LLM can invoke.
 """
 
 import logging
+from typing import TYPE_CHECKING, Any
 
 from companion.state.agent_state import (
-    TaskStatus,
     MAX_HYPOTHESIS_ATTEMPTS,
+    TaskStatus,
 )
 from companion.tools.results import ToolResult
 from companion.tools.shell_tool import ShellTool
 from companion.ui import ui
+
+if TYPE_CHECKING:
+    from companion.core import DuckAgent
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +24,11 @@ logger = logging.getLogger(__name__)
 class CoreActions:
     """Action handlers extracted from DuckAgent for modularity."""
 
-    def __init__(self, agent):
+    def __init__(self, agent: "DuckAgent") -> None:
         self.agent = agent
         self.state = agent.state
 
-    def _action_noop_symops_marker(self, **_) -> str:
+    def _action_noop_symops_marker(self, **_: Any) -> str:
         """
         ::status and ::result are output markers, NOT callable actions.
         They appear inside tool results and error messages, but cannot be invoked directly.
@@ -38,7 +42,7 @@ class CoreActions:
             "Do NOT call ::status or ::result as actions."
         )
 
-    async def _noop(self, **kwargs) -> str:
+    async def _noop(self, **kwargs: Any) -> str:
         """No-op: LLMが出力するプロトコル的なアクションを静かに吸収する。"""
         return "ok"
 
@@ -93,7 +97,7 @@ class CoreActions:
         """
         ui.print_warning(f"Permission requested to run: {command}")
 
-        confirmed = ui.request_confirmation(f"Execute this command?")
+        confirmed = ui.request_confirmation("Execute this command?")
 
         if confirmed:
             return await ShellTool.run_command(command)
@@ -214,6 +218,7 @@ class CoreActions:
             self.state.enter_investigation_mode()
 
         inv = self.state.investigation_state
+        assert inv is not None
         inv.hypothesis = hypothesis
         inv.hypothesis_attempts += 1
         inv.ooda_cycle += 1
@@ -272,7 +277,7 @@ class CoreActions:
             "or create a structured plan with ::propose_plan if the fix requires multiple steps."
         )
 
-    async def action_execute_batch(self, **kwargs) -> str:
+    async def action_execute_batch(self, **kwargs: Any) -> str:
         """
         Sym-Ops v3.1 Fast Path: 複数の独立したアクションをバッチ実行する。
         パーサーが ::execute_batch ブロックを個別アクションに展開するため、

@@ -14,7 +14,8 @@ import logging
 import os
 import re
 import typing
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from collections.abc import Callable, Mapping
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,9 @@ def resolve_protocol() -> str:
         "native" when DUCKFLOW_TOOL_PROTOCOL=native, otherwise "symops".
     """
     return (
-        "native" if os.getenv(PROTOCOL_ENV_VAR, "symops").lower() == "native" else "symops"
+        "native"
+        if os.getenv(PROTOCOL_ENV_VAR, "symops").lower() == "native"
+        else "symops"
     )
 
 
@@ -92,12 +95,10 @@ def sanitize_tool_references(text: str) -> str:
     Returns:
         Text with ``::name @target`` rewritten to ``name``.
     """
-    return re.sub(
-        r"(?<![\w:]):{2}(\w+)(\s+@(?:<[^>]*>|\S+))?", r"\1", text
-    )
+    return re.sub(r"(?<![\w:]):{2}(\w+)(\s+@(?:<[^>]*>|\S+))?", r"\1", text)
 
 
-def _param_descriptions(func: Callable[..., Any]) -> Dict[str, str]:
+def _param_descriptions(func: Callable[..., Any]) -> dict[str, str]:
     """Extract per-parameter docs from the function's ``Args:`` section.
 
     Args:
@@ -108,10 +109,12 @@ def _param_descriptions(func: Callable[..., Any]) -> Dict[str, str]:
         without an entry are absent from the mapping.
     """
     doc = inspect.getdoc(func) or ""
-    match = re.search(r"Args:\s*\n(.*?)(?:\n\s*(?:Returns|Raises)[:\s]|\Z)", doc, re.DOTALL)
+    match = re.search(
+        r"Args:\s*\n(.*?)(?:\n\s*(?:Returns|Raises)[:\s]|\Z)", doc, re.DOTALL
+    )
     if not match:
         return {}
-    descriptions: Dict[str, str] = {}
+    descriptions: dict[str, str] = {}
     for line in match.group(1).splitlines():
         param_match = re.match(r"^\s*(\w+):\s*(.+)$", line)
         if param_match:
@@ -122,8 +125,8 @@ def _param_descriptions(func: Callable[..., Any]) -> Dict[str, str]:
 
 
 def build_native_tools(
-    tools: Mapping[str, Callable[..., Any]], mode: Optional[str] = None
-) -> List[Dict[str, Any]]:
+    tools: Mapping[str, Callable[..., Any]], mode: str | None = None
+) -> list[dict[str, Any]]:
     """Build API-native tool definitions from registered callables.
 
     Uses the same mode scoping as Sym-Ops descriptions (UNIVERSAL_TOOLS
@@ -156,16 +159,14 @@ def build_native_tools(
         except (ValueError, TypeError):
             continue
         param_docs = _param_descriptions(func)
-        properties: Dict[str, Any] = {}
-        required: List[str] = []
+        properties: dict[str, Any] = {}
+        required: list[str] = []
         for p_name, param in sig.parameters.items():
             if param.kind == inspect.Parameter.VAR_KEYWORD:
                 continue
             properties[p_name] = {
                 "type": _json_type_name(param.annotation),
-                "description": param_docs.get(
-                    p_name, f"{p_name} argument of {name}"
-                ),
+                "description": param_docs.get(p_name, f"{p_name} argument of {name}"),
             }
             if param.default is inspect.Parameter.empty:
                 required.append(p_name)
@@ -188,7 +189,7 @@ def build_native_tools(
     return definitions
 
 
-def tool_calls_to_actions(message: Any) -> List[Dict[str, Any]]:
+def tool_calls_to_actions(message: Any) -> list[dict[str, Any]]:
     """Convert a native response message's tool_calls to action dicts.
 
     Unknown tool names pass through untouched: execute_actions() applies
@@ -224,7 +225,7 @@ def tool_calls_to_actions(message: Any) -> List[Dict[str, Any]]:
     return [a for a in actions if a["name"]]
 
 
-def native_text_to_action(content: str) -> Dict[str, Any]:
+def native_text_to_action(content: str) -> dict[str, Any]:
     """Map native plain text (no tool calls) to a terminal action dict.
 
     A trailing question mark becomes an internal duck_call consultation
@@ -252,7 +253,7 @@ def native_text_to_action(content: str) -> Dict[str, Any]:
     }
 
 
-def _extract_tool_result_blocks(content: str) -> List[Dict[str, str]]:
+def _extract_tool_result_blocks(content: str) -> list[dict[str, str]]:
     """Extract ordered (tool_name, body) pairs from TOOL_RESULT envelopes.
 
     Args:
@@ -310,15 +311,15 @@ def _is_pure_envelope(content: str) -> bool:
         end = without.find("[/TOOL_RESULT]")
         if end < 0:
             return False
-        without = without[end + len("[/TOOL_RESULT]"):].strip()
+        without = without[end + len("[/TOOL_RESULT]") :].strip()
     return not without
 
 
 def build_native_messages(
-    text_messages: List[Dict[str, Any]],
-    assistant_log: List[Dict[str, Any]],
-    journal: Optional[Mapping[str, Dict[str, Any]]] = None,
-) -> List[Dict[str, Any]]:
+    text_messages: list[dict[str, Any]],
+    assistant_log: list[dict[str, Any]],
+    journal: Mapping[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Rebuild native conversation messages from the text history.
 
     Assistant turns that carried tool_calls are restored verbatim from
@@ -349,13 +350,13 @@ def build_native_messages(
     Returns:
         Native message list for the API call.
     """
-    by_turn: Dict[str, Dict[str, Any]] = {}
-    for entry in assistant_log:
-        turn = entry.get("_turn")
+    by_turn: dict[str, dict[str, Any]] = {}
+    for logged_entry in assistant_log:
+        turn = logged_entry.get("_turn")
         if turn:
-            by_turn[turn] = entry
-    consumed_turns: set = set()
-    out: List[Dict[str, Any]] = []
+            by_turn[turn] = logged_entry
+    consumed_turns: set[str] = set()
+    out: list[dict[str, Any]] = []
     i = 0
     while i < len(text_messages):
         msg = text_messages[i]
@@ -363,22 +364,20 @@ def build_native_messages(
         content = msg.get("content", "") or ""
         if role == "assistant" and _is_summary_text(content):
             turn = msg.get("_native_turn")
-            entry = None
+            entry: dict[str, Any] | None = None
             if turn is not None and turn not in consumed_turns:
                 entry = by_turn.get(turn)
                 if entry is not None:
                     consumed_turns.add(turn)
             if entry is not None:
-                calls = [
-                    c for c in (entry.get("tool_calls") or []) if c.get("id")
-                ]
+                calls = [c for c in (entry.get("tool_calls") or []) if c.get("id")]
                 # Collect the turn's following messages: pure TOOL_RESULT
                 # envelopes are represented by tool messages; anything
                 # else (denials, system notes, real user input) passes
                 # through verbatim.
                 j = i + 1
-                leftovers: List[Dict[str, Any]] = []
-                blocks: List[Dict[str, str]] = []
+                leftovers: list[dict[str, Any]] = []
+                blocks: list[dict[str, str]] = []
                 while (
                     j < len(text_messages)
                     and text_messages[j].get("role") != "assistant"
@@ -386,9 +385,7 @@ def build_native_messages(
                     nxt = text_messages[j]
                     nxt_content = nxt.get("content", "") or ""
                     if _is_pure_envelope(nxt_content):
-                        blocks.extend(
-                            _extract_tool_result_blocks(nxt_content)
-                        )
+                        blocks.extend(_extract_tool_result_blocks(nxt_content))
                     else:
                         leftovers.append(nxt)
                     j += 1
@@ -402,9 +399,7 @@ def build_native_messages(
                     out.append(emit)
                     for call in calls:
                         cid = call.get("id")
-                        record = (
-                            journal.get(cid) if journal is not None else None
-                        )
+                        record = journal.get(cid) if journal is not None else None
                         if record is not None and record.get("body") is not None:
                             body = record["body"]
                         elif journal is None and blocks:

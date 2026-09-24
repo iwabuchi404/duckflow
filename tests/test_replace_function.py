@@ -1,8 +1,8 @@
 """Tests for S3-2 Phase D: replace_function."""
 
 import pytest
-from pathlib import Path
 
+from companion.tools.file_ops import file_ops
 from companion.tools.results import ToolResult, ToolStatus
 from companion.tools.symbols import replace_function
 
@@ -39,6 +39,15 @@ def helper():
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def active_workspace(workspace):
+    """Use the symbol tool's shared workspace for each test."""
+    previous_root = file_ops.workspace_root
+    file_ops.set_workspace_root(str(workspace))
+    yield
+    file_ops.set_workspace_root(str(previous_root))
+
+
 @pytest.mark.asyncio
 async def test_replace_function_basic(workspace):
     """replace_function should replace a function by name."""
@@ -50,7 +59,6 @@ async def test_replace_function_basic(workspace):
         path="mod.py",
         name="greet",
         body=new_body,
-        workspace_root=str(workspace),
     )
     assert "Replaced" in result
     assert "greet" in result
@@ -78,7 +86,6 @@ async def test_replace_class(workspace):
         path="mod.py",
         name="Calculator",
         body=new_body,
-        workspace_root=str(workspace),
     )
     assert "Replaced" in result
     assert "class" in result
@@ -95,7 +102,6 @@ async def test_replace_function_not_found(workspace):
         path="mod.py",
         name="nonexistent",
         body="def nonexistent(): pass",
-        workspace_root=str(workspace),
     )
     assert isinstance(result, ToolResult)
     assert result.status == ToolStatus.ERROR
@@ -109,7 +115,6 @@ async def test_replace_function_file_not_found(workspace):
         path="nonexistent.py",
         name="greet",
         body="def greet(): pass",
-        workspace_root=str(workspace),
     )
     assert isinstance(result, ToolResult)
     assert result.status == ToolStatus.ERROR
@@ -123,7 +128,6 @@ async def test_replace_function_syntax_error_in_body(workspace):
         path="mod.py",
         name="greet",
         body="def greet(:\n  pass",
-        workspace_root=str(workspace),
     )
     assert isinstance(result, ToolResult)
     assert result.status == ToolStatus.ERROR
@@ -146,7 +150,6 @@ async def test_replace_function_validates_full_file(workspace):
         path="mod.py",
         name="greet",
         body=new_body,
-        workspace_root=str(workspace),
     )
     # This should succeed since the body is valid and fits
     assert "Replaced" in result
@@ -156,20 +159,19 @@ async def test_replace_function_validates_full_file(workspace):
 async def test_replace_function_ambiguous(workspace):
     """Should return ambiguity error when multiple symbols share the same name."""
     (workspace / "ambig.py").write_text(
-        '''def process():
+        """def process():
     return 1
 
 
 class Handler:
     def process(self):
         return 2
-'''
+"""
     )
     result = await replace_function(
         path="ambig.py",
         name="process",
         body="def process():\n    return 3",
-        workspace_root=str(workspace),
     )
     assert isinstance(result, ToolResult)
     assert result.status == ToolStatus.ERROR
@@ -179,14 +181,12 @@ class Handler:
 @pytest.mark.asyncio
 async def test_replace_function_preserves_rest_of_file(workspace):
     """replace_function should only change the target symbol, leaving the rest intact."""
-    original = (workspace / "mod.py").read_text()
     new_body = "def greet(name):\n    return f'Hi, {name}'"
 
     await replace_function(
         path="mod.py",
         name="greet",
         body=new_body,
-        workspace_root=str(workspace),
     )
 
     content = (workspace / "mod.py").read_text()
@@ -205,7 +205,6 @@ async def test_replace_function_non_python(workspace):
         path="script.txt",
         name="foo",
         body="def foo(): return 1",
-        workspace_root=str(workspace),
     )
     assert isinstance(result, ToolResult)
     assert result.status == ToolStatus.ERROR
@@ -234,7 +233,6 @@ async def test_replace_function_async(workspace):
         path="async_mod.py",
         name="fetch_data",
         body=new_body,
-        workspace_root=str(workspace),
     )
     assert "Replaced" in result
 

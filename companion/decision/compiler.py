@@ -5,9 +5,9 @@ Agent 自身が作った要約を信用しない（判断対象の欠落が Deci
 """
 
 from pathlib import Path
-from typing import Any
 
 from companion.decision.models import DecisionContext
+from companion.state.agent_state import AgentState
 
 # file_excerpts の上限: 直近ファイル数 × 各最大行数
 _MAX_EXCERPT_FILES = 3
@@ -19,7 +19,7 @@ class ContextCompiler:
     """AgentState から DecisionContext を構築する。"""
 
     def build(
-        self, state: Any, task: str, workspace_root: str | None = None
+        self, state: AgentState, task: str, workspace_root: str | None = None
     ) -> DecisionContext:
         """現在の状態から判断用コンテキストを生成する。
 
@@ -42,7 +42,7 @@ class ContextCompiler:
         )
 
     @staticmethod
-    def _recent_action_names(state: Any, limit: int = 8) -> list[str]:
+    def _recent_action_names(state: AgentState, limit: int = 8) -> list[str]:
         """履歴末尾から直近のアクション名を抽出する（最大 limit 件）。
 
         Args:
@@ -100,7 +100,7 @@ class ContextCompiler:
             return []
 
     @staticmethod
-    def _file_excerpts(state: Any) -> list[str]:
+    def _file_excerpts(state: AgentState) -> list[str]:
         """直近の read_file ツール結果からファイル抜粋を抽出する。
 
         TOOL_RESULT メッセージ内の `::read_file @path` と `content:` 行を
@@ -141,7 +141,7 @@ class ContextCompiler:
         return excerpts
 
     @staticmethod
-    def _plan_summary(state: Any) -> str:
+    def _plan_summary(state: AgentState) -> str:
         """現在の plan を goal + step 名の1行要約にする。
 
         Args:

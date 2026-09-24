@@ -1,25 +1,25 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import logging
-from typing import Optional, Dict, Any
+
 from companion.base.llm_client import LLMClient
 from companion.prompts.sub_llm_prompts import (
-    SUMMARIZER_SYSTEM_PROMPT,
     ANALYZER_SYSTEM_PROMPT,
-    CODEGEN_SYSTEM_PROMPT
+    CODEGEN_SYSTEM_PROMPT,
+    SUMMARIZER_SYSTEM_PROMPT,
 )
 
 logger = logging.getLogger(__name__)
+
 
 class SubLLMManager:
     """
     Manages delegation of tasks to specialized Sub-LLMs with guardrails.
     """
-    
+
     # 1 character ≈ 0.25 tokens. 32,000 chars ≈ 8,000 tokens.
-    MAX_CHAR_LIMIT = 32000 
-    
+    MAX_CHAR_LIMIT = 32000
+
     def __init__(self, llm_client: LLMClient):
         self.llm = llm_client
 
@@ -30,10 +30,7 @@ class SubLLMManager:
         return len(text) <= self.MAX_CHAR_LIMIT
 
     async def call_worker(
-        self, 
-        system_prompt: str, 
-        user_content: str,
-        temperature: float = 0.2
+        self, system_prompt: str, user_content: str, temperature: float = 0.2
     ) -> str:
         """
         Invoke a Sub-LLM worker.
@@ -47,21 +44,21 @@ class SubLLMManager:
             logger.error(error_msg)
             return error_msg
 
-        logger.info(f"Delegating to Sub-LLM worker (input size: {len(user_content)} chars)")
-        
+        logger.info(
+            f"Delegating to Sub-LLM worker (input size: {len(user_content)} chars)"
+        )
+
         # Prepare messages for Sub-LLM
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
+            {"role": "user", "content": user_content},
         ]
-        
+
         try:
             # Note: We use the same LLM client for now as per user request.
             # In the future, we can map to cheaper models here.
             response = await self.llm.chat(
-                messages=messages,
-                temperature=temperature,
-                raw=True
+                messages=messages, temperature=temperature, raw=True
             )
             return response.strip()
         except Exception as e:

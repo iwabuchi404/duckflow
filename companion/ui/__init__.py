@@ -1,3 +1,3 @@
-from .console import ui, DuckUI
+from .console import DuckUI, ui
 
-__all__ = ['ui', 'DuckUI']
+__all__ = ["ui", "DuckUI"]
